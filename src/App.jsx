@@ -36,7 +36,7 @@ async function detectPlate(base64, mime) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mime, data: base64 } },
-            { type: "text", text: 'Find the license plate (plaque immatriculation) in this car photo. Reply ONLY with JSON, no markdown:\n{"found":true,"x":0.0,"y":0.0,"w":0.0,"h":0.0}\nx,y = top-left corner as fraction of image dimensions (0 to 1), w,h = width/height fractions. If no plate: {"found":false}' }
+            { type: "text", text: 'Locate the license plate in this car photo with high precision. Reply ONLY with a JSON object, no markdown, no explanation:\n{"found":true,"x":0.0,"y":0.0,"w":0.0,"h":0.0}\nRules: x,y = top-left corner as fraction of total image width/height (0.0 to 1.0). w,h = plate width/height as fraction of image. The plate is typically in the lower center or lower third of the image. If no plate visible: {"found":false}' }
           ]
         }]
       })
