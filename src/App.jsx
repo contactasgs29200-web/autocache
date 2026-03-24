@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
-const API_URL = "/api/detect";
+
 function toBase64(file) {
   return new Promise((res, rej) => {
     const img = new Image();
@@ -66,8 +66,7 @@ async function detectPlate(base64, mime) {
 
 async function processPhoto(photoFile, logoImg, adj) {
   const b64 = await toBase64(photoFile);
-  const mime = photoFile.type || "image/jpeg";
-  const plate = await detectPlate(b64, mime);
+  const plate = await detectPlate(b64, "image/jpeg");
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
   URL.revokeObjectURL(photoURL);
@@ -136,7 +135,6 @@ function AuthScreen({ onAuth }) {
           <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", color: "#ddd5c8" }}>AutoCache</span>
           <span style={{ fontSize: 9, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace" }}>PRO</span>
         </div>
-
         <div style={{ display: "flex", marginBottom: 28, borderBottom: "1px solid #1c1c1c" }}>
           {[["login", "Connexion"], ["signup", "Inscription"]].map(([m, label]) => (
             <button key={m} onClick={() => { setMode(m); setError(""); setSuccess(""); }} style={{
@@ -149,7 +147,6 @@ function AuthScreen({ onAuth }) {
             }}>{label}</button>
           ))}
         </div>
-
         {[["Email", email, setEmail, "email"], ["Mot de passe", password, setPassword, "password"]].map(([label, val, set, type]) => (
           <div key={type} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 9, letterSpacing: 2, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
@@ -157,16 +154,14 @@ function AuthScreen({ onAuth }) {
               style={{ width: "100%", background: "#141414", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none" }} />
           </div>
         ))}
-
-        {error && <div style={{ fontSize: 10, color: "#e55", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>⚠ {error}</div>}
-        {success && <div style={{ fontSize: 10, color: "#5a5", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>✓ {success}</div>}
-
+        {error && <div style={{ fontSize: 10, color: "#e55", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>⚠ {error}</div>}
+        {success && <div style={{ fontSize: 10, color: "#5a5", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>✓ {success}</div>}
         <button onClick={submit} disabled={loading} style={{
           width: "100%", background: "#f26522", color: "#090909", border: "none",
           padding: "13px 24px", cursor: loading ? "wait" : "pointer",
           fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700,
           letterSpacing: 4, textTransform: "uppercase", borderRadius: 3,
-          opacity: loading ? 0.7 : 1, transition: "opacity 0.15s", marginTop: 4
+          opacity: loading ? 0.7 : 1, marginTop: 4
         }}>
           {loading ? "..." : mode === "login" ? "Se connecter" : "Créer mon compte"}
         </button>
@@ -179,8 +174,6 @@ export default function AutoCache() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [logo, setLogo] = useState(null);
-  const [logoLoading, setLogoLoading] = useState(false);
-  const [logoSaving, setLogoSaving] = useState(false);
   const [photos, setPhotos] = useState([]);
   const [results, setResults] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -203,15 +196,11 @@ export default function AutoCache() {
     return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    if (!user) return;
-    setLogoLoading(false);
-  }, [user]);
-
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
     setLogo({ file: f, preview: URL.createObjectURL(f) });
   };
+
   const handlePhotoFiles = files => {
     const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
     setPhotos(prev => [...prev, ...imgs.map(f => ({ file: f, preview: URL.createObjectURL(f), id: `${f.name}-${Math.random()}` }))]);
@@ -262,7 +251,6 @@ export default function AutoCache() {
         ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:#f26522;border-radius:2px;}
       `}</style>
       <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#090909", minHeight: "100vh", color: "#ddd5c8" }}>
-
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 28px", height: 56, borderBottom: "1px solid #181818", position: "sticky", top: 0, background: "#090909", zIndex: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <svg width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
@@ -271,7 +259,7 @@ export default function AutoCache() {
           </div>
           <nav style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {[["setup", "Configuration"], ["results", `Résultats${results.length ? ` · ${results.length}` : ""}`]].map(([t, label]) => (
-              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#555", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", transition: "all 0.15s" }}>{label}</button>
+              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#555", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>{label}</button>
             ))}
             <div style={{ width: 1, height: 20, background: "#1c1c1c", margin: "0 4px" }} />
             <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
@@ -284,25 +272,20 @@ export default function AutoCache() {
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
               <section>
                 <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 4, fontFamily: "'JetBrains Mono',monospace" }}>01 — Votre logo</div>
-                <div style={{ fontSize: 10, color: "#444", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>
-                  {logoLoading ? "Chargement..." : logoSaving ? "⟳ Sauvegarde..." : logo?.fromStorage ? "✓ Logo sauvegardé · cliquer pour changer" : "Votre logo est sauvegardé automatiquement"}
-                </div>
+                <div style={{ fontSize: 10, color: "#444", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>Chargez votre logo · PNG avec transparence recommandé</div>
                 <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
                   onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
                   onClick={() => logoRef.current?.click()}
-                  style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 150, display: "flex", alignItems: "center", justifyContent: "center", background: dragOver === "logo" ? "rgba(242,101,34,0.06)" : "#0f0f0f", transition: "all 0.15s" }}>
-                  {logo && !logoLoading ? (
+                  style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 150, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f0f" }}>
+                  {logo ? (
                     <div style={{ textAlign: "center" }}>
                       <img src={logo.preview} style={{ maxHeight: 90, maxWidth: "100%", objectFit: "contain" }} />
-                      <div style={{ fontSize: 10, color: "#f26522", marginTop: 10, letterSpacing: 1 }}>Cliquer pour changer</div>
+                      <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
                     </div>
-                  ) : logoLoading ? (
-                    <div style={{ color: "#333", fontSize: 11, fontFamily: "'JetBrains Mono',monospace" }}>Chargement...</div>
                   ) : (
                     <div style={{ textAlign: "center", color: "#333" }}>
-                      <div style={{ fontSize: 36, marginBottom: 10, lineHeight: 1 }}>⬡</div>
-                      <div style={{ fontSize: 12, letterSpacing: 1, color: "#444" }}>Glisser votre logo ici</div>
-                      <div style={{ fontSize: 10, marginTop: 4, color: "#2a2a2a" }}>PNG avec transparence recommandé</div>
+                      <div style={{ fontSize: 36, marginBottom: 10 }}>⬡</div>
+                      <div style={{ fontSize: 12, color: "#444" }}>Glisser votre logo ici</div>
                     </div>
                   )}
                 </div>
@@ -311,18 +294,15 @@ export default function AutoCache() {
 
               <section>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                  <div style={{ fontSize: 10, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#333", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", transition: "color 0.2s" }}>03 — Ajustements photo</div>
-                  <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "#141414", border: `1px solid ${adjEnabled ? "#f26522" : "#2a2a2a"}`, color: adjEnabled ? "#090909" : "#444", padding: "4px 13px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2, transition: "all 0.15s" }}>
+                  <div style={{ fontSize: 10, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#333", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
+                  <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "#141414", border: `1px solid ${adjEnabled ? "#f26522" : "#2a2a2a"}`, color: adjEnabled ? "#090909" : "#444", padding: "4px 13px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>
                     {adjEnabled ? "ON" : "OFF"}
                   </button>
                 </div>
-                <div style={{ background: "#0f0f0f", border: `1px solid ${adjEnabled ? "#1c1c1c" : "#141414"}`, borderRadius: 3, padding: "20px 18px", opacity: adjEnabled ? 1 : 0.35, pointerEvents: adjEnabled ? "auto" : "none", transition: "opacity 0.2s" }}>
+                <div style={{ background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 3, padding: "20px 18px", opacity: adjEnabled ? 1 : 0.35, pointerEvents: adjEnabled ? "auto" : "none" }}>
                   <Slider label="Luminosité" value={adj.brightness} min={0.7} max={1.5} step={0.01} onChange={v => setAdj(p => ({...p, brightness: v}))} />
                   <Slider label="Contraste" value={adj.contrast} min={0.7} max={1.6} step={0.01} onChange={v => setAdj(p => ({...p, contrast: v}))} />
                   <Slider label="Saturation" value={adj.saturation} min={0.5} max={2.0} step={0.01} onChange={v => setAdj(p => ({...p, saturation: v}))} />
-                  <div style={{ marginTop: 8, padding: "8px 10px", background: "#141414", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, color: "#555", letterSpacing: 1 }}>
-                    {adjEnabled ? `brightness(${adj.brightness.toFixed(2)}) contrast(${adj.contrast.toFixed(2)}) saturate(${adj.saturation.toFixed(2)})` : "Aucun ajustement · photo originale conservée"}
-                  </div>
                 </div>
               </section>
             </div>
@@ -333,10 +313,10 @@ export default function AutoCache() {
                 <div onDragOver={e => { e.preventDefault(); setDragOver("photos"); }} onDragLeave={() => setDragOver(null)}
                   onDrop={e => { e.preventDefault(); setDragOver(null); handlePhotoFiles(e.dataTransfer.files); }}
                   onClick={() => photosRef.current?.click()}
-                  style={{ border: `1px dashed ${dragOver === "photos" ? "#f26522" : "#222"}`, borderRadius: 3, padding: "22px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: dragOver === "photos" ? "rgba(242,101,34,0.06)" : "#0f0f0f", transition: "all 0.15s", marginBottom: 12 }}>
+                  style={{ border: `1px dashed ${dragOver === "photos" ? "#f26522" : "#222"}`, borderRadius: 3, padding: "22px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f0f", marginBottom: 12 }}>
                   <div style={{ textAlign: "center", color: "#333" }}>
-                    <div style={{ fontSize: 30, marginBottom: 8, lineHeight: 1 }}>◈</div>
-                    <div style={{ fontSize: 12, letterSpacing: 1, color: "#444" }}>Glisser les photos ici</div>
+                    <div style={{ fontSize: 30, marginBottom: 8 }}>◈</div>
+                    <div style={{ fontSize: 12, color: "#444" }}>Glisser les photos ici</div>
                     <div style={{ fontSize: 10, marginTop: 3, color: "#2a2a2a" }}>JPG, PNG — plusieurs fichiers acceptés</div>
                   </div>
                 </div>
@@ -348,7 +328,7 @@ export default function AutoCache() {
                         <div key={p.id} style={{ position: "relative" }}>
                           <img src={p.preview} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", borderRadius: 2, border: "1px solid #1c1c1c", display: "block" }} />
                           <button onClick={e => { e.stopPropagation(); setPhotos(prev => prev.filter(x => x.id !== p.id)); }}
-                            style={{ position: "absolute", top: 2, right: 2, width: 15, height: 15, borderRadius: "50%", background: "#f26522", border: "none", color: "#090909", fontSize: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>×</button>
+                            style={{ position: "absolute", top: 2, right: 2, width: 15, height: 15, borderRadius: "50%", background: "#f26522", border: "none", color: "#090909", fontSize: 9, cursor: "pointer", fontWeight: 700 }}>×</button>
                         </div>
                       ))}
                     </div>
@@ -361,7 +341,7 @@ export default function AutoCache() {
               </section>
 
               <section>
-                <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "#141414", color: canStart ? "#090909" : "#333", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3, transition: "all 0.15s" }}>
+                <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "#141414", color: canStart ? "#090909" : "#333", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
                   {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}`}
                 </button>
                 {processing && (
@@ -369,13 +349,9 @@ export default function AutoCache() {
                     <div style={{ height: 2, background: "#181818", borderRadius: 1, overflow: "hidden" }}>
                       <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
-                      <span style={{ fontSize: 9, color: "#555", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>Détection plaque IA + traitement...</span>
-                      <span style={{ fontSize: 9, color: "#f26522", fontFamily: "'JetBrains Mono',monospace" }}>{pct}%</span>
-                    </div>
                   </div>
                 )}
-                {!logo && !logoLoading && <div style={{ marginTop: 10, fontSize: 10, color: "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>⚠ Chargez votre logo pour continuer</div>}
+                {!logo && <div style={{ marginTop: 10, fontSize: 10, color: "#444", fontFamily: "'JetBrains Mono',monospace" }}>⚠ Chargez votre logo pour continuer</div>}
               </section>
             </div>
           </div>
@@ -385,38 +361,27 @@ export default function AutoCache() {
           <div style={{ maxWidth: 1200, margin: "0 auto", padding: "32px 28px" }}>
             {results.length === 0 ? (
               <div style={{ textAlign: "center", padding: "80px 0", color: "#333" }}>
-                <div style={{ fontSize: 48, marginBottom: 16, lineHeight: 1 }}>◈</div>
+                <div style={{ fontSize: 48, marginBottom: 16 }}>◈</div>
                 <div style={{ fontSize: 14, letterSpacing: 2, textTransform: "uppercase" }}>Aucun résultat</div>
-                <div style={{ fontSize: 11, color: "#2a2a2a", marginTop: 6 }}>Lancez le traitement dans l'onglet Configuration</div>
               </div>
             ) : (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
                   <div>
-                    <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>
-                      {results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""}
-                      {processing && <span style={{ color: "#555" }}> · en cours</span>}
-                    </div>
+                    <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>{results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""}</div>
                     <div style={{ marginTop: 4, fontSize: 10, color: "#444", fontFamily: "'JetBrains Mono',monospace" }}>
                       {results.filter(r => r.plateFound).length} détectée{results.filter(r => r.plateFound).length > 1 ? "s" : ""} · {results.filter(r => !r.plateFound).length} non détectée{results.filter(r => !r.plateFound).length > 1 ? "s" : ""}
                     </div>
                   </div>
                   {!processing && <button onClick={downloadAll} style={{ background: "#f26522", color: "#090909", border: "none", padding: "9px 22px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3 }}>Tout télécharger ({results.length})</button>}
                 </div>
-                {processing && (
-                  <div style={{ marginBottom: 20 }}>
-                    <div style={{ height: 2, background: "#181818", borderRadius: 1, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
-                    </div>
-                  </div>
-                )}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
                   {results.map((r, i) => (
                     <div key={i} style={{ background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative" }}>
                         <img src={r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", display: "block" }} />
                         <div style={{ position: "absolute", top: 8, left: 8 }}>
-                          <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, letterSpacing: 1, fontFamily: "'JetBrains Mono',monospace", fontWeight: 500 }}>
+                          <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>
                             {r.plateFound ? "✓ PLAQUE CACHÉE" : "⚠ NON DÉTECTÉE"}
                           </span>
                         </div>
