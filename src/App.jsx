@@ -7,10 +7,20 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 const API_URL = "/api/detect";
 function toBase64(file) {
   return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result.split(",")[1]);
-    r.onerror = rej;
-    r.readAsDataURL(file);
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const max = 1024;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = img.width * scale;
+      c.height = img.height * scale;
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL("image/jpeg", 0.7).split(",")[1]);
+    };
+    img.onerror = rej;
+    img.src = url;
   });
 }
 
