@@ -36,25 +36,32 @@ function loadImg(src) {
 
 async function detectPlate(base64, mime) {
   try {
-    const r = await fetch(API_URL, {
+    const r = await fetch("/api/detect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 200,
+        max_tokens: 500,
         messages: [{
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mime, data: base64 } },
-            { type: "text", text: 'Locate the license plate in this car photo with high precision. Reply ONLY with a JSON object, no markdown, no explanation:\n{"found":true,"x":0.0,"y":0.0,"w":0.0,"h":0.0}\nRules: x,y = top-left corner as fraction of total image width/height (0.0 to 1.0). w,h = plate width/height as fraction of image. The plate is typically in the lower center or lower third of the image. If no plate visible: {"found":false}' }
+            { type: "text", text: 'Find the license plate in this image. Respond with ONLY this JSON, nothing else: {"found":true,"x":0.35,"y":0.75,"w":0.25,"h":0.08} where x,y is top-left corner and w,h is size, all as fractions of image dimensions. If no plate found: {"found":false}' }
           ]
         }]
       })
     });
     const d = await r.json();
-    const txt = d.content.filter(b => b.type === "text").map(b => b.text).join("");
-    return JSON.parse(txt.replace(/```[a-z]*/g, "").replace(/```/g, "").trim());
-  } catch { return { found: false }; }
+    console.log("Raw API response:", JSON.stringify(d));
+    const txt = d.content[0].text.trim();
+    console.log("Text from AI:", txt);
+    const match = txt.match(/\{[^}]+\}/);
+    if (!match) return { found: false };
+    return JSON.parse(match[0]);
+  } catch(e) {
+    console.error("detectPlate error:", e);
+    return { found: false };
+  }
 }
 
 async function processPhoto(photoFile, logoImg, adj) {
