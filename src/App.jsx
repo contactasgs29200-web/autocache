@@ -205,11 +205,7 @@ export default function AutoCache() {
 
   useEffect(() => {
     if (!user) return;
-    setLogoLoading(true);
-    supabase.storage.from("logos").download(`${user.id}/logo`).then(({ data, error }) => {
-      if (data && !error) setLogo({ preview: URL.createObjectURL(data), fromStorage: true });
-      setLogoLoading(false);
-    });
+    setLogoLoading(false);
   }, [user]);
 
   const handleLogoFile = async f => {
