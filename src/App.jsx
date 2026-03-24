@@ -46,18 +46,32 @@ async function detectPlate(base64, mime) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mime, data: base64 } },
-            { type: "text", text: 'Find the license plate in this image. Respond with ONLY this JSON, nothing else: {"found":true,"x":0.35,"y":0.75,"w":0.25,"h":0.08} where x,y is top-left corner and w,h is size, all as fractions of image dimensions. If no plate found: {"found":false}' }
+            { type: "text", text: `You are a precise license plate detector for car photos.
+Carefully examine this car image and locate the license plate rectangle.
+Return ONLY a JSON object, no explanation, no markdown:
+{"found":true,"x":0.0,"y":0.0,"w":0.0,"h":0.0}
+Where:
+- x = left edge of plate / total image width
+- y = top edge of plate / total image height
+- w = plate width / total image width
+- h = plate height / total image height
+All values between 0.0 and 1.0.
+If no plate visible: {"found":false}
+Be very precise. The plate is usually a rectangular region with letters and numbers.` }
           ]
         }]
       })
     });
     const d = await r.json();
     console.log("Raw API response:", JSON.stringify(d));
+    if (!d.content || !d.content[0]) return { found: false };
     const txt = d.content[0].text.trim();
-    console.log("Text from AI:", txt);
-    const match = txt.match(/\{[^}]+\}/);
+    console.log("AI text:", txt);
+    const match = txt.match(/\{[\s\S]*?\}/);
     if (!match) return { found: false };
-    return JSON.parse(match[0]);
+    const result = JSON.parse(match[0]);
+    console.log("Parsed plate:", result);
+    return result;
   } catch(e) {
     console.error("detectPlate error:", e);
     return { found: false };
@@ -80,9 +94,17 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
+    const pw = plate.w * c.width;
     const ph = plate.h * c.height;
-    const pad = ph * 0.4;
-    ctx.drawImage(logoImg, plate.x * c.width - pad, plate.y * c.height - pad, plate.w * c.width + pad * 2, ph + pad * 2);
+    const padX = pw * 0.05;
+    const padY = ph * 0.05;
+    ctx.drawImage(
+      logoImg,
+      plate.x * c.width - padX,
+      plate.y * c.height - padY,
+      pw + padX * 2,
+      ph + padY * 2
+    );
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
 }
@@ -272,7 +294,9 @@ export default function AutoCache() {
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
               <section>
                 <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 4, fontFamily: "'JetBrains Mono',monospace" }}>01 — Votre logo</div>
-                <div style={{ fontSize: 10, color: "#444", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>Chargez votre logo · PNG avec transparence recommandé</div>
+                <div style={{ fontSize: 10, color: "#444", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>
+                  {logo ? "✓ Logo chargé · cliquer pour changer" : "Chargez votre logo · PNG avec transparence recommandé"}
+                </div>
                 <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
                   onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
                   onClick={() => logoRef.current?.click()}
@@ -349,6 +373,7 @@ export default function AutoCache() {
                     <div style={{ height: 2, background: "#181818", borderRadius: 1, overflow: "hidden" }}>
                       <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
                     </div>
+                    <div style={{ marginTop: 5, fontSize: 9, color: "#555", fontFamily: "'JetBrains Mono',monospace", textAlign: "right" }}>{pct}%</div>
                   </div>
                 )}
                 {!logo && <div style={{ marginTop: 10, fontSize: 10, color: "#444", fontFamily: "'JetBrains Mono',monospace" }}>⚠ Chargez votre logo pour continuer</div>}
