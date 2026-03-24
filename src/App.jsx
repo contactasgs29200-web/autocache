@@ -208,14 +208,10 @@ export default function AutoCache() {
     setLogoLoading(false);
   }, [user]);
 
-  const handleLogoFile = async f => {
+  const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
     setLogo({ file: f, preview: URL.createObjectURL(f) });
-    setLogoSaving(true);
-    await supabase.storage.from("logos").upload(`${user.id}/logo`, f, { upsert: true, contentType: f.type });
-    setLogoSaving(false);
   };
-
   const handlePhotoFiles = files => {
     const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
     setPhotos(prev => [...prev, ...imgs.map(f => ({ file: f, preview: URL.createObjectURL(f), id: `${f.name}-${Math.random()}` }))]);
