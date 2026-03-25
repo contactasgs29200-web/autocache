@@ -96,15 +96,12 @@ async function processPhoto(photoFile, logoImg, adj) {
     plateFound = true;
     const pw = plate.w * c.width;
     const ph = plate.h * c.height;
-    const padX = pw * 0.05;
-    const padY = ph * 0.05;
-    ctx.drawImage(
-      logoImg,
-      plate.x * c.width - padX,
-      plate.y * c.height - padY,
-      pw + padX * 2,
-      ph + padY * 2
-    );
+    const realRatio = 4.7;
+    const finalW = pw;
+    const finalH = finalW / realRatio;
+    const finalX = plate.x * c.width;
+    const finalY = plate.y * c.height + (ph - finalH) / 2;
+    ctx.drawImage(logoImg, finalX, finalY, finalW, finalH);
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
 }
