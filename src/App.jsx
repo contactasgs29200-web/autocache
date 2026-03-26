@@ -94,13 +94,10 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    const pw = plate.w * c.width;
-    const ph = plate.h * c.height;
-    const realRatio = 4.7;
-    const finalW = pw;
-    const finalH = finalW / realRatio;
     const finalX = plate.x * c.width;
-    const finalY = plate.y * c.height + (ph - finalH) / 2;
+    const finalY = plate.y * c.height;
+    const finalW = plate.w * c.width;
+    const finalH = plate.h * c.height;
     ctx.drawImage(logoImg, finalX, finalY, finalW, finalH);
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
