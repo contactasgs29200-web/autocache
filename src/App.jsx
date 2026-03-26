@@ -37,6 +37,71 @@ function loadImg(src) {
 
 function lerp(a, b, t) { return a + (b - a) * t; }
 
+function extractJSON(txt) {
+  let depth = 0, start = -1;
+  for (let i = 0; i < txt.length; i++) {
+    if (txt[i] === '{') { if (depth === 0) start = i; depth++; }
+    else if (txt[i] === '}') { depth--; if (depth === 0 && start !== -1) return txt.slice(start, i + 1); }
+  }
+  return null;
+}
+
+// After Plate Recognizer gives us the bounding box, crop tightly around
+// the plate and ask Claude for the exact 4 perspective corners.
+async function getExactCorners(canvas, box) {
+  const pad = 0.6;
+  const bw = box.tr.x - box.tl.x;
+  const bh = box.bl.y - box.tl.y;
+  const x0 = Math.max(0, box.tl.x - bw * pad);
+  const y0 = Math.max(0, box.tl.y - bh * pad);
+  const x1 = Math.min(1, box.tr.x + bw * pad);
+  const y1 = Math.min(1, box.bl.y + bh * pad);
+
+  const cropW = (x1 - x0) * canvas.width;
+  const cropH = (y1 - y0) * canvas.height;
+  const scale = Math.min(1, 900 / Math.max(cropW, cropH));
+  const crop = document.createElement("canvas");
+  crop.width = Math.round(cropW * scale);
+  crop.height = Math.round(cropH * scale);
+  crop.getContext("2d").drawImage(canvas, x0 * canvas.width, y0 * canvas.height, cropW, cropH, 0, 0, crop.width, crop.height);
+  const b64 = crop.toDataURL("image/jpeg", 0.93).split(",")[1];
+
+  try {
+    const r = await fetch("/api/detect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 200,
+        messages: [{ role: "user", content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
+          { type: "text", text: `This image is a close crop around a vehicle license plate. Return the exact 4 corner coordinates of the plate, accounting for any 3D perspective or angle.
+Return ONLY this JSON (no markdown):
+{"tl":{"x":F,"y":F},"tr":{"x":F,"y":F},"br":{"x":F,"y":F},"bl":{"x":F,"y":F}}
+x = column / image width, y = row / image height (0.0 to 1.0). tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left.` }
+        ]}]
+      })
+    });
+    const d = await r.json();
+    if (!d.content?.[0]?.text) return null;
+    const raw = extractJSON(d.content[0].text);
+    if (!raw) return null;
+    const corners = JSON.parse(raw);
+    const pts = [corners.tl, corners.tr, corners.br, corners.bl];
+    if (pts.some(p => !p || typeof p.x !== "number" || typeof p.y !== "number")) return null;
+    // Map from crop space back to full image normalized space
+    return {
+      tl: { x: x0 + corners.tl.x * (x1 - x0), y: y0 + corners.tl.y * (y1 - y0) },
+      tr: { x: x0 + corners.tr.x * (x1 - x0), y: y0 + corners.tr.y * (y1 - y0) },
+      br: { x: x0 + corners.br.x * (x1 - x0), y: y0 + corners.br.y * (y1 - y0) },
+      bl: { x: x0 + corners.bl.x * (x1 - x0), y: y0 + corners.bl.y * (y1 - y0) },
+    };
+  } catch(e) {
+    console.error("getExactCorners error:", e);
+    return null;
+  }
+}
+
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
 function drawPerspective(ctx, img, tl, tr, br, bl) {
@@ -107,8 +172,12 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
+    // Refine bounding box into true perspective corners via Claude crop
+    const refined = await getExactCorners(c, plate);
+    const corners = refined || plate; // fallback to PR rectangle if Claude fails
+    console.log(refined ? "Using refined perspective corners" : "Using Plate Recognizer bounding box");
     const px = p => ({ x: p.x * c.width, y: p.y * c.height });
-    const tl = px(plate.tl), tr = px(plate.tr), br = px(plate.br), bl = px(plate.bl);
+    const tl = px(corners.tl), tr = px(corners.tr), br = px(corners.br), bl = px(corners.bl);
     console.log(`Corners TL(${Math.round(tl.x)},${Math.round(tl.y)}) TR(${Math.round(tr.x)},${Math.round(tr.y)}) BR(${Math.round(br.x)},${Math.round(br.y)}) BL(${Math.round(bl.x)},${Math.round(bl.y)})`);
     drawPerspective(ctx, logoImg, tl, tr, br, bl);
   }
