@@ -35,6 +35,55 @@ function loadImg(src) {
   });
 }
 
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function extractJSON(txt) {
+  let depth = 0, start = -1;
+  for (let i = 0; i < txt.length; i++) {
+    if (txt[i] === '{') { if (depth === 0) start = i; depth++; }
+    else if (txt[i] === '}') { depth--; if (depth === 0 && start !== -1) return txt.slice(start, i + 1); }
+  }
+  return null;
+}
+
+// Perspective-correct rendering via horizontal strip decomposition.
+// tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
+function drawPerspective(ctx, img, tl, tr, br, bl) {
+  const STEPS = 80;
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  ctx.save();
+  for (let i = 0; i < STEPS; i++) {
+    const t1 = i / STEPS, t2 = (i + 1) / STEPS, tm = (t1 + t2) / 2;
+    const x00 = lerp(tl.x, bl.x, t1), y00 = lerp(tl.y, bl.y, t1);
+    const x10 = lerp(tr.x, br.x, t1), y10 = lerp(tr.y, br.y, t1);
+    const x01 = lerp(tl.x, bl.x, t2), y01 = lerp(tl.y, bl.y, t2);
+    const x11 = lerp(tr.x, br.x, t2), y11 = lerp(tr.y, br.y, t2);
+    const mlx = lerp(tl.x, bl.x, tm), mly = lerp(tl.y, bl.y, tm);
+    const mrx = lerp(tr.x, br.x, tm), mry = lerp(tr.y, br.y, tm);
+    const sym = ih * tm;
+    const srcStripH = ih / STEPS;
+    const avgDx = ((x01 - x00) + (x11 - x10)) / 2;
+    const avgDy = ((y01 - y00) + (y11 - y10)) / 2;
+    const a = (mrx - mlx) / iw;
+    const b = (mry - mly) / iw;
+    const c = avgDx / srcStripH;
+    const d = avgDy / srcStripH;
+    const e = mlx - c * sym;
+    const f = mly - d * sym;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x00, y00); ctx.lineTo(x10, y10);
+    ctx.lineTo(x11, y11); ctx.lineTo(x01, y01);
+    ctx.closePath();
+    ctx.clip();
+    ctx.transform(a, b, c, d, e, f);
+    ctx.drawImage(img, 0, 0, iw, ih);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 async function detectPlate(base64, mime) {
   try {
     const r = await fetch("/api/detect", {
@@ -47,20 +96,23 @@ async function detectPlate(base64, mime) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mime, data: base64 } },
-            { type: "text", text: `Locate the vehicle license plate in this photo. The license plate is the flat rectangular panel with alphanumeric characters (letters and digits) attached to the front or rear bumper of the vehicle. Do NOT confuse it with brand logos, badges, grilles, or stickers.
+            { type: "text", text: `Locate the vehicle license plate and return its exact 4 corner coordinates, accounting for any 3D perspective or angle.
 
 Return ONLY this JSON (no markdown, no extra text):
-{"found":true,"x":FLOAT,"y":FLOAT,"w":FLOAT,"h":FLOAT}
+{"found":true,"tl":{"x":F,"y":F},"tr":{"x":F,"y":F},"br":{"x":F,"y":F},"bl":{"x":F,"y":F}}
 
-Coordinates (all values between 0.0 and 1.0):
-- x: left edge of plate divided by total image width
-- y: top edge of plate divided by total image height
-- w: plate width divided by total image width
-- h: plate height divided by total image height
+tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left.
+x = column / image width, y = row / image height. All values 0.0–1.0.
 
-Example — plate in the lower-center of the image: {"found":true,"x":0.35,"y":0.80,"w":0.30,"h":0.06}
+The license plate is the rectangular panel with letters and numbers on the bumper. Do NOT confuse with brand logos, grilles, badges, or stickers. If the car is shot at an angle, the plate corners will not be aligned horizontally.
 
-If no license plate is visible: {"found":false}` }
+Example (flat, front-facing plate):
+{"found":true,"tl":{"x":0.34,"y":0.79},"tr":{"x":0.64,"y":0.79},"br":{"x":0.64,"y":0.84},"bl":{"x":0.34,"y":0.84}}
+
+Example (plate at slight angle):
+{"found":true,"tl":{"x":0.30,"y":0.76},"tr":{"x":0.58,"y":0.74},"br":{"x":0.59,"y":0.80},"bl":{"x":0.31,"y":0.82}}
+
+If no license plate visible: {"found":false}` }
           ]
         }]
       })
@@ -70,14 +122,14 @@ If no license plate is visible: {"found":false}` }
     if (!d.content || !d.content[0]) return { found: false };
     const txt = d.content[0].text.trim();
     console.log("AI text:", txt);
-    const match = txt.match(/\{[^{}]*\}/);
-    if (!match) return { found: false };
-    const result = JSON.parse(match[0]);
+    const raw = extractJSON(txt);
+    if (!raw) return { found: false };
+    const result = JSON.parse(raw);
     console.log("Parsed plate:", result);
     if (result.found) {
-      const { x, y, w, h } = result;
-      if ([x, y, w, h].some(v => typeof v !== "number" || v < 0 || v > 1)) {
-        console.warn("Invalid plate coordinates, ignoring:", result);
+      const pts = [result.tl, result.tr, result.br, result.bl];
+      if (pts.some(p => !p || typeof p.x !== "number" || typeof p.y !== "number" || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1)) {
+        console.warn("Invalid plate corners:", result);
         return { found: false };
       }
     }
@@ -104,16 +156,10 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    const scaleW = 0.85;
-    const scaleH = 0.78;
-    const rawW = plate.w * c.width;
-    const rawH = plate.h * c.height;
-    const finalW = rawW * scaleW;
-    const finalH = rawH * scaleH;
-    const finalX = plate.x * c.width + (rawW - finalW) / 2;
-    const finalY = plate.y * c.height + (rawH - finalH) * 0.65;
-    console.log(`Logo overlay: x=${Math.round(finalX)}px y=${Math.round(finalY)}px w=${Math.round(finalW)}px h=${Math.round(finalH)}px (canvas ${c.width}x${c.height})`);
-    ctx.drawImage(logoImg, finalX, finalY, finalW, finalH);
+    const px = p => ({ x: p.x * c.width, y: p.y * c.height });
+    const tl = px(plate.tl), tr = px(plate.tr), br = px(plate.br), bl = px(plate.bl);
+    console.log(`Corners TL(${Math.round(tl.x)},${Math.round(tl.y)}) TR(${Math.round(tr.x)},${Math.round(tr.y)}) BR(${Math.round(br.x)},${Math.round(br.y)}) BL(${Math.round(bl.x)},${Math.round(bl.y)})`);
+    drawPerspective(ctx, logoImg, tl, tr, br, bl);
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
 }
