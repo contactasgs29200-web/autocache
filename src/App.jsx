@@ -5,19 +5,20 @@ const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-function toBase64(file) {
+function toBase64(file, maxPx = 1024, quality = 0.92) {
   return new Promise((res, rej) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const max = 1024;
-      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      const scale = Math.min(1, maxPx / Math.max(w, h));
       const c = document.createElement("canvas");
-      c.width = img.width * scale;
-      c.height = img.height * scale;
+      c.width = Math.round(w * scale);
+      c.height = Math.round(h * scale);
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      res(c.toDataURL("image/jpeg", 0.7).split(",")[1]);
+      res(c.toDataURL("image/jpeg", quality).split(",")[1]);
     };
     img.onerror = rej;
     img.src = url;
@@ -46,18 +47,20 @@ async function detectPlate(base64, mime) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mime, data: base64 } },
-            { type: "text", text: `You are a precise license plate detector for car photos.
-Carefully examine this car image and locate the license plate rectangle.
-Return ONLY a JSON object, no explanation, no markdown:
-{"found":true,"x":0.0,"y":0.0,"w":0.0,"h":0.0}
-Where:
-- x = left edge of plate / total image width
-- y = top edge of plate / total image height
-- w = plate width / total image width
-- h = plate height / total image height
-All values between 0.0 and 1.0.
-If no plate visible: {"found":false}
-Be very precise. The plate is usually a rectangular region with letters and numbers.` }
+            { type: "text", text: `Locate the vehicle license plate in this photo. The license plate is the flat rectangular panel with alphanumeric characters (letters and digits) attached to the front or rear bumper of the vehicle. Do NOT confuse it with brand logos, badges, grilles, or stickers.
+
+Return ONLY this JSON (no markdown, no extra text):
+{"found":true,"x":FLOAT,"y":FLOAT,"w":FLOAT,"h":FLOAT}
+
+Coordinates (all values between 0.0 and 1.0):
+- x: left edge of plate divided by total image width
+- y: top edge of plate divided by total image height
+- w: plate width divided by total image width
+- h: plate height divided by total image height
+
+Example — plate in the lower-center of the image: {"found":true,"x":0.35,"y":0.80,"w":0.30,"h":0.06}
+
+If no license plate is visible: {"found":false}` }
           ]
         }]
       })
@@ -67,10 +70,17 @@ Be very precise. The plate is usually a rectangular region with letters and numb
     if (!d.content || !d.content[0]) return { found: false };
     const txt = d.content[0].text.trim();
     console.log("AI text:", txt);
-    const match = txt.match(/\{[\s\S]*?\}/);
+    const match = txt.match(/\{[^{}]*\}/);
     if (!match) return { found: false };
     const result = JSON.parse(match[0]);
     console.log("Parsed plate:", result);
+    if (result.found) {
+      const { x, y, w, h } = result;
+      if ([x, y, w, h].some(v => typeof v !== "number" || v < 0 || v > 1)) {
+        console.warn("Invalid plate coordinates, ignoring:", result);
+        return { found: false };
+      }
+    }
     return result;
   } catch(e) {
     console.error("detectPlate error:", e);
@@ -79,7 +89,7 @@ Be very precise. The plate is usually a rectangular region with letters and numb
 }
 
 async function processPhoto(photoFile, logoImg, adj) {
-  const b64 = await toBase64(photoFile);
+  const b64 = await toBase64(photoFile, 1600, 0.92);
   const plate = await detectPlate(b64, "image/jpeg");
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
@@ -98,6 +108,7 @@ async function processPhoto(photoFile, logoImg, adj) {
     const finalY = plate.y * c.height;
     const finalW = plate.w * c.width;
     const finalH = plate.h * c.height;
+    console.log(`Logo overlay: x=${Math.round(finalX)}px y=${Math.round(finalY)}px w=${Math.round(finalW)}px h=${Math.round(finalH)}px (canvas ${c.width}x${c.height})`);
     ctx.drawImage(logoImg, finalX, finalY, finalW, finalH);
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
