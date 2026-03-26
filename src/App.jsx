@@ -67,35 +67,45 @@ async function getExactCorners(canvas, box) {
   const b64 = crop.toDataURL("image/jpeg", 0.93).split(",")[1];
 
   try {
+    console.log("getExactCorners: calling Claude with crop", crop.width, "x", crop.height);
     const r = await fetch("/api/detect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 200,
+        model: "claude-opus-4-6",
+        max_tokens: 300,
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-          { type: "text", text: `This image is a close crop around a vehicle license plate. Return the exact 4 corner coordinates of the plate, accounting for any 3D perspective or angle.
-Return ONLY this JSON (no markdown):
+          { type: "text", text: `This image is a close crop around a vehicle license plate. Return the exact 4 corner coordinates of the plate in the image, accounting for any 3D perspective or angle. The plate may appear as a trapezoid if the car is at an angle.
+Return ONLY this JSON (no markdown, no explanation):
 {"tl":{"x":F,"y":F},"tr":{"x":F,"y":F},"br":{"x":F,"y":F},"bl":{"x":F,"y":F}}
-x = column / image width, y = row / image height (0.0 to 1.0). tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left.` }
+x = column / image width, y = row / image height (0.0 to 1.0). tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left of the plate.` }
         ]}]
       })
     });
     const d = await r.json();
-    if (!d.content?.[0]?.text) return null;
-    const raw = extractJSON(d.content[0].text);
-    if (!raw) return null;
+    console.log("getExactCorners: Claude raw response:", JSON.stringify(d));
+    if (!d.content?.[0]?.text) { console.warn("getExactCorners: no text in response"); return null; }
+    const txt = d.content[0].text;
+    console.log("getExactCorners: Claude text:", txt);
+    const raw = extractJSON(txt);
+    if (!raw) { console.warn("getExactCorners: no JSON found in:", txt); return null; }
     const corners = JSON.parse(raw);
+    console.log("getExactCorners: parsed corners:", corners);
     const pts = [corners.tl, corners.tr, corners.br, corners.bl];
-    if (pts.some(p => !p || typeof p.x !== "number" || typeof p.y !== "number")) return null;
+    if (pts.some(p => !p || typeof p.x !== "number" || typeof p.y !== "number")) {
+      console.warn("getExactCorners: invalid corners:", corners);
+      return null;
+    }
     // Map from crop space back to full image normalized space
-    return {
+    const mapped = {
       tl: { x: x0 + corners.tl.x * (x1 - x0), y: y0 + corners.tl.y * (y1 - y0) },
       tr: { x: x0 + corners.tr.x * (x1 - x0), y: y0 + corners.tr.y * (y1 - y0) },
       br: { x: x0 + corners.br.x * (x1 - x0), y: y0 + corners.br.y * (y1 - y0) },
       bl: { x: x0 + corners.bl.x * (x1 - x0), y: y0 + corners.bl.y * (y1 - y0) },
     };
+    console.log("getExactCorners: mapped corners:", mapped);
+    return mapped;
   } catch(e) {
     console.error("getExactCorners error:", e);
     return null;
