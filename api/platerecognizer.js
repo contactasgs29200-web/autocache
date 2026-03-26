@@ -29,10 +29,15 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
+    console.log("Plate Recognizer HTTP status:", response.status);
     console.log("Plate Recognizer response:", JSON.stringify(data));
 
+    if (response.status !== 201 && response.status !== 200) {
+      return res.status(200).json({ found: false, debug: { status: response.status, body: data } });
+    }
+
     if (!data.results || data.results.length === 0) {
-      return res.status(200).json({ found: false });
+      return res.status(200).json({ found: false, debug: { status: response.status, body: data } });
     }
 
     const box = data.results[0].box;
