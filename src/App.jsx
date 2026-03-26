@@ -182,20 +182,15 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    // Expand PR box left side to include EU blue strip (often missed by PR)
+    // Expand Plate Recognizer box slightly on all sides for full coverage
     const bw = plate.tr.x - plate.tl.x;
     const bh = plate.bl.y - plate.tl.y;
-    const expanded = {
-      found: true,
-      tl: { x: Math.max(0, plate.tl.x - bw * 0.15), y: Math.max(0, plate.tl.y - bh * 0.05) },
-      tr: { x: Math.min(1, plate.tr.x + bw * 0.03), y: Math.max(0, plate.tr.y - bh * 0.05) },
-      br: { x: Math.min(1, plate.br.x + bw * 0.03), y: Math.min(1, plate.br.y + bh * 0.05) },
-      bl: { x: Math.max(0, plate.bl.x - bw * 0.15), y: Math.min(1, plate.bl.y + bh * 0.05) },
+    const corners = {
+      tl: { x: Math.max(0, plate.tl.x - bw * 0.10), y: Math.max(0, plate.tl.y - bh * 0.08) },
+      tr: { x: Math.min(1, plate.tr.x + bw * 0.04), y: Math.max(0, plate.tr.y - bh * 0.08) },
+      br: { x: Math.min(1, plate.br.x + bw * 0.04), y: Math.min(1, plate.br.y + bh * 0.08) },
+      bl: { x: Math.max(0, plate.bl.x - bw * 0.10), y: Math.min(1, plate.bl.y + bh * 0.08) },
     };
-    // Refine bounding box into true perspective corners via Claude crop
-    const refined = await getExactCorners(c, expanded);
-    const corners = refined || expanded; // fallback to expanded PR rectangle if Claude fails
-    console.log(refined ? "Using refined perspective corners" : "Using Plate Recognizer bounding box");
     const px = p => ({ x: p.x * c.width, y: p.y * c.height });
     const tl = px(corners.tl), tr = px(corners.tr), br = px(corners.br), bl = px(corners.bl);
     console.log(`Corners TL(${Math.round(tl.x)},${Math.round(tl.y)}) TR(${Math.round(tr.x)},${Math.round(tr.y)}) BR(${Math.round(br.x)},${Math.round(br.y)}) BL(${Math.round(bl.x)},${Math.round(bl.y)})`);
