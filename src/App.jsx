@@ -104,14 +104,14 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    const scaleW = 0.90;
-    const scaleH = 0.85;
+    const scaleW = 0.85;
+    const scaleH = 0.78;
     const rawW = plate.w * c.width;
     const rawH = plate.h * c.height;
     const finalW = rawW * scaleW;
     const finalH = rawH * scaleH;
     const finalX = plate.x * c.width + (rawW - finalW) / 2;
-    const finalY = plate.y * c.height + (rawH - finalH) / 2;
+    const finalY = plate.y * c.height + (rawH - finalH) * 0.65;
     console.log(`Logo overlay: x=${Math.round(finalX)}px y=${Math.round(finalY)}px w=${Math.round(finalW)}px h=${Math.round(finalH)}px (canvas ${c.width}x${c.height})`);
     ctx.drawImage(logoImg, finalX, finalY, finalW, finalH);
   }
