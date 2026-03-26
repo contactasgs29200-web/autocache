@@ -49,13 +49,13 @@ function extractJSON(txt) {
 // After Plate Recognizer gives us the bounding box, crop tightly around
 // the plate and ask Claude for the exact 4 perspective corners.
 async function getExactCorners(canvas, box) {
-  const pad = 0.6;
   const bw = box.tr.x - box.tl.x;
   const bh = box.bl.y - box.tl.y;
-  const x0 = Math.max(0, box.tl.x - bw * pad);
-  const y0 = Math.max(0, box.tl.y - bh * pad);
-  const x1 = Math.min(1, box.tr.x + bw * pad);
-  const y1 = Math.min(1, box.bl.y + bh * pad);
+  // Larger left padding: Plate Recognizer often misses the EU blue strip on left
+  const x0 = Math.max(0, box.tl.x - bw * 1.2);
+  const y0 = Math.max(0, box.tl.y - bh * 0.8);
+  const x1 = Math.min(1, box.tr.x + bw * 0.5);
+  const y1 = Math.min(1, box.bl.y + bh * 0.8);
 
   const cropW = (x1 - x0) * canvas.width;
   const cropH = (y1 - y0) * canvas.height;
@@ -76,10 +76,10 @@ async function getExactCorners(canvas, box) {
         max_tokens: 300,
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-          { type: "text", text: `This image is a close crop around a vehicle license plate. Return the exact 4 corner coordinates of the plate in the image, accounting for any 3D perspective or angle. The plate may appear as a trapezoid if the car is at an angle.
+          { type: "text", text: `This image shows a vehicle license plate. Return the exact 4 corner coordinates of the COMPLETE plate rectangle, including the blue EU identification strip on the left edge if present. The plate may appear as a trapezoid if the car is at an angle — account for any 3D perspective.
 Return ONLY this JSON (no markdown, no explanation):
 {"tl":{"x":F,"y":F},"tr":{"x":F,"y":F},"br":{"x":F,"y":F},"bl":{"x":F,"y":F}}
-x = column / image width, y = row / image height (0.0 to 1.0). tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left of the plate.` }
+x = column / image width, y = row / image height (0.0 to 1.0). tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left. Cover the full plate from leftmost to rightmost edge.` }
         ]}]
       })
     });
@@ -182,9 +182,19 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
+    // Expand PR box left side to include EU blue strip (often missed by PR)
+    const bw = plate.tr.x - plate.tl.x;
+    const bh = plate.bl.y - plate.tl.y;
+    const expanded = {
+      found: true,
+      tl: { x: Math.max(0, plate.tl.x - bw * 0.15), y: Math.max(0, plate.tl.y - bh * 0.05) },
+      tr: { x: Math.min(1, plate.tr.x + bw * 0.03), y: Math.max(0, plate.tr.y - bh * 0.05) },
+      br: { x: Math.min(1, plate.br.x + bw * 0.03), y: Math.min(1, plate.br.y + bh * 0.05) },
+      bl: { x: Math.max(0, plate.bl.x - bw * 0.15), y: Math.min(1, plate.bl.y + bh * 0.05) },
+    };
     // Refine bounding box into true perspective corners via Claude crop
-    const refined = await getExactCorners(c, plate);
-    const corners = refined || plate; // fallback to PR rectangle if Claude fails
+    const refined = await getExactCorners(c, expanded);
+    const corners = refined || expanded; // fallback to expanded PR rectangle if Claude fails
     console.log(refined ? "Using refined perspective corners" : "Using Plate Recognizer bounding box");
     const px = p => ({ x: p.x * c.width, y: p.y * c.height });
     const tl = px(corners.tl), tr = px(corners.tr), br = px(corners.br), bl = px(corners.bl);
