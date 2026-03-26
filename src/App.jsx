@@ -5,7 +5,7 @@ const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-function toBase64(file, maxPx = 1024, quality = 0.92) {
+function toBase64(file, maxPx = 1600, quality = 0.92) {
   return new Promise((res, rej) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
@@ -18,7 +18,7 @@ function toBase64(file, maxPx = 1024, quality = 0.92) {
       c.height = Math.round(h * scale);
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      res(c.toDataURL("image/jpeg", quality).split(",")[1]);
+      res({ b64: c.toDataURL("image/jpeg", quality).split(",")[1], imgW: c.width, imgH: c.height });
     };
     img.onerror = rej;
     img.src = url;
@@ -36,15 +36,6 @@ function loadImg(src) {
 }
 
 function lerp(a, b, t) { return a + (b - a) * t; }
-
-function extractJSON(txt) {
-  let depth = 0, start = -1;
-  for (let i = 0; i < txt.length; i++) {
-    if (txt[i] === '{') { if (depth === 0) start = i; depth++; }
-    else if (txt[i] === '}') { depth--; if (depth === 0 && start !== -1) return txt.slice(start, i + 1); }
-  }
-  return null;
-}
 
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
@@ -84,56 +75,16 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   ctx.restore();
 }
 
-async function detectPlate(base64, mime) {
+async function detectPlate(b64, imgW, imgH) {
   try {
-    const r = await fetch("/api/detect", {
+    const r = await fetch("/api/platerecognizer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 500,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mime, data: base64 } },
-            { type: "text", text: `Locate the vehicle license plate and return its exact 4 corner coordinates, accounting for any 3D perspective or angle.
-
-Return ONLY this JSON (no markdown, no extra text):
-{"found":true,"tl":{"x":F,"y":F},"tr":{"x":F,"y":F},"br":{"x":F,"y":F},"bl":{"x":F,"y":F}}
-
-tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left.
-x = column / image width, y = row / image height. All values 0.0–1.0.
-
-The license plate is the rectangular panel with letters and numbers on the bumper. Do NOT confuse with brand logos, grilles, badges, or stickers. If the car is shot at an angle, the plate corners will not be aligned horizontally.
-
-Example (flat, front-facing plate):
-{"found":true,"tl":{"x":0.34,"y":0.79},"tr":{"x":0.64,"y":0.79},"br":{"x":0.64,"y":0.84},"bl":{"x":0.34,"y":0.84}}
-
-Example (plate at slight angle):
-{"found":true,"tl":{"x":0.30,"y":0.76},"tr":{"x":0.58,"y":0.74},"br":{"x":0.59,"y":0.80},"bl":{"x":0.31,"y":0.82}}
-
-If no license plate visible: {"found":false}` }
-          ]
-        }]
-      })
+      body: JSON.stringify({ b64, imgW, imgH }),
     });
-    const d = await r.json();
-    console.log("Raw API response:", JSON.stringify(d));
-    if (!d.content || !d.content[0]) return { found: false };
-    const txt = d.content[0].text.trim();
-    console.log("AI text:", txt);
-    const raw = extractJSON(txt);
-    if (!raw) return { found: false };
-    const result = JSON.parse(raw);
-    console.log("Parsed plate:", result);
-    if (result.found) {
-      const pts = [result.tl, result.tr, result.br, result.bl];
-      if (pts.some(p => !p || typeof p.x !== "number" || typeof p.y !== "number" || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1)) {
-        console.warn("Invalid plate corners:", result);
-        return { found: false };
-      }
-    }
-    return result;
+    const data = await r.json();
+    console.log("Plate detection:", data);
+    return data;
   } catch(e) {
     console.error("detectPlate error:", e);
     return { found: false };
@@ -141,8 +92,8 @@ If no license plate visible: {"found":false}` }
 }
 
 async function processPhoto(photoFile, logoImg, adj) {
-  const b64 = await toBase64(photoFile, 1600, 0.92);
-  const plate = await detectPlate(b64, "image/jpeg");
+  const { b64, imgW, imgH } = await toBase64(photoFile);
+  const plate = await detectPlate(b64, imgW, imgH);
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
   URL.revokeObjectURL(photoURL);
