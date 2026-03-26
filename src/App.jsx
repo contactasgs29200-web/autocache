@@ -158,6 +158,7 @@ async function detectPlate(b64, imgW, imgH) {
       body: JSON.stringify({ b64, imgW, imgH }),
     });
     const data = await r.json();
+    if (data.found) console.log(`PR raw: TL(${data.tl.x.toFixed(3)},${data.tl.y.toFixed(3)}) TR(${data.tr.x.toFixed(3)},${data.tr.y.toFixed(3)}) BR(${data.br.x.toFixed(3)},${data.br.y.toFixed(3)}) BL(${data.bl.x.toFixed(3)},${data.bl.y.toFixed(3)})`);
     console.log("Plate detection:", data);
     return data;
   } catch(e) {
