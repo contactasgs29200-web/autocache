@@ -46,66 +46,44 @@ function extractJSON(txt) {
   return null;
 }
 
-// After Plate Recognizer gives us the bounding box, crop tightly around
-// the plate and ask Claude for the exact 4 perspective corners.
-async function getExactCorners(canvas, box) {
-  const bw = box.tr.x - box.tl.x;
-  const bh = box.bl.y - box.tl.y;
-  // Uniform 50% padding around the seed box for context without drowning the plate
-  const x0 = Math.max(0, box.tl.x - bw * 0.5);
-  const y0 = Math.max(0, box.tl.y - bh * 1.0);
-  const x1 = Math.min(1, box.tr.x + bw * 0.5);
-  const y1 = Math.min(1, box.bl.y + bh * 1.0);
-
-  const cropW = (x1 - x0) * canvas.width;
-  const cropH = (y1 - y0) * canvas.height;
-  const scale = Math.min(1, 900 / Math.max(cropW, cropH));
-  const crop = document.createElement("canvas");
-  crop.width = Math.round(cropW * scale);
-  crop.height = Math.round(cropH * scale);
-  crop.getContext("2d").drawImage(canvas, x0 * canvas.width, y0 * canvas.height, cropW, cropH, 0, 0, crop.width, crop.height);
-  const b64 = crop.toDataURL("image/jpeg", 0.93).split(",")[1];
-
+// Ask Claude for the real perspective corners of the plate, using the FULL image
+// so it can see the car's angle and return a proper trapezoid (not a bounding box).
+// b64 = full resized image (≤1600px). hint = {cx,cy,pw,ph} normalized 0-1.
+async function getExactCorners(b64, hint) {
   try {
-    console.log("getExactCorners: calling Claude with crop", crop.width, "x", crop.height);
+    console.log(`getExactCorners: sending full image to Claude, plate hint center=(${hint.cx.toFixed(3)},${hint.cy.toFixed(3)}) pw=${hint.pw.toFixed(3)}`);
     const r = await fetch("/api/detect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-opus-4-5",
-        max_tokens: 300,
+        max_tokens: 200,
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-          { type: "text", text: `This image shows a vehicle with a license plate. Locate the license plate and return the precise pixel coordinates of its 4 actual corners as they appear in perspective in this image (not the bounding box rectangle — the real physical corners of the plate, which may form a trapezoid if the car is angled). Include the blue EU strip on the left if visible.
-Return ONLY this JSON (no markdown, no explanation):
+          { type: "text", text: `This is a car photo. The license plate is located near image position x≈${hint.cx.toFixed(2)}, y≈${hint.cy.toFixed(2)} (x=left→right, y=top→bottom, range 0–1).
+
+Find the license plate and return the coordinates of its 4 PHYSICAL corners as they appear in this photo, accounting for any 3D perspective (the plate may look like a trapezoid if the car is angled — one side closer to the camera appears wider/taller). Include the EU blue identification strip on the left edge.
+
+Return ONLY this JSON, no other text:
 {"tl":{"x":F,"y":F},"tr":{"x":F,"y":F},"br":{"x":F,"y":F},"bl":{"x":F,"y":F}}
-x = column / image width (0.0=left, 1.0=right), y = row / image height (0.0=top, 1.0=bottom). tl=top-left corner of plate, tr=top-right, br=bottom-right, bl=bottom-left. The four points should trace the actual plate edges including any perspective distortion.` }
+
+x and y are fractions of image width/height (0.0–1.0). tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left of the plate.` }
         ]}]
       })
     });
     const d = await r.json();
-    console.log("getExactCorners: Claude raw response:", JSON.stringify(d));
-    if (!d.content?.[0]?.text) { console.warn("getExactCorners: no text in response"); return null; }
+    if (!d.content?.[0]?.text) { console.warn("getExactCorners: no text"); return null; }
     const txt = d.content[0].text;
-    console.log("getExactCorners: Claude text:", txt);
+    console.log("getExactCorners: Claude →", txt);
     const raw = extractJSON(txt);
-    if (!raw) { console.warn("getExactCorners: no JSON found in:", txt); return null; }
+    if (!raw) { console.warn("getExactCorners: no JSON in:", txt); return null; }
     const corners = JSON.parse(raw);
-    console.log("getExactCorners: parsed corners:", corners);
     const pts = [corners.tl, corners.tr, corners.br, corners.bl];
     if (pts.some(p => !p || typeof p.x !== "number" || typeof p.y !== "number")) {
-      console.warn("getExactCorners: invalid corners:", corners);
-      return null;
+      console.warn("getExactCorners: bad corners:", corners); return null;
     }
-    // Map from crop space back to full image normalized space
-    const mapped = {
-      tl: { x: x0 + corners.tl.x * (x1 - x0), y: y0 + corners.tl.y * (y1 - y0) },
-      tr: { x: x0 + corners.tr.x * (x1 - x0), y: y0 + corners.tr.y * (y1 - y0) },
-      br: { x: x0 + corners.br.x * (x1 - x0), y: y0 + corners.br.y * (y1 - y0) },
-      bl: { x: x0 + corners.bl.x * (x1 - x0), y: y0 + corners.bl.y * (y1 - y0) },
-    };
-    console.log("getExactCorners: mapped corners:", mapped);
-    return mapped;
+    console.log("getExactCorners: corners →", corners);
+    return corners;
   } catch(e) {
     console.error("getExactCorners error:", e);
     return null;
@@ -198,7 +176,8 @@ async function processPhoto(photoFile, logoImg, adj) {
     console.log(`PR seed: center(${cx.toFixed(3)},${cy.toFixed(3)}) pw=${pw.toFixed(3)} ph=${ph.toFixed(3)}`);
 
     // Step 2 — Ask Claude for the real perspective corners (trapezoid for angled cars)
-    const exact = await getExactCorners(c, corners);
+    // Pass the full resized image so Claude sees the whole car and can detect perspective
+    const exact = await getExactCorners(b64, { cx, cy, pw, ph });
     if (exact) {
       // Validate: center must stay close to PR center, aspect ratio 2:1 to 8:1
       const ecx = (exact.tl.x + exact.tr.x) / 2;
