@@ -183,15 +183,21 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    // Expand Plate Recognizer box slightly on all sides for full coverage
-    const bw = plate.tr.x - plate.tl.x;
-    const bh = plate.bl.y - plate.tl.y;
+    // PR bounding box height includes bumper — use width only (reliable) and
+    // derive correct height from real French plate ratio (520mm x 110mm = 4.73:1).
+    // Account for typical 3/4-view foreshortening with ratio 4.2.
+    const cx = (plate.tl.x + plate.tr.x) / 2;
+    const cy = (plate.tl.y + plate.bl.y) / 2;
+    const pw = plate.tr.x - plate.tl.x;
+    const ph = pw / 4.2;
+    // +12% left for EU blue strip, +3% right, +5% top/bottom margin
     const corners = {
-      tl: { x: Math.max(0, plate.tl.x - bw * 0.10), y: Math.max(0, plate.tl.y - bh * 0.08) },
-      tr: { x: Math.min(1, plate.tr.x + bw * 0.04), y: Math.max(0, plate.tr.y - bh * 0.08) },
-      br: { x: Math.min(1, plate.br.x + bw * 0.04), y: Math.min(1, plate.br.y + bh * 0.08) },
-      bl: { x: Math.max(0, plate.bl.x - bw * 0.10), y: Math.min(1, plate.bl.y + bh * 0.08) },
+      tl: { x: Math.max(0, cx - pw * 0.62), y: Math.max(0, cy - ph * 0.55) },
+      tr: { x: Math.min(1, cx + pw * 0.53), y: Math.max(0, cy - ph * 0.55) },
+      br: { x: Math.min(1, cx + pw * 0.53), y: Math.min(1, cy + ph * 0.55) },
+      bl: { x: Math.max(0, cx - pw * 0.62), y: Math.min(1, cy + ph * 0.55) },
     };
+    console.log(`Plate center (${cx.toFixed(3)},${cy.toFixed(3)}) pw=${pw.toFixed(3)} ph=${ph.toFixed(3)}`);
     const px = p => ({ x: p.x * c.width, y: p.y * c.height });
     const tl = px(corners.tl), tr = px(corners.tr), br = px(corners.br), bl = px(corners.bl);
     console.log(`Corners TL(${Math.round(tl.x)},${Math.round(tl.y)}) TR(${Math.round(tr.x)},${Math.round(tr.y)}) BR(${Math.round(br.x)},${Math.round(br.y)}) BL(${Math.round(bl.x)},${Math.round(bl.y)})`);
