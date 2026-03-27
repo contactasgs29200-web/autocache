@@ -51,11 +51,11 @@ function extractJSON(txt) {
 async function getExactCorners(canvas, box) {
   const bw = box.tr.x - box.tl.x;
   const bh = box.bl.y - box.tl.y;
-  // Larger left padding: Plate Recognizer often misses the EU blue strip on left
-  const x0 = Math.max(0, box.tl.x - bw * 1.2);
-  const y0 = Math.max(0, box.tl.y - bh * 0.8);
+  // Uniform 50% padding around the seed box for context without drowning the plate
+  const x0 = Math.max(0, box.tl.x - bw * 0.5);
+  const y0 = Math.max(0, box.tl.y - bh * 1.0);
   const x1 = Math.min(1, box.tr.x + bw * 0.5);
-  const y1 = Math.min(1, box.bl.y + bh * 0.8);
+  const y1 = Math.min(1, box.bl.y + bh * 1.0);
 
   const cropW = (x1 - x0) * canvas.width;
   const cropH = (y1 - y0) * canvas.height;
@@ -72,14 +72,14 @@ async function getExactCorners(canvas, box) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-5",
         max_tokens: 300,
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-          { type: "text", text: `This image shows a vehicle license plate. Return the exact 4 corner coordinates of the COMPLETE plate rectangle, including the blue EU identification strip on the left edge if present. The plate may appear as a trapezoid if the car is at an angle — account for any 3D perspective.
+          { type: "text", text: `This image shows a vehicle with a license plate. Locate the license plate and return the precise pixel coordinates of its 4 actual corners as they appear in perspective in this image (not the bounding box rectangle — the real physical corners of the plate, which may form a trapezoid if the car is angled). Include the blue EU strip on the left if visible.
 Return ONLY this JSON (no markdown, no explanation):
 {"tl":{"x":F,"y":F},"tr":{"x":F,"y":F},"br":{"x":F,"y":F},"bl":{"x":F,"y":F}}
-x = column / image width, y = row / image height (0.0 to 1.0). tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left. Cover the full plate from leftmost to rightmost edge.` }
+x = column / image width (0.0=left, 1.0=right), y = row / image height (0.0=top, 1.0=bottom). tl=top-left corner of plate, tr=top-right, br=bottom-right, bl=bottom-left. The four points should trace the actual plate edges including any perspective distortion.` }
         ]}]
       })
     });
@@ -183,24 +183,42 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    // PR bounding box height includes bumper — use width only (reliable) and
-    // derive correct height from real French plate ratio (520mm x 110mm = 4.73:1).
-    // Account for typical 3/4-view foreshortening with ratio 4.2.
+    // Step 1 — PR gives reliable center + width; derive height from real plate ratio 4.73:1
     const cx = (plate.tl.x + plate.tr.x) / 2;
     const cy = (plate.tl.y + plate.bl.y) / 2;
     const pw = plate.tr.x - plate.tl.x;
-    const ph = pw / 4.2;
-    // +12% left for EU blue strip, +3% right, +5% top/bottom margin
-    const corners = {
+    const ph = pw / 4.73;
+    // Seed rectangle: +12% left for EU strip, symmetric height
+    let corners = {
       tl: { x: Math.max(0, cx - pw * 0.62), y: Math.max(0, cy - ph * 0.55) },
       tr: { x: Math.min(1, cx + pw * 0.53), y: Math.max(0, cy - ph * 0.55) },
       br: { x: Math.min(1, cx + pw * 0.53), y: Math.min(1, cy + ph * 0.55) },
       bl: { x: Math.max(0, cx - pw * 0.62), y: Math.min(1, cy + ph * 0.55) },
     };
-    console.log(`Plate center (${cx.toFixed(3)},${cy.toFixed(3)}) pw=${pw.toFixed(3)} ph=${ph.toFixed(3)}`);
+    console.log(`PR seed: center(${cx.toFixed(3)},${cy.toFixed(3)}) pw=${pw.toFixed(3)} ph=${ph.toFixed(3)}`);
+
+    // Step 2 — Ask Claude for the real perspective corners (trapezoid for angled cars)
+    const exact = await getExactCorners(c, corners);
+    if (exact) {
+      // Validate: center must stay close to PR center, aspect ratio 2:1 to 8:1
+      const ecx = (exact.tl.x + exact.tr.x) / 2;
+      const ecy = (exact.tl.y + exact.bl.y) / 2;
+      const epw = Math.max(exact.tr.x - exact.tl.x, exact.br.x - exact.bl.x);
+      const eph = Math.max(exact.bl.y - exact.tl.y, exact.br.y - exact.tr.y);
+      const ratio = eph > 0 ? epw / eph : 0;
+      const centerClose = Math.abs(ecx - cx) < pw * 0.6 && Math.abs(ecy - cy) < ph * 1.5;
+      const ratioOk = ratio >= 1.8 && ratio <= 9.0;
+      if (centerClose && ratioOk) {
+        console.log(`Using Claude corners ✓ ratio=${ratio.toFixed(2)} center=(${ecx.toFixed(3)},${ecy.toFixed(3)})`);
+        corners = exact;
+      } else {
+        console.warn(`Claude corners rejected (ratio=${ratio.toFixed(2)}, centerClose=${centerClose}) — keeping PR seed`);
+      }
+    }
+
     const px = p => ({ x: p.x * c.width, y: p.y * c.height });
     const tl = px(corners.tl), tr = px(corners.tr), br = px(corners.br), bl = px(corners.bl);
-    console.log(`Corners TL(${Math.round(tl.x)},${Math.round(tl.y)}) TR(${Math.round(tr.x)},${Math.round(tr.y)}) BR(${Math.round(br.x)},${Math.round(br.y)}) BL(${Math.round(bl.x)},${Math.round(bl.y)})`);
+    console.log(`Final corners TL(${Math.round(tl.x)},${Math.round(tl.y)}) TR(${Math.round(tr.x)},${Math.round(tr.y)}) BR(${Math.round(br.x)},${Math.round(br.y)}) BL(${Math.round(bl.x)},${Math.round(bl.y)})`);
     drawPerspective(ctx, logoImg, tl, tr, br, bl);
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
