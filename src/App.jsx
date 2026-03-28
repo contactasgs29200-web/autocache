@@ -337,9 +337,7 @@ export default function AutoCache() {
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
   const [cropDrag, setCropDrag] = useState(null); // { type, startMx, startMy, startBox }
-  const [cropSrc, setCropSrc] = useState(null);         // image affichée en mode rognage (peut être pivotée)
-  const [cropBaseSrc, setCropBaseSrc] = useState(null); // baseDataURL pivotée (pour saveCrop)
-  const [cropRotation, setCropRotation] = useState(0);  // 0 | 90 | 180 | 270
+  const [cropAngle, setCropAngle] = useState(180); // 0-360, 180 = photo droite (0° de rotation)
   const [adjustMode, setAdjustMode] = useState(false);
   const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
@@ -348,7 +346,9 @@ export default function AutoCache() {
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
   const logoRef        = useRef();
   const photosRef      = useRef();
-  const cropImgRef       = useRef(null); // ref sur l'<img> de la lightbox (crop)
+  const cropImgRef       = useRef(null); // ref sur l'<img> de la lightbox (hors crop)
+  const cropCanvasRef    = useRef(null); // canvas live-preview en mode Rogner
+  const cropBaseImgRef   = useRef(null); // photo chargée pour le canvas de rognage
   const lbContainerRef   = useRef(null); // ref sur le conteneur de la lightbox (zoom/pan)
   const adjustCanvasRef  = useRef(null); // canvas live-preview en mode Ajuster
   const adjustBaseImgRef = useRef(null); // photo de base chargée pour le canvas
@@ -430,8 +430,7 @@ export default function AutoCache() {
 
   const openLightbox  = (r) => {
     setLightbox(r);
-    setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
-    setCropSrc(r.processed); setCropBaseSrc(r.baseDataURL || null); setCropRotation(0);
+    setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
@@ -448,8 +447,8 @@ export default function AutoCache() {
   };
 
   const onCropMouseMove = (e) => {
-    if (!cropDrag || !cropImgRef.current) return;
-    const rect = cropImgRef.current.getBoundingClientRect();
+    if (!cropDrag || !cropCanvasRef.current) return;
+    const rect = cropCanvasRef.current.getBoundingClientRect();
     const dx = (e.clientX - cropDrag.startMx) / rect.width;
     const dy = (e.clientY - cropDrag.startMy) / rect.height;
     let { x, y, w, h } = cropDrag.startBox;
@@ -466,103 +465,101 @@ export default function AutoCache() {
   };
 
   const downloadCropped = () => {
-    if (!lightbox || !cropSrc) return;
-    const img = new Image();
-    img.onload = () => {
-      const sx = Math.round(cropBox.x * img.naturalWidth);
-      const sy = Math.round(cropBox.y * img.naturalHeight);
-      const sw = Math.round(cropBox.w * img.naturalWidth);
-      const sh = Math.round(cropBox.h * img.naturalHeight);
-      const canvas = document.createElement('canvas');
-      canvas.width = sw; canvas.height = sh;
-      canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-      const a = document.createElement('a');
-      a.href = canvas.toDataURL('image/jpeg', 0.95);
-      a.download = `autocache_rogné_${lightbox.name}`;
-      a.click();
-    };
-    img.src = cropSrc;  // utilise l'image (éventuellement pivotée)
+    const canvas = cropCanvasRef.current;
+    if (!canvas) return;
+    const { x, y, w, h } = cropBox;
+    const sx = Math.round(x * canvas.width),  sy = Math.round(y * canvas.height);
+    const sw = Math.round(w * canvas.width),   sh = Math.round(h * canvas.height);
+    const c = document.createElement('canvas');
+    c.width = sw; c.height = sh;
+    c.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    const a = document.createElement('a');
+    a.href = c.toDataURL('image/jpeg', 0.95);
+    a.download = `autocache_rogné_${lightbox.name}`;
+    a.click();
   };
 
-  // Sauvegarde le rognage dans le résultat (pour "Tout télécharger")
+  // Tourne + rogne un dataURL (deg = offset depuis 180, soit degrés réels)
+  const rotateAndCropDataURL = async (src, deg, box) => {
+    if (!src) return null;
+    const img = await loadImg(src);
+    const rad = deg * Math.PI / 180;
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const cosA = Math.abs(Math.cos(rad)), sinA = Math.abs(Math.sin(rad));
+    const cW = Math.round(W * cosA + H * sinA);
+    const cH = Math.round(W * sinA + H * cosA);
+    const c1 = document.createElement('canvas');
+    c1.width = cW; c1.height = cH;
+    const ctx1 = c1.getContext('2d');
+    ctx1.save(); ctx1.translate(cW / 2, cH / 2); ctx1.rotate(rad);
+    ctx1.drawImage(img, -W / 2, -H / 2); ctx1.restore();
+    const sx = Math.round(box.x * cW), sy = Math.round(box.y * cH);
+    const sw = Math.round(box.w * cW), sh = Math.round(box.h * cH);
+    const c2 = document.createElement('canvas');
+    c2.width = sw; c2.height = sh;
+    c2.getContext('2d').drawImage(c1, sx, sy, sw, sh, 0, 0, sw, sh);
+    return c2.toDataURL('image/jpeg', 0.95);
+  };
+
+  // Sauvegarde le rognage (+ rotation) dans le résultat (pour "Tout télécharger")
   const saveCrop = async () => {
-    if (!lightbox || !cropSrc) return;
-    const { x, y, w, h } = cropBox;
-
-    // Rogne un dataURL selon la zone normalisée (x,y,w,h)
-    const cropURL = async (src) => {
-      if (!src) return null;
-      const img = await loadImg(src);
-      const sx = Math.round(x * img.naturalWidth);
-      const sy = Math.round(y * img.naturalHeight);
-      const sw = Math.round(w * img.naturalWidth);
-      const sh = Math.round(h * img.naturalHeight);
-      const c = document.createElement('canvas');
-      c.width = sw; c.height = sh;
-      c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-      return c.toDataURL('image/jpeg', 0.95);
-    };
-
-    // On travaille sur cropSrc / cropBaseSrc qui peuvent avoir été pivotés
-    const croppedProcessed = await cropURL(cropSrc);
-    const croppedBase      = await cropURL(cropBaseSrc);
-
+    if (!lightbox) return;
+    const deg = cropAngle - 180;   // rotation réelle : 0 = photo droite
+    const box = cropBox;
+    const [croppedProcessed, croppedBase] = await Promise.all([
+      rotateAndCropDataURL(lightbox.processed,   deg, box),
+      rotateAndCropDataURL(lightbox.baseDataURL, deg, box),
+    ]);
     // Les coins de plaque ne sont valides qu'en l'absence de rotation
     let newCorners = null;
-    if (cropRotation === 0 && lightbox.corners) {
+    if (deg === 0 && lightbox.corners) {
+      const { x, y, w, h } = box;
       const remap = p => ({
         x: Math.max(0, Math.min(1, (p.x - x) / w)),
         y: Math.max(0, Math.min(1, (p.y - y) / h)),
       });
-      newCorners = {
-        tl: remap(lightbox.corners.tl),
-        tr: remap(lightbox.corners.tr),
-        br: remap(lightbox.corners.br),
-        bl: remap(lightbox.corners.bl),
-      };
+      newCorners = { tl: remap(lightbox.corners.tl), tr: remap(lightbox.corners.tr),
+                     br: remap(lightbox.corners.br), bl: remap(lightbox.corners.bl) };
     }
-
-    const updated = {
-      ...lightbox,
-      processed:   croppedProcessed,
-      baseDataURL: croppedBase ?? lightbox.baseDataURL,
-      corners:     newCorners,
-      cropped:     true,
-    };
+    const updated = { ...lightbox, processed: croppedProcessed,
+      baseDataURL: croppedBase ?? lightbox.baseDataURL, corners: newCorners, cropped: true };
     setResults(prev => prev.map(r => r === lightbox ? updated : r));
     setLightbox(updated);
-    setCropSrc(croppedProcessed);
-    setCropBaseSrc(croppedBase ?? lightbox.baseDataURL);
-    setCropRotation(0);
     setAdjustCorners(newCorners);
+    setCropAngle(180);
     setCropMode(false);
   };
 
-  // ── Rotation du rognage (+90° dans le sens horaire) ──────────────────────
-  const rotateCrop90 = async () => {
-    const rotateDataURL = async (src) => {
-      if (!src) return null;
-      const img = await loadImg(src);
-      const c = document.createElement('canvas');
-      c.width  = img.naturalHeight;   // largeur ↔ hauteur après rotation
-      c.height = img.naturalWidth;
-      const ctx = c.getContext('2d');
-      ctx.translate(c.width / 2, c.height / 2);
-      ctx.rotate(Math.PI / 2);        // 90° horaire
-      ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
-      return c.toDataURL('image/jpeg', 0.95);
-    };
-    const [newSrc, newBase] = await Promise.all([
-      rotateDataURL(cropSrc),
-      rotateDataURL(cropBaseSrc),
-    ]);
-    setCropSrc(newSrc);
-    setCropBaseSrc(newBase);
-    setCropRotation(r => (r + 90) % 360);
-    // Réinitialise la zone de rognage (les dimensions ont été échangées)
-    setCropBox({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 });
-    setCropDrag(null);
+  // ── Rendu live du canvas de rognage ──────────────────────────────────────
+  // angle : valeur du slider (0-360), 180 = photo droite
+  const renderCropPreview = (angle) => {
+    const canvas = cropCanvasRef.current;
+    const img    = cropBaseImgRef.current;
+    if (!canvas || !img) return;
+    const deg = angle - 180;
+    const rad = deg * Math.PI / 180;
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const cosA = Math.abs(Math.cos(rad)), sinA = Math.abs(Math.sin(rad));
+    const cW = Math.round(W * cosA + H * sinA);
+    const cH = Math.round(W * sinA + H * cosA);
+    canvas.width = cW; canvas.height = cH;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, cW, cH);
+    ctx.save(); ctx.translate(cW / 2, cH / 2); ctx.rotate(rad);
+    ctx.drawImage(img, -W / 2, -H / 2); ctx.restore();
   };
+
+  // Charge la photo dès que le mode Rogner s'ouvre
+  useEffect(() => {
+    if (!cropMode || !lightbox?.processed) return;
+    let cancelled = false;
+    loadImg(lightbox.processed).then(img => {
+      if (cancelled) return;
+      cropBaseImgRef.current = img;
+      renderCropPreview(cropAngle);
+    });
+    return () => { cancelled = true; };
+  }, [cropMode, lightbox?.processed]);
 
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
   const startAdjustDrag = (e, corner) => {
@@ -971,10 +968,7 @@ export default function AutoCache() {
                   e.stopPropagation();
                   setCropMode(c => {
                     if (!c) {
-                      // Initialise la source et la rotation au moment où on entre dans le mode
-                      setCropSrc(lightbox.processed);
-                      setCropBaseSrc(lightbox.baseDataURL || null);
-                      setCropRotation(0);
+                      setCropAngle(180);
                       setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
                     }
                     return !c;
@@ -999,11 +993,6 @@ export default function AutoCache() {
                   style={{ background: "#e8a020", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >✓ Terminé</button>
               ) : cropMode ? (<>
-                <button
-                  onClick={e => { e.stopPropagation(); rotateCrop90(); }}
-                  style={{ background: "#181818", color: "#aaa", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 1, borderRadius: 2 }}
-                  title="Pivoter 90° dans le sens horaire"
-                >↻{cropRotation > 0 ? ` ${cropRotation}°` : " Pivoter"}</button>
                 <button
                   onClick={e => { e.stopPropagation(); saveCrop(); }}
                   style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
@@ -1054,12 +1043,17 @@ export default function AutoCache() {
             {adjustMode ? (
               <canvas
                 ref={adjustCanvasRef}
-                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh" }}
+                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh" }}
+              />
+            ) : cropMode ? (
+              <canvas
+                ref={cropCanvasRef}
+                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh" }}
               />
             ) : (
               <img
                 ref={cropImgRef}
-                src={cropMode ? (cropSrc || lightbox.processed) : lightbox.processed}
+                src={lightbox.processed}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
               />
             )}
@@ -1140,12 +1134,36 @@ export default function AutoCache() {
             </div>{/* fin calque zoomé */}
           </div>
 
+          {/* ── Jauge d'inclinaison (mode Rogner) ── */}
+          {cropMode && (
+            <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: "min(1100px, 100vw - 32px)", marginTop: 10, padding: "10px 16px 8px", background: "#0f0f0f", border: "1px solid #222", borderRadius: 3 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+                <span style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "#777", fontFamily: "'JetBrains Mono',monospace" }}>Inclinaison</span>
+                <span style={{ fontSize: 11, color: "#f26522", fontFamily: "'JetBrains Mono',monospace" }}>
+                  {cropAngle === 180 ? "0°" : `${cropAngle > 180 ? "+" : ""}${cropAngle - 180}°`}
+                </span>
+              </div>
+              <input
+                type="range" min={0} max={360} step={1} value={cropAngle}
+                onChange={e => {
+                  const a = parseFloat(e.target.value);
+                  setCropAngle(a);
+                  renderCropPreview(a);
+                }}
+                style={{ width: "100%", accentColor: "#f26522", cursor: "pointer" }}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 9, color: "#333", fontFamily: "'JetBrains Mono',monospace" }}>
+                <span>−180°</span><span>0°</span><span>+180°</span>
+              </div>
+            </div>
+          )}
+
           {/* ── Pied ── */}
           <div style={{ marginTop: 10, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
             {adjustMode
               ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
-              ? "↻ Pivoter · Glisser la zone · Coins oranges pour redimensionner · ⬇ Télécharger rogné"
+              ? "Inclinaison · Glisser la zone · Coins oranges pour redimensionner · 💾 Sauvegarder"
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
