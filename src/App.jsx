@@ -5,6 +5,60 @@ const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
+// ── Cache plaque généré ───────────────────────────────────────────────────
+// Génère un canvas 1040×220 (ratio 4.73:1) avec texte + couleurs + bande EU optionnelle
+function makeLogoDataURL(text, bg, fg, euStrip) {
+  const W = 1040, H = 220;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+
+  // Fond principal
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  let textCx = W / 2, textMaxW = W * 0.88;
+
+  if (euStrip) {
+    const SW = Math.round(W * 0.115); // ~12% largeur
+    ctx.fillStyle = "#003399";
+    ctx.fillRect(0, 0, SW, H);
+    // Étoiles EU
+    ctx.fillStyle = "#FFCC00";
+    const R = H * 0.08, scx = SW / 2, scy = H * 0.30;
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+      ctx.beginPath();
+      ctx.arc(scx + R * Math.cos(a), scy + R * Math.sin(a), H * 0.026, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Code pays
+    ctx.font = `bold ${Math.round(H * 0.38)}px Arial`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("F", SW / 2, H * 0.70);
+    // Ligne de séparation
+    ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(SW, 0); ctx.lineTo(SW, H); ctx.stroke();
+    // Zone de texte ajustée
+    textCx = SW + (W - SW) / 2;
+    textMaxW = (W - SW) * 0.87;
+  }
+
+  // Texte principal (taille auto)
+  const txt = (text.trim() || "VOTRE TEXTE").toUpperCase();
+  ctx.fillStyle = fg;
+  let sz = Math.round(H * 0.52);
+  ctx.font = `bold ${sz}px Arial, sans-serif`;
+  while (ctx.measureText(txt).width > textMaxW && sz > 16) {
+    sz -= 2;
+    ctx.font = `bold ${sz}px Arial, sans-serif`;
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(txt, textCx, H / 2);
+
+  return c.toDataURL("image/png");
+}
+
 function toBase64(file, maxPx = 1600, quality = 0.92) {
   return new Promise((res, rej) => {
     const img = new Image();
@@ -265,6 +319,12 @@ export default function AutoCache() {
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
+  // ── Mode logo : import fichier OU génération texte+couleur ──
+  const [logoMode, setLogoMode] = useState("import"); // "import" | "generate"
+  const [genText,  setGenText]  = useState("");
+  const [genBg,    setGenBg]    = useState("#0d2b6b");
+  const [genFg,    setGenFg]    = useState("#ffffff");
+  const [genEU,    setGenEU]    = useState(false);
   const [lightbox, setLightbox] = useState(null);
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
@@ -284,8 +344,15 @@ export default function AutoCache() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Regénère le cache plaque dès qu'un paramètre change (mode génération)
+  useEffect(() => {
+    if (logoMode !== "generate") return;
+    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, genEU), generated: true });
+  }, [logoMode, genText, genBg, genFg, genEU]);
+
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
+    setLogoMode("import");
     setLogo({ file: f, preview: URL.createObjectURL(f) });
   };
 
@@ -404,26 +471,102 @@ export default function AutoCache() {
           <div style={{ maxWidth: 980, margin: "0 auto", padding: "32px 28px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28, alignItems: "start" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
               <section>
-                <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 4, fontFamily: "'JetBrains Mono',monospace" }}>01 — Votre logo</div>
-                <div style={{ fontSize: 10, color: "#444", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>
-                  {logo ? "✓ Logo chargé · cliquer pour changer" : "Chargez votre logo · PNG avec transparence recommandé"}
+                <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>01 — Cache plaque</div>
+
+                {/* ── Onglets Import / Générer ── */}
+                <div style={{ display: "flex", marginBottom: 14, background: "#0a0a0a", border: "1px solid #1c1c1c", borderRadius: 3, overflow: "hidden" }}>
+                  {[["import","Mon logo"],["generate","Générer"]].map(([m, label]) => (
+                    <button key={m} onClick={() => {
+                      if (m === "import") setLogo(null);
+                      setLogoMode(m);
+                    }} style={{ flex: 1, background: logoMode === m ? "#f26522" : "transparent", color: logoMode === m ? "#090909" : "#555", border: "none", padding: "8px 0", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>
+                      {label}
+                    </button>
+                  ))}
                 </div>
-                <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
-                  onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
-                  onClick={() => logoRef.current?.click()}
-                  style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 150, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f0f" }}>
-                  {logo ? (
-                    <div style={{ textAlign: "center" }}>
-                      <img src={logo.preview} style={{ maxHeight: 90, maxWidth: "100%", objectFit: "contain" }} />
-                      <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
+
+                {/* ── Mode : importer un fichier ── */}
+                {logoMode === "import" && (<>
+                  <div style={{ fontSize: 10, color: "#444", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>
+                    {logo ? "✓ Logo chargé · cliquer pour changer" : "PNG avec transparence recommandé"}
+                  </div>
+                  <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
+                    onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
+                    onClick={() => logoRef.current?.click()}
+                    style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f0f" }}>
+                    {logo ? (
+                      <div style={{ textAlign: "center" }}>
+                        <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain" }} />
+                        <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
+                      </div>
+                    ) : (
+                      <div style={{ textAlign: "center", color: "#333" }}>
+                        <div style={{ fontSize: 32, marginBottom: 8 }}>⬡</div>
+                        <div style={{ fontSize: 12, color: "#444" }}>Glisser votre logo ici</div>
+                      </div>
+                    )}
+                  </div>
+                </>)}
+
+                {/* ── Mode : générer texte + couleur ── */}
+                {logoMode === "generate" && (
+                  <div style={{ background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 3, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 14 }}>
+
+                    {/* Texte */}
+                    <div>
+                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Texte du cache plaque</div>
+                      <input
+                        type="text" value={genText} onChange={e => setGenText(e.target.value)}
+                        placeholder="Forest Automobiles"
+                        style={{ width: "100%", background: "#141414", border: "1px solid #2a2a2a", color: "#ddd5c8", padding: "9px 10px", fontFamily: "'Rajdhani',sans-serif", fontSize: 16, fontWeight: 600, borderRadius: 2, outline: "none" }}
+                      />
                     </div>
-                  ) : (
-                    <div style={{ textAlign: "center", color: "#333" }}>
-                      <div style={{ fontSize: 36, marginBottom: 10 }}>⬡</div>
-                      <div style={{ fontSize: 12, color: "#444" }}>Glisser votre logo ici</div>
+
+                    {/* Couleur de fond */}
+                    <div>
+                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur de fond</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        {["#0d2b6b","#003399","#cc1414","#0d5c1e","#111111","#6b0d1a","#7c4700","#f26522"].map(col => (
+                          <div key={col} onClick={() => setGenBg(col)}
+                            style={{ width: 26, height: 26, background: col, borderRadius: 3, cursor: "pointer", border: genBg === col ? "2px solid #f26522" : "2px solid transparent", flexShrink: 0 }} />
+                        ))}
+                        <input type="color" value={genBg} onChange={e => setGenBg(e.target.value)}
+                          title="Couleur personnalisée"
+                          style={{ width: 26, height: 26, padding: 0, border: "1px solid #2a2a2a", borderRadius: 3, cursor: "pointer", background: "none" }} />
+                      </div>
                     </div>
-                  )}
-                </div>
+
+                    {/* Couleur du texte */}
+                    <div>
+                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur du texte</div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        {["#ffffff","#ffcc00","#000000","#ff6600"].map(col => (
+                          <div key={col} onClick={() => setGenFg(col)}
+                            style={{ width: 26, height: 26, background: col, borderRadius: 3, cursor: "pointer", border: genFg === col ? "2px solid #f26522" : "2px solid #2a2a2a", flexShrink: 0 }} />
+                        ))}
+                        <input type="color" value={genFg} onChange={e => setGenFg(e.target.value)}
+                          title="Couleur personnalisée"
+                          style={{ width: 26, height: 26, padding: 0, border: "1px solid #2a2a2a", borderRadius: 3, cursor: "pointer", background: "none" }} />
+                      </div>
+                    </div>
+
+                    {/* Bande EU */}
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                      <input type="checkbox" checked={genEU} onChange={e => setGenEU(e.target.checked)}
+                        style={{ accentColor: "#f26522", width: 14, height: 14 }} />
+                      <span style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>Bande EU bleue (gauche)</span>
+                    </label>
+
+                    {/* Aperçu live */}
+                    {logo?.preview && (
+                      <div>
+                        <div style={{ fontSize: 9, color: "#444", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Aperçu</div>
+                        <img src={logo.preview} style={{ width: "100%", borderRadius: 3, border: "1px solid #2a2a2a", display: "block" }} />
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <input ref={logoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleLogoFile(e.target.files[0])} />
               </section>
 
