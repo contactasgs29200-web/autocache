@@ -834,8 +834,7 @@ export default function AutoCache() {
                   onClick={e => { e.stopPropagation(); downloadCropped(); }}
                   style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >⬇ Télécharger rogné</button>
-              </>)
-              ) : (
+              </>) : (
                 <button
                   onClick={e => { e.stopPropagation(); downloadOne(lightbox); }}
                   style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
