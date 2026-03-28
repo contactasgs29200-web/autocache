@@ -345,8 +345,13 @@ export default function AutoCache() {
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
   const logoRef        = useRef();
   const photosRef      = useRef();
-  const cropImgRef     = useRef(null); // ref sur l'<img> de la lightbox (crop & adjust)
-  const lbContainerRef = useRef(null); // ref sur le conteneur de la lightbox (zoom/pan)
+  const cropImgRef       = useRef(null); // ref sur l'<img> de la lightbox (crop)
+  const lbContainerRef   = useRef(null); // ref sur le conteneur de la lightbox (zoom/pan)
+  const adjustCanvasRef  = useRef(null); // canvas live-preview en mode Ajuster
+  const adjustBaseImgRef = useRef(null); // photo de base chargée pour le canvas
+  const adjustLogoImgRef = useRef(null); // logo traité chargé pour le canvas
+  const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
+  const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -530,19 +535,47 @@ export default function AutoCache() {
     setAdjustDrag({ corner, startMx: e.clientX, startMy: e.clientY, startCorners: { ...adjustCorners, [corner]: { ...adjustCorners[corner] } } });
   };
 
+  // Rendu direct sur le canvas (pas de setState — pas de re-render — 60 fps)
+  const renderAdjustPreview = (corners) => {
+    const canvas = adjustCanvasRef.current;
+    const baseImg = adjustBaseImgRef.current;
+    const logoImg = adjustLogoImgRef.current;
+    if (!canvas || !baseImg) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(baseImg, 0, 0);
+    if (logoImg && corners) {
+      const bgColor = adjustLogoBgRef.current || '#ffffff';
+      const W = canvas.width, H = canvas.height;
+      const toPixel = p => ({ x: p.x * W, y: p.y * H });
+      const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
+      const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+      ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+      ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
+      ctx.restore();
+      drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
+    }
+  };
+
   const onAdjustMouseMove = (e) => {
-    if (!adjustDrag || !cropImgRef.current) return;
-    const rect = cropImgRef.current.getBoundingClientRect();
+    if (!adjustDrag || !adjustCanvasRef.current) return;
+    const rect = adjustCanvasRef.current.getBoundingClientRect();
     const dx = (e.clientX - adjustDrag.startMx) / rect.width;
     const dy = (e.clientY - adjustDrag.startMy) / rect.height;
     const { corner, startCorners } = adjustDrag;
-    setAdjustCorners(prev => ({
-      ...prev,
+    const newCorners = {
+      ...startCorners,
       [corner]: {
         x: Math.max(0, Math.min(1, startCorners[corner].x + dx)),
         y: Math.max(0, Math.min(1, startCorners[corner].y + dy)),
       }
-    }));
+    };
+    adjustCornersRef.current = newCorners;
+    setAdjustCorners(newCorners);          // met à jour les points oranges
+    renderAdjustPreview(newCorners);       // met à jour le canvas en direct
   };
 
   // ── Zoom / Pan de la lightbox ─────────────────────────────────────────────
@@ -585,47 +618,42 @@ export default function AutoCache() {
     });
   };
 
-  const saveAdjusted = async () => {
-    if (!lightbox?.baseDataURL || !lightbox?.logoPreview || !adjustCorners) return;
-    const photoImg = await loadImg(lightbox.baseDataURL);
-    const rawLogo  = await loadImg(lightbox.logoPreview);
-    // Logo généré : garder la transparence ; importé : aplatir sur blanc
-    let logoForRender;
-    if (lightbox.generated) {
-      logoForRender = rawLogo;
-    } else {
-      const flat = document.createElement("canvas");
-      flat.width  = rawLogo.naturalWidth  || rawLogo.width;
-      flat.height = rawLogo.naturalHeight || rawLogo.height;
-      const fctx = flat.getContext("2d");
-      if (logoRadius > 0) applyRoundedClip(fctx, flat.width, flat.height, logoRadius * 5);
-      fctx.fillStyle = "#ffffff"; fctx.fillRect(0, 0, flat.width, flat.height);
-      fctx.drawImage(rawLogo, 0, 0);
-      logoForRender = flat;
-    }
-    const bgColor = lightbox.bgColor || "#ffffff";
-    // Re-render
-    const c = document.createElement("canvas");
-    c.width = photoImg.naturalWidth; c.height = photoImg.naturalHeight;
-    const ctx = c.getContext("2d");
-    ctx.drawImage(photoImg, 0, 0);
-    const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
-    const ptl = toPixel(adjustCorners.tl), ptr = toPixel(adjustCorners.tr);
-    const pbr = toPixel(adjustCorners.br), pbl = toPixel(adjustCorners.bl);
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-    ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
-    ctx.restore();
-    drawPerspective(ctx, logoForRender, ptl, ptr, pbr, pbl);
-    const newDataURL = c.toDataURL("image/jpeg", 0.93);
-    const updated = { ...lightbox, processed: newDataURL, corners: adjustCorners };
-    setResults(prev => prev.map(r => r === lightbox ? updated : r));
-    setLightbox(updated);
-    setAdjustMode(false);
-    setAdjustDrag(null);
-  };
+  // Pré-charge photo + logo dans les refs dès que le mode Ajuster s'ouvre,
+  // puis rend la preview initiale sur le canvas.
+  useEffect(() => {
+    if (!adjustMode || !lightbox?.baseDataURL) return;
+    let cancelled = false;
+    (async () => {
+      const baseImg = await loadImg(lightbox.baseDataURL);
+      const rawLogo = lightbox.logoPreview ? await loadImg(lightbox.logoPreview) : null;
+      if (cancelled) return;
+      let logoForRender = null;
+      if (rawLogo) {
+        if (lightbox.generated) {
+          logoForRender = rawLogo;
+        } else {
+          const flat = document.createElement('canvas');
+          flat.width  = rawLogo.naturalWidth  || rawLogo.width;
+          flat.height = rawLogo.naturalHeight || rawLogo.height;
+          const fctx = flat.getContext('2d');
+          if (logoRadius > 0) applyRoundedClip(fctx, flat.width, flat.height, logoRadius * 5);
+          fctx.fillStyle = '#ffffff'; fctx.fillRect(0, 0, flat.width, flat.height);
+          fctx.drawImage(rawLogo, 0, 0);
+          logoForRender = flat;
+        }
+      }
+      adjustBaseImgRef.current = baseImg;
+      adjustLogoImgRef.current = logoForRender;
+      adjustLogoBgRef.current  = lightbox.bgColor || '#ffffff';
+      const canvas = adjustCanvasRef.current;
+      if (canvas && !cancelled) {
+        canvas.width  = baseImg.naturalWidth;
+        canvas.height = baseImg.naturalHeight;
+        renderAdjustPreview(adjustCorners);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [adjustMode, lightbox?.baseDataURL]);
 
   if (authLoading) return (
     <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -879,7 +907,22 @@ export default function AutoCache() {
         <div
           onClick={cropMode || adjustMode ? undefined : closeLightbox}
           onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
-          onMouseUp={() => { setCropDrag(null); setAdjustDrag(null); setLbPanDrag(null); }}
+          onMouseUp={() => {
+            setCropDrag(null);
+            // Auto-sauvegarde dès qu'un coin est relâché
+            if (adjustDrag && adjustCornersRef.current) {
+              const canvas = adjustCanvasRef.current;
+              if (canvas) {
+                const newDataURL = canvas.toDataURL('image/jpeg', 0.93);
+                const latestCorners = adjustCornersRef.current;
+                const updated = { ...lightbox, processed: newDataURL, corners: latestCorners };
+                setResults(prev => prev.map(r => r === lightbox ? updated : r));
+                setLightbox(updated);
+              }
+            }
+            setAdjustDrag(null);
+            setLbPanDrag(null);
+          }}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16, userSelect: "none" }}
         >
           {/* ── Barre du haut ── */}
@@ -896,17 +939,17 @@ export default function AutoCache() {
               {/* Bouton Ajuster — visible seulement si plaque détectée */}
               {lightbox.plateFound && lightbox.corners && (
                 <button
-                  onClick={e => { e.stopPropagation(); setAdjustMode(a => !a); setCropMode(false); setCropDrag(null); setAdjustCorners(lightbox.corners); }}
+                  onClick={e => { e.stopPropagation(); const nm = !adjustMode; if (nm) adjustCornersRef.current = lightbox.corners; setAdjustMode(nm); setCropMode(false); setCropDrag(null); setAdjustCorners(lightbox.corners); }}
                   style={{ background: adjustMode ? "#e8a020" : "#181818", color: adjustMode ? "#090909" : "#e8a020", border: `1px solid ${adjustMode ? "#e8a020" : "#3a2800"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >⊹ Ajuster</button>
               )}
 
-              {/* Télécharger / Sauvegarder ajustement */}
+              {/* Télécharger / Fermer ajustement */}
               {adjustMode ? (
                 <button
-                  onClick={e => { e.stopPropagation(); saveAdjusted(); }}
+                  onClick={e => { e.stopPropagation(); setAdjustMode(false); setAdjustDrag(null); }}
                   style={{ background: "#e8a020", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
-                >✓ Sauvegarder</button>
+                >✓ Terminé</button>
               ) : cropMode ? (<>
                 <button
                   onClick={e => { e.stopPropagation(); saveCrop(); }}
@@ -955,11 +998,18 @@ export default function AutoCache() {
               display: "inline-block",
               lineHeight: 0,
             }}>
-            <img
-              ref={cropImgRef}
-              src={lightbox.processed}
-              style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
-            />
+            {adjustMode ? (
+              <canvas
+                ref={adjustCanvasRef}
+                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh" }}
+              />
+            ) : (
+              <img
+                ref={cropImgRef}
+                src={lightbox.processed}
+                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
+              />
+            )}
 
             {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
             {adjustMode && adjustCorners && (
@@ -993,14 +1043,14 @@ export default function AutoCache() {
                       position: "absolute",
                       left: `${adjustCorners[corner].x * 100}%`,
                       top:  `${adjustCorners[corner].y * 100}%`,
-                      width: 18, height: 18,
+                      width: 12, height: 12,
                       background: "#e8a020",
                       border: "2px solid #fff",
                       borderRadius: "50%",
                       transform: "translate(-50%,-50%)",
                       cursor: cur,
                       zIndex: 10,
-                      boxShadow: "0 0 6px rgba(0,0,0,0.7)",
+                      boxShadow: "0 0 5px rgba(0,0,0,0.8)",
                     }}
                   />
                 ))}
@@ -1040,7 +1090,7 @@ export default function AutoCache() {
           {/* ── Pied ── */}
           <div style={{ marginTop: 10, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
             {adjustMode
-              ? "Glisser un point orange pour repositionner le coin · ✓ Sauvegarder pour appliquer"
+              ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
               ? "Glisser la zone · Coins oranges pour redimensionner · ⬇ Télécharger rogné"
               : lbZoom > 1
