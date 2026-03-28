@@ -332,7 +332,7 @@ export default function AutoCache() {
   const [genText,  setGenText]  = useState("");
   const [genBg,    setGenBg]    = useState("#0d2b6b");
   const [genFg,    setGenFg]    = useState("#ffffff");
-  const [logoRadius, setLogoRadius] = useState(2); // 0–10 : arrondi des coins, commun import+génération
+  const [logoRadius, setLogoRadius] = useState(1); // 0–10 : arrondi des coins, commun import+génération
   const [lightbox, setLightbox] = useState(null);
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
