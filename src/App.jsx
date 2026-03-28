@@ -169,6 +169,61 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   ctx.restore();
 }
 
+// ── Amélioration automatique des couleurs ────────────────────────────────────
+// Reproduit le traitement typique "Auto Tone" des logiciels pro :
+//   1. Auto-niveaux par canal (percentile 2–98 %) → noirs vrais, blancs purs
+//   2. Courbe en S douce → boost du contraste dans les ombres et les hautes lumières
+//   3. Correction de balance des blancs → suppression de la dominante jaune/chaude
+//   4. Boost de saturation → couleurs plus vives
+function autoEnhance(ctx, W, H) {
+  const id = ctx.getImageData(0, 0, W, H);
+  const d  = id.data;
+  const n  = W * H;
+
+  // Histogrammes par canal
+  const hR = new Int32Array(256), hG = new Int32Array(256), hB = new Int32Array(256);
+  for (let i = 0; i < d.length; i += 4) { hR[d[i]]++; hG[d[i+1]]++; hB[d[i+2]]++; }
+
+  // Percentile p (scanning avant) — utilisé pour trouver les points lo (2%) et hi (98%)
+  const pct = (h, p) => {
+    const thresh = n * p; let s = 0;
+    for (let v = 0; v < 256; v++) { s += h[v]; if (s >= thresh) return v; }
+    return 255;
+  };
+  const [rLo, rHi] = [pct(hR, 0.02), pct(hR, 0.98)];
+  const [gLo, gHi] = [pct(hG, 0.02), pct(hG, 0.98)];
+  const [bLo, bHi] = [pct(hB, 0.02), pct(hB, 0.98)];
+
+  // LUT : auto-niveaux + courbe en S + correction de blanc (wb)
+  const makeLUT = (lo, hi, wb) => {
+    const lut = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) {
+      let t = hi > lo ? Math.max(0, Math.min(1, (v - lo) / (hi - lo))) : v / 255;
+      // Courbe en S (easeInOut)
+      t = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      lut[v] = Math.max(0, Math.min(255, Math.round(t * 255 * wb)));
+    }
+    return lut;
+  };
+
+  // wb < 1 = réduit le canal (rafraîchit le rouge, atténue le vert chaud)
+  // wb > 1 = booste le canal (renforce le bleu pour un rendu plus neutre)
+  const rL = makeLUT(rLo, rHi, 0.93);
+  const gL = makeLUT(gLo, gHi, 0.97);
+  const bL = makeLUT(bLo, bHi, 1.05);
+  const SAT = 1.18; // légère saturation
+
+  for (let i = 0; i < d.length; i += 4) {
+    let r = rL[d[i]], g = gL[d[i+1]], b = bL[d[i+2]];
+    // Boost de saturation via luminance pondérée (ITU-R BT.601)
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    d[i]   = Math.max(0, Math.min(255, lum + (r - lum) * SAT));
+    d[i+1] = Math.max(0, Math.min(255, lum + (g - lum) * SAT));
+    d[i+2] = Math.max(0, Math.min(255, lum + (b - lum) * SAT));
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
 async function detectPlate(b64, imgW, imgH) {
   try {
     const r = await fetch("/api/platerecognizer", {
@@ -186,7 +241,7 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff") {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
   const plate = await detectPlate(b64, imgW, imgH);
   const photoURL = URL.createObjectURL(photoFile);
@@ -199,6 +254,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff") {
   ctx.filter = `brightness(${adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation})`;
   ctx.drawImage(photoImg, 0, 0);
   ctx.filter = "none";
+  // Amélioration automatique des couleurs (auto-niveaux + balance des blancs + saturation)
+  if (enhance) autoEnhance(ctx, c.width, c.height);
   // Save photo without plate for later re-rendering in "Ajuster" mode
   const baseDataURL = c.toDataURL("image/jpeg", 0.93);
   let plateFound = false;
@@ -325,6 +382,7 @@ export default function AutoCache() {
   const [progress, setProgress] = useState({ n: 0, total: 0 });
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
+  const [enhance, setEnhance] = useState(false); // amélioration auto des couleurs
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
@@ -409,7 +467,7 @@ export default function AutoCache() {
     const bgColor = logo.bgColor || "#ffffff";
     const all = [];
     for (let i = 0; i < photos.length; i++) {
-      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor);
+      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance);
       all.push({ ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated });
       setResults([...all]);
       setProgress({ n: i + 1, total: photos.length });
@@ -833,6 +891,20 @@ export default function AutoCache() {
                   <Slider label="Luminosité" value={adj.brightness} min={0.7} max={1.5} step={0.01} onChange={v => setAdj(p => ({...p, brightness: v}))} />
                   <Slider label="Contraste" value={adj.contrast} min={0.7} max={1.6} step={0.01} onChange={v => setAdj(p => ({...p, contrast: v}))} />
                   <Slider label="Saturation" value={adj.saturation} min={0.5} max={2.0} step={0.01} onChange={v => setAdj(p => ({...p, saturation: v}))} />
+                </div>
+
+                {/* ── Amélioration automatique des couleurs ── */}
+                <div
+                  onClick={() => setEnhance(p => !p)}
+                  style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: enhance ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${enhance ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none" }}
+                >
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${enhance ? "#f26522" : "#333"}`, background: enhance ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {enhance && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: enhance ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>✨ Amélioration automatique</div>
+                    <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Auto-niveaux · Balance des blancs · Contraste · Saturation</div>
+                  </div>
                 </div>
               </section>
             </div>
