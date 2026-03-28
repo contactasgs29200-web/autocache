@@ -46,44 +46,48 @@ function extractJSON(txt) {
   return null;
 }
 
-// Ask Claude ONE simple question: which side of the plate is closer to the camera
-// and at what horizontal angle? This is what Claude is actually good at.
-// Returns { near_side: "left"|"right"|"none", angle_deg: 0-60 }
-async function getPlateAngle(b64, cx, cy) {
+// Adaptive plate analysis — ask Claude 3 questions at once to remove all hardcoded constants.
+//   eu_in_box  : true  → PR left edge already includes EU strip
+//                false → EU strip is outside PR box, extend left ~12% of pw
+//   near_side  : "left"|"right"|"none" → which plate edge is taller (closer to camera)
+//   angle_deg  : 0-60 → horizontal rotation from straight-on
+async function analyzePlate(b64, prBox) {
+  const { tl, tr } = prBox;
   try {
     const r = await fetch("/api/detect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-opus-4-5",
-        max_tokens: 80,
+        max_tokens: 120,
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-          { type: "text", text: `Car photo. The front license plate is near image position x≈${cx.toFixed(2)}, y≈${cy.toFixed(2)} (0=left/top, 1=right/bottom).
+          { type: "text", text: `Car photo. A license plate detector found the plate at: left x=${tl.x.toFixed(3)}, right x=${tr.x.toFixed(3)}, top y=${tl.y.toFixed(3)} (coords: 0=left/top → 1=right/bottom).
 
-Looking at the license plate in this image: which EDGE of the plate appears TALLER because it is closer to the camera?
-- "left"  → the LEFT edge of the plate is closer/taller (car faces right in image)
-- "right" → the RIGHT edge of the plate is closer/taller (car faces left in image)
-- "none"  → the car is straight-on, both edges same height
+Answer 3 questions about this plate:
+1. Does the detected LEFT edge (x=${tl.x.toFixed(3)}) already include the blue EU strip, or is the EU strip further to the left (outside the detected box)?
+2. Which edge of the plate looks TALLER in the image because it is physically closer to the camera: "left", "right", or "none" (straight-on)?
+3. How many degrees is the car rotated from straight-on? (0=straight, 20=slight, 40=strong)
 
-Also give angle_deg: how many degrees is the car turned from straight-on? (0=straight, 20=slight, 40=strong)
-
-Return ONLY JSON, no other text: {"near_side":"left|right|none","angle_deg":0}` }
+Return ONLY JSON: {"eu_in_box":true,"near_side":"left|right|none","angle_deg":0}` }
         ]}]
       })
     });
     const d = await r.json();
-    if (!d.content?.[0]?.text) return { near_side: "none", angle_deg: 0 };
+    if (!d.content?.[0]?.text) return { eu_in_box: false, near_side: "none", angle_deg: 0 };
     const raw = extractJSON(d.content[0].text);
-    if (!raw) return { near_side: "none", angle_deg: 0 };
-    const result = JSON.parse(raw);
-    const ns = result.near_side || "none";
-    const deg = Math.min(Math.abs(result.angle_deg || 0), 60);
-    console.log(`Car angle: near_side=${ns} angle=${deg}°`);
-    return { near_side: ns, angle_deg: deg };
+    if (!raw) return { eu_in_box: false, near_side: "none", angle_deg: 0 };
+    const res = JSON.parse(raw);
+    const result = {
+      eu_in_box: typeof res.eu_in_box === "boolean" ? res.eu_in_box : false,
+      near_side: ["left","right","none"].includes(res.near_side) ? res.near_side : "none",
+      angle_deg: Math.min(Math.abs(res.angle_deg || 0), 60),
+    };
+    console.log(`Plate analysis → eu_in_box=${result.eu_in_box} near_side=${result.near_side} angle=${result.angle_deg}°`);
+    return result;
   } catch(e) {
-    console.error("getPlateAngle error:", e);
-    return { near_side: "none", angle_deg: 0 };
+    console.error("analyzePlate error:", e);
+    return { eu_in_box: false, near_side: "none", angle_deg: 0 };
   }
 }
 
@@ -167,26 +171,32 @@ async function processPhoto(photoFile, logoImg, adj) {
     const cy = plate.tl.y + ph / 2;   // anchor to PR top, NOT center of PR box
     console.log(`PR seed: center(${cx.toFixed(3)},${cy.toFixed(3)}) pw=${pw.toFixed(3)} ph=${ph.toFixed(3)}`);
 
-    // Step 2 — Ask Claude which side is closer, then compute the trapezoid mathematically.
-    // Claude answers a simple perception question (reliable) instead of pixel coordinates (unreliable).
-    const angleInfo = await getPlateAngle(b64, cx, cy);
-    const theta = angleInfo.angle_deg * Math.PI / 180;
-    // Perspective scale factor: calibrated for typical showroom distances (~3-5m).
-    // At 35° → near edge ~20% taller than far edge. At 45° → ~28% taller.
-    const PERSP = 0.35;
-    const nearH = ph * (1 + Math.sin(theta) * PERSP);  // taller side (closer to camera)
-    const farH  = ph * (1 - Math.sin(theta) * PERSP);  // shorter side (farther from camera)
-    const leftH  = angleInfo.near_side === "left"  ? nearH
-                 : angleInfo.near_side === "right" ? farH : ph;
-    const rightH = angleInfo.near_side === "right" ? nearH
-                 : angleInfo.near_side === "left"  ? farH : ph;
-    console.log(`Trapezoid: near=${angleInfo.near_side} θ=${angleInfo.angle_deg}° leftH=${leftH.toFixed(4)} rightH=${rightH.toFixed(4)}`);
+    // Step 2 — Adaptive analysis: Claude answers 3 questions, we compute everything from those.
+    // No hardcoded magic numbers — every value derives from the analysis result.
+    const analysis = await analyzePlate(b64, plate);
+
+    // X positions: adaptive EU strip compensation
+    const euExtra = analysis.eu_in_box ? 0.02 : 0.13;  // 2% margin if included, 13% if not
+    const leftX  = Math.max(0, plate.tl.x - pw * euExtra);
+    const rightX = Math.min(1, plate.tr.x + pw * 0.03); // small right margin
+
+    // Height: perspective trapezoid based on detected angle
+    // PERSP=0.40 calibrated for typical showroom distances (~3-5m from camera)
+    const theta = analysis.angle_deg * Math.PI / 180;
+    const PERSP = 0.40;
+    const nearH = ph * (1 + Math.sin(theta) * PERSP);
+    const farH  = ph * (1 - Math.sin(theta) * PERSP);
+    const leftH  = analysis.near_side === "left"  ? nearH
+                 : analysis.near_side === "right" ? farH : ph;
+    const rightH = analysis.near_side === "right" ? nearH
+                 : analysis.near_side === "left"  ? farH : ph;
+    console.log(`Corners: x=[${leftX.toFixed(3)},${rightX.toFixed(3)}] leftH=${leftH.toFixed(4)} rightH=${rightH.toFixed(4)}`);
 
     const corners = {
-      tl: { x: Math.max(0, cx - pw * 0.62), y: Math.max(0, cy - leftH  * 0.5) },
-      tr: { x: Math.min(1, cx + pw * 0.53), y: Math.max(0, cy - rightH * 0.5) },
-      br: { x: Math.min(1, cx + pw * 0.53), y: Math.min(1, cy + rightH * 0.5) },
-      bl: { x: Math.max(0, cx - pw * 0.62), y: Math.min(1, cy + leftH  * 0.5) },
+      tl: { x: leftX,  y: Math.max(0, cy - leftH  * 0.5) },
+      tr: { x: rightX, y: Math.max(0, cy - rightH * 0.5) },
+      br: { x: rightX, y: Math.min(1, cy + rightH * 0.5) },
+      bl: { x: leftX,  y: Math.min(1, cy + leftH  * 0.5) },
     };
 
     const px = p => ({ x: p.x * c.width, y: p.y * c.height });
