@@ -6,55 +6,45 @@ const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFz
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 // ── Cache plaque généré ───────────────────────────────────────────────────
-// Génère un canvas 1040×220 (ratio 4.73:1) avec texte + couleurs + bande EU optionnelle
-function makeLogoDataURL(text, bg, fg, euStrip) {
+// Génère un canvas 1040×220 (ratio 4.73:1) avec texte, couleurs et coins arrondis optionnels.
+// radius : 0 = coins droits, 50 = forme de pilule (% de H/2)
+function makeLogoDataURL(text, bg, fg, radius) {
   const W = 1040, H = 220;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
   const ctx = c.getContext("2d");
 
+  // Clip sur rectangle arrondi (préserve la transparence aux coins)
+  const r = Math.round(Math.min(radius, 50) / 100 * H);
+  if (r > 0) {
+    ctx.beginPath();
+    ctx.moveTo(r, 0); ctx.lineTo(W - r, 0);
+    ctx.arcTo(W, 0,   W,     r,   r);
+    ctx.lineTo(W, H - r);
+    ctx.arcTo(W, H,   W - r, H,   r);
+    ctx.lineTo(r, H);
+    ctx.arcTo(0, H,   0,     H-r, r);
+    ctx.lineTo(0, r);
+    ctx.arcTo(0, 0,   r,     0,   r);
+    ctx.closePath();
+    ctx.clip();
+  }
+
   // Fond principal
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
-
-  let textCx = W / 2, textMaxW = W * 0.88;
-
-  if (euStrip) {
-    const SW = Math.round(W * 0.115); // ~12% largeur
-    ctx.fillStyle = "#003399";
-    ctx.fillRect(0, 0, SW, H);
-    // Étoiles EU
-    ctx.fillStyle = "#FFCC00";
-    const R = H * 0.08, scx = SW / 2, scy = H * 0.30;
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
-      ctx.beginPath();
-      ctx.arc(scx + R * Math.cos(a), scy + R * Math.sin(a), H * 0.026, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // Code pays
-    ctx.font = `bold ${Math.round(H * 0.38)}px Arial`;
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText("F", SW / 2, H * 0.70);
-    // Ligne de séparation
-    ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(SW, 0); ctx.lineTo(SW, H); ctx.stroke();
-    // Zone de texte ajustée
-    textCx = SW + (W - SW) / 2;
-    textMaxW = (W - SW) * 0.87;
-  }
 
   // Texte principal (taille auto)
   const txt = (text.trim() || "VOTRE TEXTE").toUpperCase();
   ctx.fillStyle = fg;
   let sz = Math.round(H * 0.52);
   ctx.font = `bold ${sz}px Arial, sans-serif`;
-  while (ctx.measureText(txt).width > textMaxW && sz > 16) {
+  while (ctx.measureText(txt).width > W * 0.88 && sz > 16) {
     sz -= 2;
     ctx.font = `bold ${sz}px Arial, sans-serif`;
   }
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(txt, textCx, H / 2);
+  ctx.fillText(txt, W / 2, H / 2);
 
   return c.toDataURL("image/png");
 }
@@ -192,7 +182,7 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-async function processPhoto(photoFile, logoImg, adj) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff") {
   const { b64, imgW, imgH } = await toBase64(photoFile);
   const plate = await detectPlate(b64, imgW, imgH);
   const photoURL = URL.createObjectURL(photoFile);
@@ -222,7 +212,7 @@ async function processPhoto(photoFile, logoImg, adj) {
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
     console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
-    // Fill trapezoid with white first so any sub-pixel gaps between strips are opaque
+    // Remplir le trapèze avec bgColor : comble les micro-écarts entre bandes et sert de fond aux coins arrondis
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(ptl.x, ptl.y);
@@ -230,7 +220,7 @@ async function processPhoto(photoFile, logoImg, adj) {
     ctx.lineTo(pbr.x, pbr.y);
     ctx.lineTo(pbl.x, pbl.y);
     ctx.closePath();
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = bgColor;
     ctx.fill();
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
@@ -338,7 +328,7 @@ export default function AutoCache() {
   const [genText,  setGenText]  = useState("");
   const [genBg,    setGenBg]    = useState("#0d2b6b");
   const [genFg,    setGenFg]    = useState("#ffffff");
-  const [genEU,    setGenEU]    = useState(false);
+  const [genRadius, setGenRadius] = useState(8); // 0–50 : arrondi des coins (% de H)
   const [lightbox, setLightbox] = useState(null);
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
@@ -364,8 +354,8 @@ export default function AutoCache() {
   // Regénère le cache plaque dès qu'un paramètre change (mode génération)
   useEffect(() => {
     if (logoMode !== "generate") return;
-    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, genEU), generated: true });
-  }, [logoMode, genText, genBg, genFg, genEU]);
+    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, genRadius), generated: true, bgColor: genBg });
+  }, [logoMode, genText, genBg, genFg, genRadius]);
 
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
@@ -384,19 +374,26 @@ export default function AutoCache() {
     setProgress({ n: 0, total: photos.length });
     setResults([]);
     const rawLogo = await loadImg(logo.preview);
-    // Aplatir le logo sur fond blanc : élimine toute transparence PNG
-    const flatCanvas = document.createElement("canvas");
-    flatCanvas.width  = rawLogo.naturalWidth  || rawLogo.width;
-    flatCanvas.height = rawLogo.naturalHeight || rawLogo.height;
-    const flatCtx = flatCanvas.getContext("2d");
-    flatCtx.fillStyle = "#ffffff";
-    flatCtx.fillRect(0, 0, flatCanvas.width, flatCanvas.height);
-    flatCtx.drawImage(rawLogo, 0, 0);
-    const logoImg = flatCanvas; // canvas accepté par drawPerspective (.width/.height)
+    let logoImg;
+    if (logo.generated) {
+      // Logo généré : conserver la transparence (coins arrondis perceptibles sur la photo)
+      logoImg = rawLogo;
+    } else {
+      // Logo importé : aplatir sur blanc pour éliminer toute transparence PNG incontrôlée
+      const flatCanvas = document.createElement("canvas");
+      flatCanvas.width  = rawLogo.naturalWidth  || rawLogo.width;
+      flatCanvas.height = rawLogo.naturalHeight || rawLogo.height;
+      const flatCtx = flatCanvas.getContext("2d");
+      flatCtx.fillStyle = "#ffffff";
+      flatCtx.fillRect(0, 0, flatCanvas.width, flatCanvas.height);
+      flatCtx.drawImage(rawLogo, 0, 0);
+      logoImg = flatCanvas;
+    }
+    const bgColor = logo.bgColor || "#ffffff";
     const all = [];
     for (let i = 0; i < photos.length; i++) {
-      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 });
-      all.push({ ...r, logoPreview: logo.preview });
+      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor);
+      all.push({ ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated });
       setResults([...all]);
       setProgress({ n: i + 1, total: photos.length });
     }
@@ -467,6 +464,27 @@ export default function AutoCache() {
     img.src = lightbox.processed;
   };
 
+  // Sauvegarde le rognage dans le résultat (pour "Tout télécharger")
+  const saveCrop = () => {
+    if (!lightbox) return;
+    const img = new Image();
+    img.onload = () => {
+      const sx = Math.round(cropBox.x * img.naturalWidth);
+      const sy = Math.round(cropBox.y * img.naturalHeight);
+      const sw = Math.round(cropBox.w * img.naturalWidth);
+      const sh = Math.round(cropBox.h * img.naturalHeight);
+      const canvas = document.createElement('canvas');
+      canvas.width = sw; canvas.height = sh;
+      canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      const croppedDataURL = canvas.toDataURL('image/jpeg', 0.95);
+      const updated = { ...lightbox, processed: croppedDataURL, cropped: true };
+      setResults(prev => prev.map(r => r === lightbox ? updated : r));
+      setLightbox(updated);
+      setCropMode(false);
+    };
+    img.src = lightbox.processed;
+  };
+
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
   const startAdjustDrag = (e, corner) => {
     e.preventDefault(); e.stopPropagation();
@@ -492,13 +510,20 @@ export default function AutoCache() {
     if (!lightbox?.baseDataURL || !lightbox?.logoPreview || !adjustCorners) return;
     const photoImg = await loadImg(lightbox.baseDataURL);
     const rawLogo  = await loadImg(lightbox.logoPreview);
-    // Flatten logo on white
-    const flat = document.createElement("canvas");
-    flat.width  = rawLogo.naturalWidth  || rawLogo.width;
-    flat.height = rawLogo.naturalHeight || rawLogo.height;
-    const fctx = flat.getContext("2d");
-    fctx.fillStyle = "#ffffff"; fctx.fillRect(0, 0, flat.width, flat.height);
-    fctx.drawImage(rawLogo, 0, 0);
+    // Logo généré : garder la transparence ; importé : aplatir sur blanc
+    let logoForRender;
+    if (lightbox.generated) {
+      logoForRender = rawLogo;
+    } else {
+      const flat = document.createElement("canvas");
+      flat.width  = rawLogo.naturalWidth  || rawLogo.width;
+      flat.height = rawLogo.naturalHeight || rawLogo.height;
+      const fctx = flat.getContext("2d");
+      fctx.fillStyle = "#ffffff"; fctx.fillRect(0, 0, flat.width, flat.height);
+      fctx.drawImage(rawLogo, 0, 0);
+      logoForRender = flat;
+    }
+    const bgColor = lightbox.bgColor || "#ffffff";
     // Re-render
     const c = document.createElement("canvas");
     c.width = photoImg.naturalWidth; c.height = photoImg.naturalHeight;
@@ -511,9 +536,9 @@ export default function AutoCache() {
     ctx.beginPath();
     ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
     ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-    ctx.closePath(); ctx.fillStyle = "#ffffff"; ctx.fill();
+    ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
     ctx.restore();
-    drawPerspective(ctx, flat, ptl, ptr, pbr, pbl);
+    drawPerspective(ctx, logoForRender, ptl, ptr, pbr, pbl);
     const newDataURL = c.toDataURL("image/jpeg", 0.93);
     const updated = { ...lightbox, processed: newDataURL, corners: adjustCorners };
     setResults(prev => prev.map(r => r === lightbox ? updated : r));
@@ -639,12 +664,8 @@ export default function AutoCache() {
                       </div>
                     </div>
 
-                    {/* Bande EU */}
-                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                      <input type="checkbox" checked={genEU} onChange={e => setGenEU(e.target.checked)}
-                        style={{ accentColor: "#f26522", width: 14, height: 14 }} />
-                      <span style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>Bande EU bleue (gauche)</span>
-                    </label>
+                    {/* Arrondi des coins */}
+                    <Slider label="Arrondi des coins" value={genRadius} min={0} max={50} step={1} onChange={setGenRadius} />
 
                     {/* Aperçu live */}
                     {logo?.preview && (
@@ -748,10 +769,13 @@ export default function AutoCache() {
                     <div key={i} style={{ background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
                         <img src={r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#111", display: "block" }} />
-                        <div style={{ position: "absolute", top: 8, left: 8 }}>
+                        <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
                           <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>
                             {r.plateFound ? "✓ PLAQUE CACHÉE" : "⚠ NON DÉTECTÉE"}
                           </span>
+                          {r.cropped && (
+                            <span style={{ background: "rgba(242,101,34,0.85)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>✂ ROGNÉ</span>
+                          )}
                         </div>
                         <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: "3px 7px", fontSize: 9, color: "#aaa", fontFamily: "'JetBrains Mono',monospace" }}>🔍 Agrandir</div>
                       </div>
@@ -801,11 +825,16 @@ export default function AutoCache() {
                   onClick={e => { e.stopPropagation(); saveAdjusted(); }}
                   style={{ background: "#e8a020", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >✓ Sauvegarder</button>
-              ) : cropMode ? (
+              ) : cropMode ? (<>
+                <button
+                  onClick={e => { e.stopPropagation(); saveCrop(); }}
+                  style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                >💾 Sauvegarder</button>
                 <button
                   onClick={e => { e.stopPropagation(); downloadCropped(); }}
                   style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >⬇ Télécharger rogné</button>
+              </>)
               ) : (
                 <button
                   onClick={e => { e.stopPropagation(); downloadOne(lightbox); }}
