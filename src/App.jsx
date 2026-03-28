@@ -239,24 +239,24 @@ function polishHeadlights(ctx, lights, W, H) {
 
         // Jaunissement = excès de rouge par rapport au bleu
         const yellowness = (r - b) / 255;
-        if (yellowness < 0.06) continue; // pixel déjà assez neutre → on ne touche pas
+        if (yellowness < 0.03) continue; // pixel déjà assez neutre → on ne touche pas
 
         // Fonte aux bords pour éviter les rectangles visibles
         const ex = Math.min(i, pw - 1 - i) / (pw * 0.15);
         const ey = Math.min(j, ph - 1 - j) / (ph * 0.15);
         const edge = Math.min(1, ex, ey);
 
-        // Intensité : pleine correction dès 20 % de jaunissement (yellowness ≥ 0.20)
-        const blend = edge * Math.min(1, yellowness * 5);
+        // Intensité : pleine correction dès 12 % de jaunissement (yellowness ≥ 0.12)
+        const blend = edge * Math.min(1, yellowness * 8);
 
-        // Cible neutre : luminance moyenne du pixel
-        // → R redescend vers lum, B remonte vers lum (retire exactement le cast)
+        // Cible neutre froide : R pousse sous la luminance, B au-dessus
+        // → résultat légèrement bleuté/blanc comme un optique propre
         const lum = (r + g + b) / 3;
-        const targetR = Math.min(r, lum * 1.05); // R ne peut que baisser
-        const targetB = Math.max(b, lum * 0.98); // B ne peut que monter
+        const targetR = Math.min(r, lum * 0.92); // R descend sous la luminance
+        const targetB = Math.max(b, lum * 1.10); // B monte au-dessus de la luminance
 
-        // Légère clarté pour simuler le verre propre
-        const boost = blend * 18;
+        // Clarté forte pour simuler le polissage / verre transparent
+        const boost = blend * 30;
 
         d[idx]     = Math.max(0, Math.min(255, r + (targetR - r) * blend + boost));
         d[idx + 1] = Math.max(0, Math.min(255, g                          + boost));
