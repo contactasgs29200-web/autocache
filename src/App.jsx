@@ -265,6 +265,7 @@ export default function AutoCache() {
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
+  const [lightbox, setLightbox] = useState(null); // { src, name, r } or null
   const logoRef = useRef();
   const photosRef = useRef();
 
@@ -315,6 +316,9 @@ export default function AutoCache() {
     await supabase.auth.signOut();
     setLogo(null); setPhotos([]); setResults([]); setTab("setup");
   };
+
+  const openLightbox  = (r) => setLightbox(r);
+  const closeLightbox = () => setLightbox(null);
 
   if (authLoading) return (
     <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -464,13 +468,14 @@ export default function AutoCache() {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
                   {results.map((r, i) => (
                     <div key={i} style={{ background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: 3, overflow: "hidden" }}>
-                      <div style={{ position: "relative" }}>
-                        <img src={r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", display: "block" }} />
+                      <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
+                        <img src={r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#111", display: "block" }} />
                         <div style={{ position: "absolute", top: 8, left: 8 }}>
                           <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>
                             {r.plateFound ? "✓ PLAQUE CACHÉE" : "⚠ NON DÉTECTÉE"}
                           </span>
                         </div>
+                        <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: "3px 7px", fontSize: 9, color: "#aaa", fontFamily: "'JetBrains Mono',monospace" }}>🔍 Agrandir</div>
                       </div>
                       <div style={{ padding: "9px 11px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #161616" }}>
                         <div style={{ fontSize: 10, color: "#444", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "68%" }}>{r.name}</div>
@@ -484,6 +489,26 @@ export default function AutoCache() {
           </div>
         )}
       </div>
+
+      {/* ── Lightbox : cliquer sur une vignette pour voir en grand ── */}
+      {lightbox && (
+        <div
+          onClick={closeLightbox}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "0 4px" }}>
+            <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{lightbox.name}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => downloadOne(lightbox)} style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>Télécharger</button>
+              <button onClick={closeLightbox} style={{ background: "#181818", color: "#aaa", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 14, borderRadius: 2 }}>✕</button>
+            </div>
+          </div>
+          <div onClick={e => e.stopPropagation()} style={{ maxWidth: 1100, maxHeight: "82vh", overflow: "auto", borderRadius: 3, border: "1px solid #222" }}>
+            <img src={lightbox.processed} style={{ display: "block", maxWidth: "100%", maxHeight: "82vh", objectFit: "contain" }} />
+          </div>
+          <div style={{ marginTop: 10, fontSize: 9, color: "#333", fontFamily: "'JetBrains Mono',monospace" }}>Cliquer en dehors pour fermer · Défiler pour voir le détail</div>
+        </div>
+      )}
     </div>
   );
 }
