@@ -881,6 +881,20 @@ export default function AutoCache() {
               </section>
 
               <section>
+                {/* ── Amélioration automatique des couleurs ── */}
+                <div
+                  onClick={() => setEnhance(p => !p)}
+                  style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: enhance ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${enhance ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none" }}
+                >
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${enhance ? "#f26522" : "#333"}`, background: enhance ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {enhance && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: enhance ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>✨ Amélioration automatique</div>
+                    <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Auto-niveaux · Balance des blancs · Contraste · Saturation</div>
+                  </div>
+                </div>
+
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                   <div style={{ fontSize: 10, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#333", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
                   <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "#141414", border: `1px solid ${adjEnabled ? "#f26522" : "#2a2a2a"}`, color: adjEnabled ? "#090909" : "#444", padding: "4px 13px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>
@@ -891,20 +905,6 @@ export default function AutoCache() {
                   <Slider label="Luminosité" value={adj.brightness} min={0.7} max={1.5} step={0.01} onChange={v => setAdj(p => ({...p, brightness: v}))} />
                   <Slider label="Contraste" value={adj.contrast} min={0.7} max={1.6} step={0.01} onChange={v => setAdj(p => ({...p, contrast: v}))} />
                   <Slider label="Saturation" value={adj.saturation} min={0.5} max={2.0} step={0.01} onChange={v => setAdj(p => ({...p, saturation: v}))} />
-                </div>
-
-                {/* ── Amélioration automatique des couleurs ── */}
-                <div
-                  onClick={() => setEnhance(p => !p)}
-                  style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: enhance ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${enhance ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none" }}
-                >
-                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${enhance ? "#f26522" : "#333"}`, background: enhance ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {enhance && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: enhance ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>✨ Amélioration automatique</div>
-                    <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Auto-niveaux · Balance des blancs · Contraste · Saturation</div>
-                  </div>
                 </div>
               </section>
             </div>
