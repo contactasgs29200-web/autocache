@@ -5,30 +5,34 @@ const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
+// ── Helper : clip arrondi sur un contexte canvas ─────────────────────────
+// radius : 0–50, représente le rayon en % de H (50 = pilule)
+function applyRoundedClip(ctx, W, H, radius) {
+  const r = Math.min(Math.round(Math.min(radius, 50) / 100 * H), W / 2, H / 2);
+  if (r <= 0) return;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);       ctx.lineTo(W - r, 0);
+  ctx.arcTo(W, 0,   W,     r,   r);
+  ctx.lineTo(W, H - r);
+  ctx.arcTo(W, H,   W - r, H,   r);
+  ctx.lineTo(r, H);
+  ctx.arcTo(0, H,   0,     H - r, r);
+  ctx.lineTo(0, r);
+  ctx.arcTo(0, 0,   r,     0,   r);
+  ctx.closePath();
+  ctx.clip();
+}
+
 // ── Cache plaque généré ───────────────────────────────────────────────────
-// Génère un canvas 1040×220 (ratio 4.73:1) avec texte, couleurs et coins arrondis optionnels.
-// radius : 0 = coins droits, 50 = forme de pilule (% de H/2)
+// Génère un canvas 1040×220 (ratio 4.73:1) avec texte, couleurs et coins arrondis.
+// radius : 0 = coins droits, 50 = forme de pilule (% de H)
 function makeLogoDataURL(text, bg, fg, radius) {
   const W = 1040, H = 220;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
   const ctx = c.getContext("2d");
 
-  // Clip sur rectangle arrondi (préserve la transparence aux coins)
-  const r = Math.round(Math.min(radius, 50) / 100 * H);
-  if (r > 0) {
-    ctx.beginPath();
-    ctx.moveTo(r, 0); ctx.lineTo(W - r, 0);
-    ctx.arcTo(W, 0,   W,     r,   r);
-    ctx.lineTo(W, H - r);
-    ctx.arcTo(W, H,   W - r, H,   r);
-    ctx.lineTo(r, H);
-    ctx.arcTo(0, H,   0,     H-r, r);
-    ctx.lineTo(0, r);
-    ctx.arcTo(0, 0,   r,     0,   r);
-    ctx.closePath();
-    ctx.clip();
-  }
+  applyRoundedClip(ctx, W, H, radius);
 
   // Fond principal
   ctx.fillStyle = bg;
@@ -328,7 +332,7 @@ export default function AutoCache() {
   const [genText,  setGenText]  = useState("");
   const [genBg,    setGenBg]    = useState("#0d2b6b");
   const [genFg,    setGenFg]    = useState("#ffffff");
-  const [genRadius, setGenRadius] = useState(8); // 0–50 : arrondi des coins (% de H)
+  const [logoRadius, setLogoRadius] = useState(0); // 0–10 : arrondi des coins, commun import+génération
   const [lightbox, setLightbox] = useState(null);
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
@@ -354,8 +358,8 @@ export default function AutoCache() {
   // Regénère le cache plaque dès qu'un paramètre change (mode génération)
   useEffect(() => {
     if (logoMode !== "generate") return;
-    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, genRadius), generated: true, bgColor: genBg });
-  }, [logoMode, genText, genBg, genFg, genRadius]);
+    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, logoRadius * 5), generated: true, bgColor: genBg });
+  }, [logoMode, genText, genBg, genFg, logoRadius]);
 
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
@@ -379,11 +383,12 @@ export default function AutoCache() {
       // Logo généré : conserver la transparence (coins arrondis perceptibles sur la photo)
       logoImg = rawLogo;
     } else {
-      // Logo importé : aplatir sur blanc pour éliminer toute transparence PNG incontrôlée
+      // Logo importé : aplatir sur blanc, avec clip arrondi si logoRadius > 0
       const flatCanvas = document.createElement("canvas");
       flatCanvas.width  = rawLogo.naturalWidth  || rawLogo.width;
       flatCanvas.height = rawLogo.naturalHeight || rawLogo.height;
       const flatCtx = flatCanvas.getContext("2d");
+      if (logoRadius > 0) applyRoundedClip(flatCtx, flatCanvas.width, flatCanvas.height, logoRadius * 5);
       flatCtx.fillStyle = "#ffffff";
       flatCtx.fillRect(0, 0, flatCanvas.width, flatCanvas.height);
       flatCtx.drawImage(rawLogo, 0, 0);
@@ -547,6 +552,7 @@ export default function AutoCache() {
       flat.width  = rawLogo.naturalWidth  || rawLogo.width;
       flat.height = rawLogo.naturalHeight || rawLogo.height;
       const fctx = flat.getContext("2d");
+      if (logoRadius > 0) applyRoundedClip(fctx, flat.width, flat.height, logoRadius * 5);
       fctx.fillStyle = "#ffffff"; fctx.fillRect(0, 0, flat.width, flat.height);
       fctx.drawImage(rawLogo, 0, 0);
       logoForRender = flat;
@@ -638,7 +644,7 @@ export default function AutoCache() {
                     style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f0f" }}>
                     {logo ? (
                       <div style={{ textAlign: "center" }}>
-                        <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain" }} />
+                        <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain", borderRadius: logoRadius > 0 ? `${Math.round(logoRadius * 4)}px` : 0 }} />
                         <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
                       </div>
                     ) : (
@@ -692,20 +698,22 @@ export default function AutoCache() {
                       </div>
                     </div>
 
-                    {/* Arrondi des coins */}
-                    <Slider label="Arrondi des coins" value={genRadius} min={0} max={50} step={1} onChange={setGenRadius} />
-
                     {/* Aperçu live */}
                     {logo?.preview && (
                       <div>
                         <div style={{ fontSize: 9, color: "#444", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Aperçu</div>
-                        <img src={logo.preview} style={{ width: "100%", borderRadius: 3, border: "1px solid #2a2a2a", display: "block" }} />
+                        <img src={logo.preview} style={{ width: "100%", display: "block", border: "1px solid #2a2a2a" }} />
                       </div>
                     )}
                   </div>
                 )}
 
                 <input ref={logoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleLogoFile(e.target.files[0])} />
+
+                {/* ── Arrondi des coins (global import + génération) ── */}
+                <div style={{ marginTop: 16, background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 3, padding: "14px 16px" }}>
+                  <Slider label="Arrondi des coins" value={logoRadius} min={0} max={10} step={1} onChange={setLogoRadius} />
+                </div>
               </section>
 
               <section>
