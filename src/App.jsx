@@ -337,6 +337,9 @@ export default function AutoCache() {
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
   const [cropDrag, setCropDrag] = useState(null); // { type, startMx, startMy, startBox }
+  const [cropSrc, setCropSrc] = useState(null);         // image affichée en mode rognage (peut être pivotée)
+  const [cropBaseSrc, setCropBaseSrc] = useState(null); // baseDataURL pivotée (pour saveCrop)
+  const [cropRotation, setCropRotation] = useState(0);  // 0 | 90 | 180 | 270
   const [adjustMode, setAdjustMode] = useState(false);
   const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
@@ -428,6 +431,7 @@ export default function AutoCache() {
   const openLightbox  = (r) => {
     setLightbox(r);
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
+    setCropSrc(r.processed); setCropBaseSrc(r.baseDataURL || null); setCropRotation(0);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
@@ -462,7 +466,7 @@ export default function AutoCache() {
   };
 
   const downloadCropped = () => {
-    if (!lightbox) return;
+    if (!lightbox || !cropSrc) return;
     const img = new Image();
     img.onload = () => {
       const sx = Math.round(cropBox.x * img.naturalWidth);
@@ -477,16 +481,17 @@ export default function AutoCache() {
       a.download = `autocache_rogné_${lightbox.name}`;
       a.click();
     };
-    img.src = lightbox.processed;
+    img.src = cropSrc;  // utilise l'image (éventuellement pivotée)
   };
 
   // Sauvegarde le rognage dans le résultat (pour "Tout télécharger")
   const saveCrop = async () => {
-    if (!lightbox) return;
+    if (!lightbox || !cropSrc) return;
     const { x, y, w, h } = cropBox;
 
     // Rogne un dataURL selon la zone normalisée (x,y,w,h)
     const cropURL = async (src) => {
+      if (!src) return null;
       const img = await loadImg(src);
       const sx = Math.round(x * img.naturalWidth);
       const sy = Math.round(y * img.naturalHeight);
@@ -498,12 +503,13 @@ export default function AutoCache() {
       return c.toDataURL('image/jpeg', 0.95);
     };
 
-    const croppedProcessed = await cropURL(lightbox.processed);
-    const croppedBase = lightbox.baseDataURL ? await cropURL(lightbox.baseDataURL) : null;
+    // On travaille sur cropSrc / cropBaseSrc qui peuvent avoir été pivotés
+    const croppedProcessed = await cropURL(cropSrc);
+    const croppedBase      = await cropURL(cropBaseSrc);
 
-    // Recalcule les coins dans le repère de l'image rognée
+    // Les coins de plaque ne sont valides qu'en l'absence de rotation
     let newCorners = null;
-    if (lightbox.corners) {
+    if (cropRotation === 0 && lightbox.corners) {
       const remap = p => ({
         x: Math.max(0, Math.min(1, (p.x - x) / w)),
         y: Math.max(0, Math.min(1, (p.y - y) / h)),
@@ -518,15 +524,44 @@ export default function AutoCache() {
 
     const updated = {
       ...lightbox,
-      processed: croppedProcessed,
+      processed:   croppedProcessed,
       baseDataURL: croppedBase ?? lightbox.baseDataURL,
-      corners: newCorners,
-      cropped: true,
+      corners:     newCorners,
+      cropped:     true,
     };
     setResults(prev => prev.map(r => r === lightbox ? updated : r));
     setLightbox(updated);
-    setAdjustCorners(newCorners); // synchronise les points oranges
+    setCropSrc(croppedProcessed);
+    setCropBaseSrc(croppedBase ?? lightbox.baseDataURL);
+    setCropRotation(0);
+    setAdjustCorners(newCorners);
     setCropMode(false);
+  };
+
+  // ── Rotation du rognage (+90° dans le sens horaire) ──────────────────────
+  const rotateCrop90 = async () => {
+    const rotateDataURL = async (src) => {
+      if (!src) return null;
+      const img = await loadImg(src);
+      const c = document.createElement('canvas');
+      c.width  = img.naturalHeight;   // largeur ↔ hauteur après rotation
+      c.height = img.naturalWidth;
+      const ctx = c.getContext('2d');
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate(Math.PI / 2);        // 90° horaire
+      ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+      return c.toDataURL('image/jpeg', 0.95);
+    };
+    const [newSrc, newBase] = await Promise.all([
+      rotateDataURL(cropSrc),
+      rotateDataURL(cropBaseSrc),
+    ]);
+    setCropSrc(newSrc);
+    setCropBaseSrc(newBase);
+    setCropRotation(r => (r + 90) % 360);
+    // Réinitialise la zone de rognage (les dimensions ont été échangées)
+    setCropBox({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 });
+    setCropDrag(null);
   };
 
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
@@ -932,7 +967,20 @@ export default function AutoCache() {
 
               {/* Bouton Rogner toggle */}
               <button
-                onClick={e => { e.stopPropagation(); setCropMode(c => !c); setAdjustMode(false); setAdjustDrag(null); }}
+                onClick={e => {
+                  e.stopPropagation();
+                  setCropMode(c => {
+                    if (!c) {
+                      // Initialise la source et la rotation au moment où on entre dans le mode
+                      setCropSrc(lightbox.processed);
+                      setCropBaseSrc(lightbox.baseDataURL || null);
+                      setCropRotation(0);
+                      setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
+                    }
+                    return !c;
+                  });
+                  setAdjustMode(false); setAdjustDrag(null);
+                }}
                 style={{ background: cropMode ? "#f26522" : "#181818", color: cropMode ? "#090909" : "#aaa", border: `1px solid ${cropMode ? "#f26522" : "#2a2a2a"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
               >✂ Rogner</button>
 
@@ -951,6 +999,11 @@ export default function AutoCache() {
                   style={{ background: "#e8a020", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >✓ Terminé</button>
               ) : cropMode ? (<>
+                <button
+                  onClick={e => { e.stopPropagation(); rotateCrop90(); }}
+                  style={{ background: "#181818", color: "#aaa", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 1, borderRadius: 2 }}
+                  title="Pivoter 90° dans le sens horaire"
+                >↻{cropRotation > 0 ? ` ${cropRotation}°` : " Pivoter"}</button>
                 <button
                   onClick={e => { e.stopPropagation(); saveCrop(); }}
                   style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
@@ -1006,7 +1059,7 @@ export default function AutoCache() {
             ) : (
               <img
                 ref={cropImgRef}
-                src={lightbox.processed}
+                src={cropMode ? (cropSrc || lightbox.processed) : lightbox.processed}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
               />
             )}
@@ -1092,7 +1145,7 @@ export default function AutoCache() {
             {adjustMode
               ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
-              ? "Glisser la zone · Coins oranges pour redimensionner · ⬇ Télécharger rogné"
+              ? "↻ Pivoter · Glisser la zone · Coins oranges pour redimensionner · ⬇ Télécharger rogné"
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
