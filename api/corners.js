@@ -61,7 +61,7 @@ Return ONLY this JSON (no explanation):
               type: 'image_url',
               image_url: {
                 url: `data:image/jpeg;base64,${b64}`,
-                detail: 'high',
+                detail: 'low',
               },
             },
             { type: 'text', text: prompt },

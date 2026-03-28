@@ -273,6 +273,28 @@ function polishHeadlights(ctx, lights, W, H) {
   }
 }
 
+// Détecte l'orientation réelle de la voiture via GPT-4o Vision (detail:low, ~$0.001)
+// Retourne { near_side: "left"|"right"|"none", angle_deg: number }
+// ou null en cas d'échec (fallback sur estimateAngleFromPosition)
+async function detectCarAngle(b64) {
+  try {
+    const r = await fetch("/api/corners", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ b64 }),
+    });
+    const data = await r.json();
+    if (typeof data.near_side === 'string' && typeof data.angle_deg === 'number') {
+      console.log(`%c[AutoCache] GPT-4o angle → near_side=${data.near_side} angle=${data.angle_deg}°`, "color:cyan;font-weight:bold");
+      return { near_side: data.near_side, angle_deg: data.angle_deg };
+    }
+    return null;
+  } catch(e) {
+    console.error("detectCarAngle error:", e);
+    return null;
+  }
+}
+
 async function detectPlate(b64, imgW, imgH) {
   try {
     const r = await fetch("/api/platerecognizer", {
@@ -292,9 +314,10 @@ async function detectPlate(b64, imgW, imgH) {
 
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
-  // Détection plaque + optiques en parallèle pour ne pas cumuler les délais
-  const [plate, lights] = await Promise.all([
+  // Détection plaque + angle voiture + optiques en parallèle (aucun délai cumulé)
+  const [plate, angleData, lights] = await Promise.all([
     detectPlate(b64, imgW, imgH),
+    detectCarAngle(b64),
     headlightPolish ? detectHeadlights(b64) : Promise.resolve([]),
   ]);
   const photoURL = URL.createObjectURL(photoFile);
@@ -319,8 +342,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
 
-    // Determine perspective angle from plate position (geometry, no external API)
-    const { near_side, angle_deg } = estimateAngleFromPosition(plate);
+    // Angle réel via GPT-4o (corners.js), fallback heuristique si échec
+    const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
     savedCorners = buildCorners(plate, near_side, angle_deg);
 
     // Convert to canvas pixels and draw
