@@ -48,13 +48,13 @@ function extractJSON(txt) {
 
 // Call GPT-4o Vision to get the exact 4 perspective corners of the plate.
 // Falls back to null on any error — caller handles the fallback.
-async function getGPTCorners(b64, prBox) {
+async function getGPTCorners(b64, prBox, plateText) {
   try {
-    console.log("getGPTCorners: calling GPT-4o...");
+    console.log("getGPTCorners: calling GPT-4o, plate text:", plateText || "(unknown)");
     const r = await fetch("/api/corners", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ b64, prBox }),
+      body: JSON.stringify({ b64, prBox, plateText }),
     });
     const data = await r.json();
     if (!data.found || !data.corners) {
@@ -144,7 +144,8 @@ async function processPhoto(photoFile, logoImg, adj) {
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)})`);
 
     // Step 1 — GPT-4o Vision: get exact perspective corners (trapezoid for angled cars)
-    let corners = await getGPTCorners(b64, plate);
+    // Pass the plate text from PR so GPT-4o searches for the exact registration number
+    let corners = await getGPTCorners(b64, plate, plate.plateText);
 
     // Step 2 — Validate GPT corners: center near PR detection, reasonable aspect ratio
     if (corners) {

@@ -40,14 +40,18 @@ export default async function handler(req, res) {
       return res.status(200).json({ found: false, debug: { status: response.status, body: data } });
     }
 
-    const box = data.results[0].box;
+    const result = data.results[0];
+    const box = result.box;
+    const plateText = result.plate || "";
+
     // Normalize pixel coords to 0-1 using the uploaded image dimensions
     const tl = { x: box.xmin / imgW, y: box.ymin / imgH };
     const tr = { x: box.xmax / imgW, y: box.ymin / imgH };
     const br = { x: box.xmax / imgW, y: box.ymax / imgH };
     const bl = { x: box.xmin / imgW, y: box.ymax / imgH };
 
-    res.status(200).json({ found: true, tl, tr, br, bl });
+    console.log("Plate text recognized:", plateText);
+    res.status(200).json({ found: true, tl, tr, br, bl, plateText });
   } catch (error) {
     console.error("Plate Recognizer error:", error);
     res.status(500).json({ error: error.message });

@@ -19,32 +19,30 @@ function extractJSON(txt) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { b64, prBox } = req.body;
+  const { b64, prBox, plateText } = req.body;
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set in environment' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64 image' });
 
-  const tl = prBox?.tl ?? {};
-  const tr = prBox?.tr ?? {};
+  const plateHint = plateText
+    ? `The registration number on the plate is: "${plateText.toUpperCase()}" — look for this exact text on the plate.`
+    : `Look for the rectangular plate with a registration number (letters and numbers, e.g. AB-123-CD format).`;
 
-  const prompt = `This is a car photo. A license plate detector found the plate approximately here:
-- Left edge x ≈ ${(tl.x ?? 0.5).toFixed(3)}
-- Right edge x ≈ ${(tr.x ?? 0.6).toFixed(3)}
-- Top edge y ≈ ${(tl.y ?? 0.5).toFixed(3)}
-(coordinates: 0 = left/top of image, 1 = right/bottom)
+  const prompt = `This is a car photo. Find the vehicle LICENSE PLATE and return the exact coordinates of its 4 physical corners.
 
-Your task: locate the license plate and return the precise coordinates of its 4 PHYSICAL corners as they appear in this photo.
+${plateHint}
 
-Rules:
-- If the car is at an angle, the plate appears as a TRAPEZOID — return the actual angled corners, NOT a bounding box rectangle
-- Include the blue EU identification strip on the left edge of the plate
-- Be as precise as possible — this will be used to overlay a logo exactly on the plate
+IMPORTANT:
+- The license plate is at the BOTTOM of the front bumper, near ground level — NOT the grill, badge, or logo
+- If the car is at an angle, the plate appears as a TRAPEZOID (one side taller) — return the actual angled corners, NOT a bounding box rectangle
+- Include the blue EU identification strip on the left edge
+- Coordinates are fractions of image width (x) and height (y), from 0.0 to 1.0
 
-Return ONLY this JSON, nothing else:
+Return ONLY this JSON, no other text:
 {"tl":{"x":0.0,"y":0.0},"tr":{"x":0.0,"y":0.0},"br":{"x":0.0,"y":0.0},"bl":{"x":0.0,"y":0.0}}
 
-tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left. Values are 0.0–1.0 fractions of image size.`;
+tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left of the license plate.`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
