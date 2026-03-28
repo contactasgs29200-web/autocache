@@ -169,57 +169,32 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   ctx.restore();
 }
 
-// ── Amélioration automatique des couleurs ────────────────────────────────────
-// Reproduit le traitement typique "Auto Tone" des logiciels pro :
-//   1. Auto-niveaux par canal (percentile 2–98 %) → noirs vrais, blancs purs
-//   2. Courbe en S douce → boost du contraste dans les ombres et les hautes lumières
-//   3. Correction de balance des blancs → suppression de la dominante jaune/chaude
-//   4. Boost de saturation → couleurs plus vives
+// ── Correction de balance des blancs ─────────────────────────────────────────
+// Simule un éclairage plus blanc/neutre en supprimant la dominante jaune/chaude
+// typique des showrooms (LED 3000–4000 K → rendu 5500 K neutre).
+// Pas d'auto-niveaux : aucun risque de saturer les hautes lumières.
 function autoEnhance(ctx, W, H) {
   const id = ctx.getImageData(0, 0, W, H);
   const d  = id.data;
-  const n  = W * H;
 
-  // Histogrammes par canal
-  const hR = new Int32Array(256), hG = new Int32Array(256), hB = new Int32Array(256);
-  for (let i = 0; i < d.length; i += 4) { hR[d[i]]++; hG[d[i+1]]++; hB[d[i+2]]++; }
-
-  // Percentile p (scanning avant) — utilisé pour trouver les points lo (2%) et hi (98%)
-  const pct = (h, p) => {
-    const thresh = n * p; let s = 0;
-    for (let v = 0; v < 256; v++) { s += h[v]; if (s >= thresh) return v; }
-    return 255;
-  };
-  const [rLo, rHi] = [pct(hR, 0.02), pct(hR, 0.98)];
-  const [gLo, gHi] = [pct(hG, 0.02), pct(hG, 0.98)];
-  const [bLo, bHi] = [pct(hB, 0.02), pct(hB, 0.98)];
-
-  // LUT : auto-niveaux + courbe en S + correction de blanc (wb)
-  const makeLUT = (lo, hi, wb) => {
-    const lut = new Uint8Array(256);
-    for (let v = 0; v < 256; v++) {
-      let t = hi > lo ? Math.max(0, Math.min(1, (v - lo) / (hi - lo))) : v / 255;
-      // Courbe en S (easeInOut)
-      t = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-      lut[v] = Math.max(0, Math.min(255, Math.round(t * 255 * wb)));
-    }
-    return lut;
-  };
-
-  // wb < 1 = réduit le canal (rafraîchit le rouge, atténue le vert chaud)
-  // wb > 1 = booste le canal (renforce le bleu pour un rendu plus neutre)
-  const rL = makeLUT(rLo, rHi, 0.93);
-  const gL = makeLUT(gLo, gHi, 0.97);
-  const bL = makeLUT(bLo, bHi, 1.05);
-  const SAT = 1.18; // légère saturation
+  // LUT par canal : gamma 0.95 (relève légèrement les tons moyens) + correction WB
+  // R : −6 %  (retire le rouge chaud)
+  // G : −2 %  (quasi-neutre)
+  // B : +9 %  (renforce le bleu froid pour un blanc plus pur)
+  const rLUT = new Uint8Array(256);
+  const gLUT = new Uint8Array(256);
+  const bLUT = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    const g = Math.pow(v / 255, 0.95); // gamma très doux (ton moyen légèrement levé)
+    rLUT[v] = Math.min(255, Math.round(g * 255 * 0.94));
+    gLUT[v] = Math.min(255, Math.round(g * 255 * 0.98));
+    bLUT[v] = Math.min(255, Math.round(g * 255 * 1.09));
+  }
 
   for (let i = 0; i < d.length; i += 4) {
-    let r = rL[d[i]], g = gL[d[i+1]], b = bL[d[i+2]];
-    // Boost de saturation via luminance pondérée (ITU-R BT.601)
-    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-    d[i]   = Math.max(0, Math.min(255, lum + (r - lum) * SAT));
-    d[i+1] = Math.max(0, Math.min(255, lum + (g - lum) * SAT));
-    d[i+2] = Math.max(0, Math.min(255, lum + (b - lum) * SAT));
+    d[i]   = rLUT[d[i]];
+    d[i+1] = gLUT[d[i+1]];
+    d[i+2] = bLUT[d[i+2]];
   }
   ctx.putImageData(id, 0, 0);
 }
@@ -891,7 +866,7 @@ export default function AutoCache() {
                   </div>
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: enhance ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>✨ Amélioration automatique</div>
-                    <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Auto-niveaux · Balance des blancs · Contraste · Saturation</div>
+                    <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Supprime la dominante jaune · Éclairage plus blanc et neutre</div>
                   </div>
                 </div>
 
