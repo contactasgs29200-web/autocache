@@ -517,7 +517,7 @@ export default function AutoCache() {
                       <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Texte du cache plaque</div>
                       <input
                         type="text" value={genText} onChange={e => setGenText(e.target.value)}
-                        placeholder="Forest Automobiles"
+                        placeholder="Nom de votre garage"
                         style={{ width: "100%", background: "#141414", border: "1px solid #2a2a2a", color: "#ddd5c8", padding: "9px 10px", fontFamily: "'Rajdhani',sans-serif", fontSize: 16, fontWeight: 600, borderRadius: 2, outline: "none" }}
                       />
                     </div>
