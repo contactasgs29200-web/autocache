@@ -205,19 +205,22 @@ async function processPhoto(photoFile, logoImg, adj) {
   ctx.filter = `brightness(${adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation})`;
   ctx.drawImage(photoImg, 0, 0);
   ctx.filter = "none";
+  // Save photo without plate for later re-rendering in "Ajuster" mode
+  const baseDataURL = c.toDataURL("image/jpeg", 0.93);
   let plateFound = false;
+  let savedCorners = null;
   if (plate.found && logoImg) {
     plateFound = true;
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
 
     // Determine perspective angle from plate position (geometry, no external API)
     const { near_side, angle_deg } = estimateAngleFromPosition(plate);
-    const corners = buildCorners(plate, near_side, angle_deg);
+    savedCorners = buildCorners(plate, near_side, angle_deg);
 
-    // Step 3 — Convert to canvas pixels and draw
+    // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
-    const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
-    const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
+    const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
+    const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
     console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
     // Fill trapezoid with white first so any sub-pixel gaps between strips are opaque
     ctx.save();
@@ -232,7 +235,7 @@ async function processPhoto(photoFile, logoImg, adj) {
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound, baseDataURL, corners: savedCorners };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -340,9 +343,12 @@ export default function AutoCache() {
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
   const [cropDrag, setCropDrag] = useState(null); // { type, startMx, startMy, startBox }
+  const [adjustMode, setAdjustMode] = useState(false);
+  const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
+  const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
   const logoRef   = useRef();
   const photosRef = useRef();
-  const cropImgRef = useRef(null);
+  const cropImgRef = useRef(null); // shared img ref for crop & adjust overlay
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -390,7 +396,7 @@ export default function AutoCache() {
     const all = [];
     for (let i = 0; i < photos.length; i++) {
       const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 });
-      all.push(r);
+      all.push({ ...r, logoPreview: logo.preview });
       setResults([...all]);
       setProgress({ n: i + 1, total: photos.length });
     }
@@ -408,8 +414,16 @@ export default function AutoCache() {
     setLogo(null); setPhotos([]); setResults([]); setTab("setup");
   };
 
-  const openLightbox  = (r) => { setLightbox(r); setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); };
-  const closeLightbox = () => { setLightbox(null); setCropMode(false); setCropDrag(null); };
+  const openLightbox  = (r) => {
+    setLightbox(r);
+    setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
+    setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
+  };
+  const closeLightbox = () => {
+    setLightbox(null);
+    setCropMode(false); setCropDrag(null);
+    setAdjustMode(false); setAdjustDrag(null);
+  };
 
   const startCropDrag = (e, type) => {
     e.preventDefault(); e.stopPropagation();
@@ -451,6 +465,61 @@ export default function AutoCache() {
       a.click();
     };
     img.src = lightbox.processed;
+  };
+
+  // ── Mode Ajuster ─────────────────────────────────────────────────────────
+  const startAdjustDrag = (e, corner) => {
+    e.preventDefault(); e.stopPropagation();
+    setAdjustDrag({ corner, startMx: e.clientX, startMy: e.clientY, startCorners: { ...adjustCorners, [corner]: { ...adjustCorners[corner] } } });
+  };
+
+  const onAdjustMouseMove = (e) => {
+    if (!adjustDrag || !cropImgRef.current) return;
+    const rect = cropImgRef.current.getBoundingClientRect();
+    const dx = (e.clientX - adjustDrag.startMx) / rect.width;
+    const dy = (e.clientY - adjustDrag.startMy) / rect.height;
+    const { corner, startCorners } = adjustDrag;
+    setAdjustCorners(prev => ({
+      ...prev,
+      [corner]: {
+        x: Math.max(0, Math.min(1, startCorners[corner].x + dx)),
+        y: Math.max(0, Math.min(1, startCorners[corner].y + dy)),
+      }
+    }));
+  };
+
+  const saveAdjusted = async () => {
+    if (!lightbox?.baseDataURL || !lightbox?.logoPreview || !adjustCorners) return;
+    const photoImg = await loadImg(lightbox.baseDataURL);
+    const rawLogo  = await loadImg(lightbox.logoPreview);
+    // Flatten logo on white
+    const flat = document.createElement("canvas");
+    flat.width  = rawLogo.naturalWidth  || rawLogo.width;
+    flat.height = rawLogo.naturalHeight || rawLogo.height;
+    const fctx = flat.getContext("2d");
+    fctx.fillStyle = "#ffffff"; fctx.fillRect(0, 0, flat.width, flat.height);
+    fctx.drawImage(rawLogo, 0, 0);
+    // Re-render
+    const c = document.createElement("canvas");
+    c.width = photoImg.naturalWidth; c.height = photoImg.naturalHeight;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(photoImg, 0, 0);
+    const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
+    const ptl = toPixel(adjustCorners.tl), ptr = toPixel(adjustCorners.tr);
+    const pbr = toPixel(adjustCorners.br), pbl = toPixel(adjustCorners.bl);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath(); ctx.fillStyle = "#ffffff"; ctx.fill();
+    ctx.restore();
+    drawPerspective(ctx, flat, ptl, ptr, pbr, pbl);
+    const newDataURL = c.toDataURL("image/jpeg", 0.93);
+    const updated = { ...lightbox, processed: newDataURL, corners: adjustCorners };
+    setResults(prev => prev.map(r => r === lightbox ? updated : r));
+    setLightbox(updated);
+    setAdjustMode(false);
+    setAdjustDrag(null);
   };
 
   if (authLoading) return (
@@ -702,9 +771,9 @@ export default function AutoCache() {
       {/* ── Lightbox + rognage ──────────────────────────────────── */}
       {lightbox && (
         <div
-          onClick={cropMode ? undefined : closeLightbox}
-          onMouseMove={onCropMouseMove}
-          onMouseUp={() => setCropDrag(null)}
+          onClick={cropMode || adjustMode ? undefined : closeLightbox}
+          onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); }}
+          onMouseUp={() => { setCropDrag(null); setAdjustDrag(null); }}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16, userSelect: "none" }}
         >
           {/* ── Barre du haut ── */}
@@ -714,12 +783,25 @@ export default function AutoCache() {
 
               {/* Bouton Rogner toggle */}
               <button
-                onClick={e => { e.stopPropagation(); setCropMode(c => !c); }}
+                onClick={e => { e.stopPropagation(); setCropMode(c => !c); setAdjustMode(false); setAdjustDrag(null); }}
                 style={{ background: cropMode ? "#f26522" : "#181818", color: cropMode ? "#090909" : "#aaa", border: `1px solid ${cropMode ? "#f26522" : "#2a2a2a"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
               >✂ Rogner</button>
 
-              {/* Télécharger complet ou rogné */}
-              {cropMode ? (
+              {/* Bouton Ajuster — visible seulement si plaque détectée */}
+              {lightbox.plateFound && lightbox.corners && (
+                <button
+                  onClick={e => { e.stopPropagation(); setAdjustMode(a => !a); setCropMode(false); setCropDrag(null); setAdjustCorners(lightbox.corners); }}
+                  style={{ background: adjustMode ? "#e8a020" : "#181818", color: adjustMode ? "#090909" : "#e8a020", border: `1px solid ${adjustMode ? "#e8a020" : "#3a2800"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                >⊹ Ajuster</button>
+              )}
+
+              {/* Télécharger / Sauvegarder ajustement */}
+              {adjustMode ? (
+                <button
+                  onClick={e => { e.stopPropagation(); saveAdjusted(); }}
+                  style={{ background: "#e8a020", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                >✓ Sauvegarder</button>
+              ) : cropMode ? (
                 <button
                   onClick={e => { e.stopPropagation(); downloadCropped(); }}
                   style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
@@ -745,6 +827,47 @@ export default function AutoCache() {
               src={lightbox.processed}
               style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
             />
+
+            {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
+            {adjustMode && adjustCorners && (
+              <div style={{ position: "absolute", inset: 0, cursor: adjustDrag ? "grabbing" : "crosshair" }}>
+                {/* Contour du trapèze */}
+                <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible" }}>
+                  <polygon
+                    points={[
+                      `${adjustCorners.tl.x * 100}%,${adjustCorners.tl.y * 100}%`,
+                      `${adjustCorners.tr.x * 100}%,${adjustCorners.tr.y * 100}%`,
+                      `${adjustCorners.br.x * 100}%,${adjustCorners.br.y * 100}%`,
+                      `${adjustCorners.bl.x * 100}%,${adjustCorners.bl.y * 100}%`,
+                    ].join(" ")}
+                    fill="rgba(232,160,32,0.08)"
+                    stroke="#e8a020"
+                    strokeWidth="1.5"
+                    strokeDasharray="6 4"
+                  />
+                </svg>
+                {/* Points de coin draggables */}
+                {[["tl","nwse-resize"],["tr","nesw-resize"],["br","nwse-resize"],["bl","nesw-resize"]].map(([corner, cur]) => (
+                  <div
+                    key={corner}
+                    onMouseDown={e => startAdjustDrag(e, corner)}
+                    style={{
+                      position: "absolute",
+                      left: `${adjustCorners[corner].x * 100}%`,
+                      top:  `${adjustCorners[corner].y * 100}%`,
+                      width: 18, height: 18,
+                      background: "#e8a020",
+                      border: "2px solid #fff",
+                      borderRadius: "50%",
+                      transform: "translate(-50%,-50%)",
+                      cursor: cur,
+                      zIndex: 10,
+                      boxShadow: "0 0 6px rgba(0,0,0,0.7)",
+                    }}
+                  />
+                ))}
+              </div>
+            )}
 
             {cropMode && (
               <div style={{ position: "absolute", inset: 0, cursor: cropDrag?.type === "move" ? "grabbing" : "default" }}>
@@ -777,9 +900,11 @@ export default function AutoCache() {
 
           {/* ── Pied ── */}
           <div style={{ marginTop: 10, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
-            {cropMode
+            {adjustMode
+              ? "Glisser un point orange pour repositionner le coin · ✓ Sauvegarder pour appliquer"
+              : cropMode
               ? "Glisser la zone · Coins oranges pour redimensionner · ⬇ Télécharger rogné"
-              : "✂ Rogner pour recadrer avant téléchargement · Cliquer en dehors pour fermer"}
+              : "✂ Rogner · ⊹ Ajuster la position du cache plaque · Cliquer en dehors pour fermer"}
           </div>
         </div>
       )}
