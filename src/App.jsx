@@ -217,46 +217,50 @@ async function detectHeadlights(b64) {
 }
 
 // ── Lustrage des optiques : correction chromatique localisée ─────────────────
-// Applique une correction ciblée dans chaque boîte englobante d'optique.
-// Seuls les pixels réellement jaunis (R - B > seuil) sont modifiés.
-// Les bords sont fondus progressivement pour éviter les artefacts rectangulaires.
+// Pour chaque pixel jauni dans la boîte englobante, on calcule sa luminance
+// moyenne et on ramène R et B vers cette valeur neutre (bilan des blancs local).
+// La force de correction augmente avec le degré de jaunissement du pixel.
 function polishHeadlights(ctx, lights, W, H) {
   for (const light of lights) {
-    // Agrandit légèrement la zone pour ne pas rogner les bords de l'optique
-    const pad = 0.015;
+    const pad = 0.02;
     const px = Math.max(0, Math.round((light.x - pad) * W));
     const py = Math.max(0, Math.round((light.y - pad) * H));
     const pw = Math.min(W - px, Math.round((light.w + pad * 2) * W));
     const ph = Math.min(H - py, Math.round((light.h + pad * 2) * H));
     if (pw < 4 || ph < 4) continue;
 
-    const id  = ctx.getImageData(px, py, pw, ph);
-    const d   = id.data;
+    const id = ctx.getImageData(px, py, pw, ph);
+    const d  = id.data;
 
     for (let j = 0; j < ph; j++) {
       for (let i = 0; i < pw; i++) {
         const idx = (j * pw + i) * 4;
         const r = d[idx], g = d[idx + 1], b = d[idx + 2];
 
-        // Filtre : ne corriger que les pixels vraiment jaunis/ambrés
-        const yellowness = (r - b) / 255;  // 0 = neutre, 1 = très jaune
-        if (yellowness < 0.10) continue;   // seuil : ignore les zones propres
+        // Jaunissement = excès de rouge par rapport au bleu
+        const yellowness = (r - b) / 255;
+        if (yellowness < 0.06) continue; // pixel déjà assez neutre → on ne touche pas
 
-        // Fonte progressive aux bords (évite les contours nets)
-        const ex = Math.min(i, pw - 1 - i) / (pw * 0.2);
-        const ey = Math.min(j, ph - 1 - j) / (ph * 0.2);
-        const blend = Math.min(1, ex, ey) * Math.min(1, yellowness * 3);
+        // Fonte aux bords pour éviter les rectangles visibles
+        const ex = Math.min(i, pw - 1 - i) / (pw * 0.15);
+        const ey = Math.min(j, ph - 1 - j) / (ph * 0.15);
+        const edge = Math.min(1, ex, ey);
 
-        // Correction : retire le jaune, ajoute du bleu, légère luminosité
-        const strength = blend * yellowness;
-        d[idx]     = Math.max(0, Math.min(255, r - strength * 55));
-        d[idx + 1] = Math.max(0, Math.min(255, g + strength * 8));
-        d[idx + 2] = Math.max(0, Math.min(255, b + strength * 75));
-        // Petit boost de clarté pour l'aspect "propre"
-        const boost = strength * 20;
-        d[idx]     = Math.min(255, d[idx]     + boost);
-        d[idx + 1] = Math.min(255, d[idx + 1] + boost);
-        d[idx + 2] = Math.min(255, d[idx + 2] + boost);
+        // Intensité : pleine correction dès 20 % de jaunissement (yellowness ≥ 0.20)
+        const blend = edge * Math.min(1, yellowness * 5);
+
+        // Cible neutre : luminance moyenne du pixel
+        // → R redescend vers lum, B remonte vers lum (retire exactement le cast)
+        const lum = (r + g + b) / 3;
+        const targetR = Math.min(r, lum * 1.05); // R ne peut que baisser
+        const targetB = Math.max(b, lum * 0.98); // B ne peut que monter
+
+        // Légère clarté pour simuler le verre propre
+        const boost = blend * 18;
+
+        d[idx]     = Math.max(0, Math.min(255, r + (targetR - r) * blend + boost));
+        d[idx + 1] = Math.max(0, Math.min(255, g                          + boost));
+        d[idx + 2] = Math.max(0, Math.min(255, b + (targetB - b) * blend + boost));
       }
     }
     ctx.putImageData(id, px, py);
