@@ -177,24 +177,30 @@ function autoEnhance(ctx, W, H) {
   const id = ctx.getImageData(0, 0, W, H);
   const d  = id.data;
 
-  // LUT par canal : gamma 0.95 (relève légèrement les tons moyens) + correction WB
-  // R : −6 %  (retire le rouge chaud)
-  // G : −2 %  (quasi-neutre)
-  // B : +9 %  (renforce le bleu froid pour un blanc plus pur)
+  // LUT par canal : gamma 0.93 (relève les tons moyens) + correction WB renforcée
+  // R : −10 %  (retire plus de rouge chaud)
+  // G : −3 %   (quasi-neutre)
+  // B : +15 %  (bleu froid plus prononcé → blanc très pur)
   const rLUT = new Uint8Array(256);
   const gLUT = new Uint8Array(256);
   const bLUT = new Uint8Array(256);
   for (let v = 0; v < 256; v++) {
-    const g = Math.pow(v / 255, 0.95); // gamma très doux (ton moyen légèrement levé)
-    rLUT[v] = Math.min(255, Math.round(g * 255 * 0.94));
-    gLUT[v] = Math.min(255, Math.round(g * 255 * 0.98));
-    bLUT[v] = Math.min(255, Math.round(g * 255 * 1.09));
+    const g = Math.pow(v / 255, 0.93); // gamma plus marqué (tons moyens plus lumineux)
+    rLUT[v] = Math.min(255, Math.round(g * 255 * 0.90));
+    gLUT[v] = Math.min(255, Math.round(g * 255 * 0.97));
+    bLUT[v] = Math.min(255, Math.round(g * 255 * 1.15));
   }
 
+  // Saturation boost : pousse chaque canal loin de la luminance moyenne
+  const SAT = 1.22; // +22 % de saturation
   for (let i = 0; i < d.length; i += 4) {
-    d[i]   = rLUT[d[i]];
-    d[i+1] = gLUT[d[i+1]];
-    d[i+2] = bLUT[d[i+2]];
+    const r = rLUT[d[i]];
+    const g = gLUT[d[i + 1]];
+    const b = bLUT[d[i + 2]];
+    const lum = r * 0.299 + g * 0.587 + b * 0.114; // luminance perceptive
+    d[i]     = Math.max(0, Math.min(255, Math.round(lum + (r - lum) * SAT)));
+    d[i + 1] = Math.max(0, Math.min(255, Math.round(lum + (g - lum) * SAT)));
+    d[i + 2] = Math.max(0, Math.min(255, Math.round(lum + (b - lum) * SAT)));
   }
   ctx.putImageData(id, 0, 0);
 }
