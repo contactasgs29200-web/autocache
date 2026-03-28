@@ -366,7 +366,16 @@ export default function AutoCache() {
     setProcessing(true);
     setProgress({ n: 0, total: photos.length });
     setResults([]);
-    const logoImg = await loadImg(logo.preview);
+    const rawLogo = await loadImg(logo.preview);
+    // Aplatir le logo sur fond blanc : élimine toute transparence PNG
+    const flatCanvas = document.createElement("canvas");
+    flatCanvas.width  = rawLogo.naturalWidth  || rawLogo.width;
+    flatCanvas.height = rawLogo.naturalHeight || rawLogo.height;
+    const flatCtx = flatCanvas.getContext("2d");
+    flatCtx.fillStyle = "#ffffff";
+    flatCtx.fillRect(0, 0, flatCanvas.width, flatCanvas.height);
+    flatCtx.drawImage(rawLogo, 0, 0);
+    const logoImg = flatCanvas; // canvas accepté par drawPerspective (.width/.height)
     const all = [];
     for (let i = 0; i < photos.length; i++) {
       const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 });
