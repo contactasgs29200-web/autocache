@@ -219,6 +219,17 @@ async function processPhoto(photoFile, logoImg, adj) {
     const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
     const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
     console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
+    // Fill trapezoid with white first so any sub-pixel gaps between strips are opaque
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y);
+    ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y);
+    ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath();
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
