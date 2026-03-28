@@ -199,6 +199,70 @@ function autoEnhance(ctx, W, H) {
   ctx.putImageData(id, 0, 0);
 }
 
+// ── Détection des optiques via GPT-4o ────────────────────────────────────────
+async function detectHeadlights(b64) {
+  try {
+    const r = await fetch("/api/headlights", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ b64 }),
+    });
+    const data = await r.json();
+    console.log("Headlights API response:", data);
+    return Array.isArray(data.lights) ? data.lights : [];
+  } catch(e) {
+    console.error("detectHeadlights error:", e);
+    return [];
+  }
+}
+
+// ── Lustrage des optiques : correction chromatique localisée ─────────────────
+// Applique une correction ciblée dans chaque boîte englobante d'optique.
+// Seuls les pixels réellement jaunis (R - B > seuil) sont modifiés.
+// Les bords sont fondus progressivement pour éviter les artefacts rectangulaires.
+function polishHeadlights(ctx, lights, W, H) {
+  for (const light of lights) {
+    // Agrandit légèrement la zone pour ne pas rogner les bords de l'optique
+    const pad = 0.015;
+    const px = Math.max(0, Math.round((light.x - pad) * W));
+    const py = Math.max(0, Math.round((light.y - pad) * H));
+    const pw = Math.min(W - px, Math.round((light.w + pad * 2) * W));
+    const ph = Math.min(H - py, Math.round((light.h + pad * 2) * H));
+    if (pw < 4 || ph < 4) continue;
+
+    const id  = ctx.getImageData(px, py, pw, ph);
+    const d   = id.data;
+
+    for (let j = 0; j < ph; j++) {
+      for (let i = 0; i < pw; i++) {
+        const idx = (j * pw + i) * 4;
+        const r = d[idx], g = d[idx + 1], b = d[idx + 2];
+
+        // Filtre : ne corriger que les pixels vraiment jaunis/ambrés
+        const yellowness = (r - b) / 255;  // 0 = neutre, 1 = très jaune
+        if (yellowness < 0.10) continue;   // seuil : ignore les zones propres
+
+        // Fonte progressive aux bords (évite les contours nets)
+        const ex = Math.min(i, pw - 1 - i) / (pw * 0.2);
+        const ey = Math.min(j, ph - 1 - j) / (ph * 0.2);
+        const blend = Math.min(1, ex, ey) * Math.min(1, yellowness * 3);
+
+        // Correction : retire le jaune, ajoute du bleu, légère luminosité
+        const strength = blend * yellowness;
+        d[idx]     = Math.max(0, Math.min(255, r - strength * 55));
+        d[idx + 1] = Math.max(0, Math.min(255, g + strength * 8));
+        d[idx + 2] = Math.max(0, Math.min(255, b + strength * 75));
+        // Petit boost de clarté pour l'aspect "propre"
+        const boost = strength * 20;
+        d[idx]     = Math.min(255, d[idx]     + boost);
+        d[idx + 1] = Math.min(255, d[idx + 1] + boost);
+        d[idx + 2] = Math.min(255, d[idx + 2] + boost);
+      }
+    }
+    ctx.putImageData(id, px, py);
+  }
+}
+
 async function detectPlate(b64, imgW, imgH) {
   try {
     const r = await fetch("/api/platerecognizer", {
@@ -216,9 +280,13 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
-  const plate = await detectPlate(b64, imgW, imgH);
+  // Détection plaque + optiques en parallèle pour ne pas cumuler les délais
+  const [plate, lights] = await Promise.all([
+    detectPlate(b64, imgW, imgH),
+    headlightPolish ? detectHeadlights(b64) : Promise.resolve([]),
+  ]);
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
   URL.revokeObjectURL(photoURL);
@@ -229,8 +297,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = `brightness(${adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation})`;
   ctx.drawImage(photoImg, 0, 0);
   ctx.filter = "none";
-  // Amélioration automatique des couleurs (auto-niveaux + balance des blancs + saturation)
+  // Correction de balance des blancs globale
   if (enhance) autoEnhance(ctx, c.width, c.height);
+  // Lustrage des optiques : correction chromatique localisée sur les phares/feux
+  if (lights.length > 0) polishHeadlights(ctx, lights, c.width, c.height);
   // Save photo without plate for later re-rendering in "Ajuster" mode
   const baseDataURL = c.toDataURL("image/jpeg", 0.93);
   let plateFound = false;
@@ -357,7 +427,8 @@ export default function AutoCache() {
   const [progress, setProgress] = useState({ n: 0, total: 0 });
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
-  const [enhance, setEnhance] = useState(false); // amélioration auto des couleurs
+  const [enhance, setEnhance] = useState(false);         // amélioration auto des couleurs
+  const [headlightPolish, setHeadlightPolish] = useState(false); // lustrage des optiques
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
@@ -442,7 +513,7 @@ export default function AutoCache() {
     const bgColor = logo.bgColor || "#ffffff";
     const all = [];
     for (let i = 0; i < photos.length; i++) {
-      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance);
+      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish);
       all.push({ ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated });
       setResults([...all]);
       setProgress({ n: i + 1, total: photos.length });
@@ -856,19 +927,36 @@ export default function AutoCache() {
               </section>
 
               <section>
-                {/* ── Amélioration automatique des couleurs ── */}
-                <div
-                  onClick={() => setEnhance(p => !p)}
-                  style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: enhance ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${enhance ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none" }}
-                >
-                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${enhance ? "#f26522" : "#333"}`, background: enhance ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {enhance && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                {/* ── Cases à cocher : améliorations photo ── */}
+                {[
+                  {
+                    active: enhance,
+                    toggle: () => setEnhance(p => !p),
+                    icon: "✨",
+                    label: "Amélioration automatique",
+                    sub: "Supprime la dominante jaune · Éclairage plus blanc et neutre",
+                  },
+                  {
+                    active: headlightPolish,
+                    toggle: () => setHeadlightPolish(p => !p),
+                    icon: "💡",
+                    label: "Lustrage des optiques",
+                    sub: "Réduit le jaunissement des phares et feux · IA GPT-4o",
+                  },
+                ].map(({ active, toggle, icon, label, sub }) => (
+                  <div key={label}
+                    onClick={toggle}
+                    style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${active ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none" }}
+                  >
+                    <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${active ? "#f26522" : "#333"}`, background: active ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {active && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: active ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>{icon} {label}</div>
+                      <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
+                    </div>
                   </div>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: enhance ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>✨ Amélioration automatique</div>
-                    <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Supprime la dominante jaune · Éclairage plus blanc et neutre</div>
-                  </div>
-                </div>
+                ))}
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                   <div style={{ fontSize: 10, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#333", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
