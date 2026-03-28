@@ -340,9 +340,13 @@ export default function AutoCache() {
   const [adjustMode, setAdjustMode] = useState(false);
   const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
-  const logoRef   = useRef();
-  const photosRef = useRef();
-  const cropImgRef = useRef(null); // shared img ref for crop & adjust overlay
+  const [lbZoom, setLbZoom] = useState(1);            // zoom de la lightbox (1 = normal, max 8)
+  const [lbPan,  setLbPan]  = useState({ x: 0, y: 0 }); // décalage (px) du calque zoomé
+  const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
+  const logoRef        = useRef();
+  const photosRef      = useRef();
+  const cropImgRef     = useRef(null); // ref sur l'<img> de la lightbox (crop & adjust)
+  const lbContainerRef = useRef(null); // ref sur le conteneur de la lightbox (zoom/pan)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -420,11 +424,13 @@ export default function AutoCache() {
     setLightbox(r);
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
+    setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
   const closeLightbox = () => {
     setLightbox(null);
     setCropMode(false); setCropDrag(null);
     setAdjustMode(false); setAdjustDrag(null);
+    setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
 
   const startCropDrag = (e, type) => {
@@ -537,6 +543,46 @@ export default function AutoCache() {
         y: Math.max(0, Math.min(1, startCorners[corner].y + dy)),
       }
     }));
+  };
+
+  // ── Zoom / Pan de la lightbox ─────────────────────────────────────────────
+  const onLbWheel = (e) => {
+    e.preventDefault();
+    if (!lbContainerRef.current) return;
+    const rect = lbContainerRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25;
+    const newZoom = Math.max(1, Math.min(8, lbZoom * factor));
+    if (newZoom === 1) {
+      setLbZoom(1); setLbPan({ x: 0, y: 0 }); return;
+    }
+    const newX = mx - (mx - lbPan.x) * newZoom / lbZoom;
+    const newY = my - (my - lbPan.y) * newZoom / lbZoom;
+    setLbZoom(newZoom);
+    setLbPan({
+      x: Math.max(rect.width  * (1 - newZoom), Math.min(0, newX)),
+      y: Math.max(rect.height * (1 - newZoom), Math.min(0, newY)),
+    });
+  };
+
+  const onLbPanDown = (e) => {
+    // Ne pas démarrer le pan si un drag rognage/ajustement est en cours
+    if (lbZoom > 1 && !cropDrag && !adjustDrag) {
+      e.preventDefault();
+      setLbPanDrag({ startMx: e.clientX, startMy: e.clientY, startPan: { ...lbPan } });
+    }
+  };
+
+  const onLbPanMove = (e) => {
+    if (!lbPanDrag || !lbContainerRef.current) return;
+    const rect = lbContainerRef.current.getBoundingClientRect();
+    const dx = e.clientX - lbPanDrag.startMx;
+    const dy = e.clientY - lbPanDrag.startMy;
+    setLbPan({
+      x: Math.max(rect.width  * (1 - lbZoom), Math.min(0, lbPanDrag.startPan.x + dx)),
+      y: Math.max(rect.height * (1 - lbZoom), Math.min(0, lbPanDrag.startPan.y + dy)),
+    });
   };
 
   const saveAdjusted = async () => {
@@ -832,8 +878,8 @@ export default function AutoCache() {
       {lightbox && (
         <div
           onClick={cropMode || adjustMode ? undefined : closeLightbox}
-          onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); }}
-          onMouseUp={() => { setCropDrag(null); setAdjustDrag(null); }}
+          onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
+          onMouseUp={() => { setCropDrag(null); setAdjustDrag(null); setLbPanDrag(null); }}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16, userSelect: "none" }}
         >
           {/* ── Barre du haut ── */}
@@ -881,11 +927,34 @@ export default function AutoCache() {
             </div>
           </div>
 
-          {/* ── Image + overlay rognage ── */}
+          {/* ── Image + overlay rognage/ajustement ── */}
           <div
+            ref={lbContainerRef}
             onClick={e => e.stopPropagation()}
-            style={{ position: "relative", display: "inline-block", maxWidth: "100%", borderRadius: 3, border: "1px solid #222", overflow: "hidden", lineHeight: 0 }}
+            onWheel={onLbWheel}
+            onMouseDown={onLbPanDown}
+            onDoubleClick={e => { e.stopPropagation(); setLbZoom(1); setLbPan({ x: 0, y: 0 }); }}
+            style={{
+              position: "relative", display: "inline-block", maxWidth: "100%",
+              borderRadius: 3, border: "1px solid #222", overflow: "hidden", lineHeight: 0,
+              touchAction: "none",
+              cursor: lbZoom > 1 ? (lbPanDrag ? "grabbing" : "grab") : "default",
+            }}
           >
+            {/* Indicateur de zoom */}
+            {lbZoom > 1.05 && (
+              <div style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.75)", color: "#f26522", fontSize: 10, fontFamily: "'JetBrains Mono',monospace", padding: "3px 8px", borderRadius: 2, zIndex: 30, pointerEvents: "none", letterSpacing: 1 }}>
+                ×{lbZoom.toFixed(1)}
+              </div>
+            )}
+            {/* Calque zoomé — transform appliqué ici, les overlays bougent avec l'image */}
+            <div style={{
+              transform: `translate(${lbPan.x}px, ${lbPan.y}px) scale(${lbZoom})`,
+              transformOrigin: "0 0",
+              position: "relative",
+              display: "inline-block",
+              lineHeight: 0,
+            }}>
             <img
               ref={cropImgRef}
               src={lightbox.processed}
@@ -965,6 +1034,7 @@ export default function AutoCache() {
                 </div>
               </div>
             )}
+            </div>{/* fin calque zoomé */}
           </div>
 
           {/* ── Pied ── */}
@@ -973,7 +1043,9 @@ export default function AutoCache() {
               ? "Glisser un point orange pour repositionner le coin · ✓ Sauvegarder pour appliquer"
               : cropMode
               ? "Glisser la zone · Coins oranges pour redimensionner · ⬇ Télécharger rogné"
-              : "✂ Rogner · ⊹ Ajuster la position du cache plaque · Cliquer en dehors pour fermer"}
+              : lbZoom > 1
+              ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
+              : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
           </div>
         </div>
       )}
