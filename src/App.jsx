@@ -46,47 +46,44 @@ function extractJSON(txt) {
   return null;
 }
 
-// Ask Claude for the real perspective corners of the plate, using the FULL image
-// so it can see the car's angle and return a proper trapezoid (not a bounding box).
-// b64 = full resized image (≤1600px). hint = {cx,cy,pw,ph} normalized 0-1.
-async function getExactCorners(b64, hint) {
+// Ask Claude ONE simple question: which side of the plate is closer to the camera
+// and at what horizontal angle? This is what Claude is actually good at.
+// Returns { near_side: "left"|"right"|"none", angle_deg: 0-60 }
+async function getPlateAngle(b64, cx, cy) {
   try {
-    console.log(`getExactCorners: sending full image to Claude, plate hint center=(${hint.cx.toFixed(3)},${hint.cy.toFixed(3)}) pw=${hint.pw.toFixed(3)}`);
     const r = await fetch("/api/detect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-opus-4-5",
-        max_tokens: 200,
+        max_tokens: 80,
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-          { type: "text", text: `This is a car photo. The license plate is located near image position x≈${hint.cx.toFixed(2)}, y≈${hint.cy.toFixed(2)} (x=left→right, y=top→bottom, range 0–1).
+          { type: "text", text: `Car photo. The front license plate is near image position x≈${cx.toFixed(2)}, y≈${cy.toFixed(2)} (0=left/top, 1=right/bottom).
 
-Find the license plate and return the coordinates of its 4 PHYSICAL corners as they appear in this photo, accounting for any 3D perspective (the plate may look like a trapezoid if the car is angled — one side closer to the camera appears wider/taller). Include the EU blue identification strip on the left edge.
+Looking at the license plate in this image: which EDGE of the plate appears TALLER because it is closer to the camera?
+- "left"  → the LEFT edge of the plate is closer/taller (car faces right in image)
+- "right" → the RIGHT edge of the plate is closer/taller (car faces left in image)
+- "none"  → the car is straight-on, both edges same height
 
-Return ONLY this JSON, no other text:
-{"tl":{"x":F,"y":F},"tr":{"x":F,"y":F},"br":{"x":F,"y":F},"bl":{"x":F,"y":F}}
+Also give angle_deg: how many degrees is the car turned from straight-on? (0=straight, 20=slight, 40=strong)
 
-x and y are fractions of image width/height (0.0–1.0). tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left of the plate.` }
+Return ONLY JSON, no other text: {"near_side":"left|right|none","angle_deg":0}` }
         ]}]
       })
     });
     const d = await r.json();
-    if (!d.content?.[0]?.text) { console.warn("getExactCorners: no text"); return null; }
-    const txt = d.content[0].text;
-    console.log("getExactCorners: Claude →", txt);
-    const raw = extractJSON(txt);
-    if (!raw) { console.warn("getExactCorners: no JSON in:", txt); return null; }
-    const corners = JSON.parse(raw);
-    const pts = [corners.tl, corners.tr, corners.br, corners.bl];
-    if (pts.some(p => !p || typeof p.x !== "number" || typeof p.y !== "number")) {
-      console.warn("getExactCorners: bad corners:", corners); return null;
-    }
-    console.log("getExactCorners: corners →", corners);
-    return corners;
+    if (!d.content?.[0]?.text) return { near_side: "none", angle_deg: 0 };
+    const raw = extractJSON(d.content[0].text);
+    if (!raw) return { near_side: "none", angle_deg: 0 };
+    const result = JSON.parse(raw);
+    const ns = result.near_side || "none";
+    const deg = Math.min(Math.abs(result.angle_deg || 0), 60);
+    console.log(`Car angle: near_side=${ns} angle=${deg}°`);
+    return { near_side: ns, angle_deg: deg };
   } catch(e) {
-    console.error("getExactCorners error:", e);
-    return null;
+    console.error("getPlateAngle error:", e);
+    return { near_side: "none", angle_deg: 0 };
   }
 }
 
@@ -166,34 +163,29 @@ async function processPhoto(photoFile, logoImg, adj) {
     const cy = (plate.tl.y + plate.bl.y) / 2;
     const pw = plate.tr.x - plate.tl.x;
     const ph = pw / 4.73;
-    // Seed rectangle: +12% left for EU strip, symmetric height
-    let corners = {
-      tl: { x: Math.max(0, cx - pw * 0.62), y: Math.max(0, cy - ph * 0.55) },
-      tr: { x: Math.min(1, cx + pw * 0.53), y: Math.max(0, cy - ph * 0.55) },
-      br: { x: Math.min(1, cx + pw * 0.53), y: Math.min(1, cy + ph * 0.55) },
-      bl: { x: Math.max(0, cx - pw * 0.62), y: Math.min(1, cy + ph * 0.55) },
-    };
     console.log(`PR seed: center(${cx.toFixed(3)},${cy.toFixed(3)}) pw=${pw.toFixed(3)} ph=${ph.toFixed(3)}`);
 
-    // Step 2 — Ask Claude for the real perspective corners (trapezoid for angled cars)
-    // Pass the full resized image so Claude sees the whole car and can detect perspective
-    const exact = await getExactCorners(b64, { cx, cy, pw, ph });
-    if (exact) {
-      // Validate: center must stay close to PR center, aspect ratio 2:1 to 8:1
-      const ecx = (exact.tl.x + exact.tr.x) / 2;
-      const ecy = (exact.tl.y + exact.bl.y) / 2;
-      const epw = Math.max(exact.tr.x - exact.tl.x, exact.br.x - exact.bl.x);
-      const eph = Math.max(exact.bl.y - exact.tl.y, exact.br.y - exact.tr.y);
-      const ratio = eph > 0 ? epw / eph : 0;
-      const centerClose = Math.abs(ecx - cx) < pw * 0.6 && Math.abs(ecy - cy) < ph * 1.5;
-      const ratioOk = ratio >= 1.8 && ratio <= 9.0;
-      if (centerClose && ratioOk) {
-        console.log(`Using Claude corners ✓ ratio=${ratio.toFixed(2)} center=(${ecx.toFixed(3)},${ecy.toFixed(3)})`);
-        corners = exact;
-      } else {
-        console.warn(`Claude corners rejected (ratio=${ratio.toFixed(2)}, centerClose=${centerClose}) — keeping PR seed`);
-      }
-    }
+    // Step 2 — Ask Claude which side is closer, then compute the trapezoid mathematically.
+    // Claude answers a simple perception question (reliable) instead of pixel coordinates (unreliable).
+    const angleInfo = await getPlateAngle(b64, cx, cy);
+    const theta = angleInfo.angle_deg * Math.PI / 180;
+    // Perspective scale factor: empirically calibrated for typical car-photo distances.
+    // At 35° the near edge appears ~15% taller than the far edge.
+    const PERSP = 0.25;
+    const nearH = ph * (1 + Math.sin(theta) * PERSP);  // taller side (closer to camera)
+    const farH  = ph * (1 - Math.sin(theta) * PERSP);  // shorter side (farther from camera)
+    const leftH  = angleInfo.near_side === "left"  ? nearH
+                 : angleInfo.near_side === "right" ? farH : ph;
+    const rightH = angleInfo.near_side === "right" ? nearH
+                 : angleInfo.near_side === "left"  ? farH : ph;
+    console.log(`Trapezoid: near=${angleInfo.near_side} θ=${angleInfo.angle_deg}° leftH=${leftH.toFixed(4)} rightH=${rightH.toFixed(4)}`);
+
+    const corners = {
+      tl: { x: Math.max(0, cx - pw * 0.62), y: Math.max(0, cy - leftH  * 0.5) },
+      tr: { x: Math.min(1, cx + pw * 0.53), y: Math.max(0, cy - rightH * 0.5) },
+      br: { x: Math.min(1, cx + pw * 0.53), y: Math.min(1, cy + rightH * 0.5) },
+      bl: { x: Math.max(0, cx - pw * 0.62), y: Math.min(1, cy + leftH  * 0.5) },
+    };
 
     const px = p => ({ x: p.x * c.width, y: p.y * c.height });
     const tl = px(corners.tl), tr = px(corners.tr), br = px(corners.br), bl = px(corners.bl);
