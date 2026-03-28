@@ -265,9 +265,13 @@ export default function AutoCache() {
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
-  const [lightbox, setLightbox] = useState(null); // { src, name, r } or null
-  const logoRef = useRef();
+  const [lightbox, setLightbox] = useState(null);
+  const [cropMode, setCropMode] = useState(false);
+  const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
+  const [cropDrag, setCropDrag] = useState(null); // { type, startMx, startMy, startBox }
+  const logoRef   = useRef();
   const photosRef = useRef();
+  const cropImgRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -317,8 +321,50 @@ export default function AutoCache() {
     setLogo(null); setPhotos([]); setResults([]); setTab("setup");
   };
 
-  const openLightbox  = (r) => setLightbox(r);
-  const closeLightbox = () => setLightbox(null);
+  const openLightbox  = (r) => { setLightbox(r); setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); };
+  const closeLightbox = () => { setLightbox(null); setCropMode(false); setCropDrag(null); };
+
+  const startCropDrag = (e, type) => {
+    e.preventDefault(); e.stopPropagation();
+    setCropDrag({ type, startMx: e.clientX, startMy: e.clientY, startBox: { ...cropBox } });
+  };
+
+  const onCropMouseMove = (e) => {
+    if (!cropDrag || !cropImgRef.current) return;
+    const rect = cropImgRef.current.getBoundingClientRect();
+    const dx = (e.clientX - cropDrag.startMx) / rect.width;
+    const dy = (e.clientY - cropDrag.startMy) / rect.height;
+    let { x, y, w, h } = cropDrag.startBox;
+    const t = cropDrag.type;
+    if (t === 'move')                { x += dx; y += dy; }
+    if (t === 'tl' || t === 'bl')   { const nw = w - dx; if (nw > 0.05) { x += dx; w = nw; } }
+    if (t === 'tr' || t === 'br')   { w = Math.max(0.05, w + dx); }
+    if (t === 'tl' || t === 'tr')   { const nh = h - dy; if (nh > 0.05) { y += dy; h = nh; } }
+    if (t === 'bl' || t === 'br')   { h = Math.max(0.05, h + dy); }
+    x = Math.max(0, Math.min(1 - w, x));
+    y = Math.max(0, Math.min(1 - h, y));
+    w = Math.min(1 - x, w); h = Math.min(1 - y, h);
+    setCropBox({ x, y, w, h });
+  };
+
+  const downloadCropped = () => {
+    if (!lightbox) return;
+    const img = new Image();
+    img.onload = () => {
+      const sx = Math.round(cropBox.x * img.naturalWidth);
+      const sy = Math.round(cropBox.y * img.naturalHeight);
+      const sw = Math.round(cropBox.w * img.naturalWidth);
+      const sh = Math.round(cropBox.h * img.naturalHeight);
+      const canvas = document.createElement('canvas');
+      canvas.width = sw; canvas.height = sh;
+      canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/jpeg', 0.95);
+      a.download = `autocache_rogné_${lightbox.name}`;
+      a.click();
+    };
+    img.src = lightbox.processed;
+  };
 
   if (authLoading) return (
     <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -490,23 +536,88 @@ export default function AutoCache() {
         )}
       </div>
 
-      {/* ── Lightbox : cliquer sur une vignette pour voir en grand ── */}
+      {/* ── Lightbox + rognage ──────────────────────────────────── */}
       {lightbox && (
         <div
-          onClick={closeLightbox}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}
+          onClick={cropMode ? undefined : closeLightbox}
+          onMouseMove={onCropMouseMove}
+          onMouseUp={() => setCropDrag(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16, userSelect: "none" }}
         >
-          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "0 4px" }}>
-            <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{lightbox.name}</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => downloadOne(lightbox)} style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>Télécharger</button>
+          {/* ── Barre du haut ── */}
+          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "0 4px", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 10, color: "#555", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+
+              {/* Bouton Rogner toggle */}
+              <button
+                onClick={e => { e.stopPropagation(); setCropMode(c => !c); }}
+                style={{ background: cropMode ? "#f26522" : "#181818", color: cropMode ? "#090909" : "#aaa", border: `1px solid ${cropMode ? "#f26522" : "#2a2a2a"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+              >✂ Rogner</button>
+
+              {/* Télécharger complet ou rogné */}
+              {cropMode ? (
+                <button
+                  onClick={e => { e.stopPropagation(); downloadCropped(); }}
+                  style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                >⬇ Télécharger rogné</button>
+              ) : (
+                <button
+                  onClick={e => { e.stopPropagation(); downloadOne(lightbox); }}
+                  style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                >⬇ Télécharger</button>
+              )}
+
               <button onClick={closeLightbox} style={{ background: "#181818", color: "#aaa", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 14, borderRadius: 2 }}>✕</button>
             </div>
           </div>
-          <div onClick={e => e.stopPropagation()} style={{ maxWidth: 1100, maxHeight: "82vh", overflow: "auto", borderRadius: 3, border: "1px solid #222" }}>
-            <img src={lightbox.processed} style={{ display: "block", maxWidth: "100%", maxHeight: "82vh", objectFit: "contain" }} />
+
+          {/* ── Image + overlay rognage ── */}
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ position: "relative", display: "inline-block", maxWidth: "100%", borderRadius: 3, border: "1px solid #222", overflow: "hidden", lineHeight: 0 }}
+          >
+            <img
+              ref={cropImgRef}
+              src={lightbox.processed}
+              style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
+            />
+
+            {cropMode && (
+              <div style={{ position: "absolute", inset: 0, cursor: cropDrag?.type === "move" ? "grabbing" : "default" }}>
+                {/* Zones sombres hors sélection */}
+                <div style={{ position: "absolute", inset: 0, pointerEvents: "none", background: `linear-gradient(to bottom, rgba(0,0,0,0.6) ${cropBox.y*100}%, transparent ${cropBox.y*100}%, transparent ${(cropBox.y+cropBox.h)*100}%, rgba(0,0,0,0.6) ${(cropBox.y+cropBox.h)*100}%)` }} />
+                <div style={{ position: "absolute", top: `${cropBox.y*100}%`, height: `${cropBox.h*100}%`, left: 0, width: `${cropBox.x*100}%`, background: "rgba(0,0,0,0.6)", pointerEvents: "none" }} />
+                <div style={{ position: "absolute", top: `${cropBox.y*100}%`, height: `${cropBox.h*100}%`, right: 0, width: `${(1-cropBox.x-cropBox.w)*100}%`, background: "rgba(0,0,0,0.6)", pointerEvents: "none" }} />
+
+                {/* Rectangle de rognage (déplacer) */}
+                <div
+                  onMouseDown={e => startCropDrag(e, "move")}
+                  style={{ position: "absolute", left: `${cropBox.x*100}%`, top: `${cropBox.y*100}%`, width: `${cropBox.w*100}%`, height: `${cropBox.h*100}%`, border: "2px solid #f26522", cursor: "move", boxSizing: "border-box" }}
+                >
+                  {/* Grille tiers */}
+                  {[33.33, 66.66].map(p => (
+                    <span key={`h${p}`} style={{ position: "absolute", top: `${p}%`, left: 0, right: 0, height: 1, background: "rgba(242,101,34,0.3)", pointerEvents: "none" }} />
+                  ))}
+                  {[33.33, 66.66].map(p => (
+                    <span key={`v${p}`} style={{ position: "absolute", left: `${p}%`, top: 0, bottom: 0, width: 1, background: "rgba(242,101,34,0.3)", pointerEvents: "none" }} />
+                  ))}
+
+                  {/* Poignées de coin */}
+                  {[["tl",0,0,"nwse-resize"],["tr","100%",0,"nesw-resize"],["br","100%","100%","nwse-resize"],["bl",0,"100%","nesw-resize"]].map(([type,left,top,cur]) => (
+                    <div key={type} onMouseDown={e => startCropDrag(e, type)} style={{ position: "absolute", left, top, width: 14, height: 14, background: "#f26522", transform: "translate(-50%,-50%)", cursor: cur, borderRadius: 2, zIndex: 2 }} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          <div style={{ marginTop: 10, fontSize: 9, color: "#333", fontFamily: "'JetBrains Mono',monospace" }}>Cliquer en dehors pour fermer · Défiler pour voir le détail</div>
+
+          {/* ── Pied ── */}
+          <div style={{ marginTop: 10, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
+            {cropMode
+              ? "Glisser la zone · Coins oranges pour redimensionner · ⬇ Télécharger rogné"
+              : "✂ Rogner pour recadrer avant téléchargement · Cliquer en dehors pour fermer"}
+          </div>
         </div>
       )}
     </div>
