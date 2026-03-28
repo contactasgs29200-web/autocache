@@ -46,48 +46,27 @@ function extractJSON(txt) {
   return null;
 }
 
-// Adaptive plate analysis — ask Claude 3 questions at once to remove all hardcoded constants.
-//   eu_in_box  : true  → PR left edge already includes EU strip
-//                false → EU strip is outside PR box, extend left ~12% of pw
-//   near_side  : "left"|"right"|"none" → which plate edge is taller (closer to camera)
-//   angle_deg  : 0-60 → horizontal rotation from straight-on
-async function analyzePlate(b64, prBox) {
-  const { tl, tr } = prBox;
+// Call GPT-4o Vision to get the exact 4 perspective corners of the plate.
+// Falls back to null on any error — caller handles the fallback.
+async function getGPTCorners(b64, prBox) {
   try {
-    const r = await fetch("/api/detect", {
+    console.log("getGPTCorners: calling GPT-4o...");
+    const r = await fetch("/api/corners", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-opus-4-5",
-        max_tokens: 120,
-        messages: [{ role: "user", content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } },
-          { type: "text", text: `Car photo. A license plate detector found the plate at: left x=${tl.x.toFixed(3)}, right x=${tr.x.toFixed(3)}, top y=${tl.y.toFixed(3)} (coords: 0=left/top → 1=right/bottom).
-
-Answer 3 questions about this plate:
-1. Does the detected LEFT edge (x=${tl.x.toFixed(3)}) already include the blue EU strip, or is the EU strip further to the left (outside the detected box)?
-2. Which edge of the plate looks TALLER in the image because it is physically closer to the camera: "left", "right", or "none" (straight-on)?
-3. How many degrees is the car rotated from straight-on? (0=straight, 20=slight, 40=strong)
-
-Return ONLY JSON: {"eu_in_box":true,"near_side":"left|right|none","angle_deg":0}` }
-        ]}]
-      })
+      body: JSON.stringify({ b64, prBox }),
     });
-    const d = await r.json();
-    if (!d.content?.[0]?.text) return { eu_in_box: false, near_side: "none", angle_deg: 0 };
-    const raw = extractJSON(d.content[0].text);
-    if (!raw) return { eu_in_box: false, near_side: "none", angle_deg: 0 };
-    const res = JSON.parse(raw);
-    const result = {
-      eu_in_box: typeof res.eu_in_box === "boolean" ? res.eu_in_box : false,
-      near_side: ["left","right","none"].includes(res.near_side) ? res.near_side : "none",
-      angle_deg: Math.min(Math.abs(res.angle_deg || 0), 60),
-    };
-    console.log(`Plate analysis → eu_in_box=${result.eu_in_box} near_side=${result.near_side} angle=${result.angle_deg}°`);
-    return result;
+    const data = await r.json();
+    if (!data.found || !data.corners) {
+      console.warn("getGPTCorners: no corners returned", data);
+      return null;
+    }
+    const { tl, tr, br, bl } = data.corners;
+    console.log(`GPT-4o corners: TL(${tl.x.toFixed(3)},${tl.y.toFixed(3)}) TR(${tr.x.toFixed(3)},${tr.y.toFixed(3)}) BR(${br.x.toFixed(3)},${br.y.toFixed(3)}) BL(${bl.x.toFixed(3)},${bl.y.toFixed(3)})`);
+    return data.corners;
   } catch(e) {
-    console.error("analyzePlate error:", e);
-    return { eu_in_box: false, near_side: "none", angle_deg: 0 };
+    console.error("getGPTCorners error:", e);
+    return null;
   }
 }
 
@@ -162,47 +141,55 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    // Step 1 — PR gives reliable position + width; derive height from real plate ratio 4.73:1
-    // IMPORTANT: PR's bounding box bottom (bl.y) includes bumper below the plate — unreliable.
-    // PR's top (tl.y) is reliable. We anchor cy to the TOP of the PR box + half the plate height.
-    const pw = plate.tr.x - plate.tl.x;
-    const ph = pw / 4.73;
-    const cx = (plate.tl.x + plate.tr.x) / 2;
-    const cy = plate.tl.y + ph / 2;   // anchor to PR top, NOT center of PR box
-    console.log(`PR seed: center(${cx.toFixed(3)},${cy.toFixed(3)}) pw=${pw.toFixed(3)} ph=${ph.toFixed(3)}`);
+    console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)})`);
 
-    // Step 2 — Adaptive analysis: Claude answers 3 questions, we compute everything from those.
-    // No hardcoded magic numbers — every value derives from the analysis result.
-    const analysis = await analyzePlate(b64, plate);
+    // Step 1 — GPT-4o Vision: get exact perspective corners (trapezoid for angled cars)
+    let corners = await getGPTCorners(b64, plate);
 
-    // X positions: adaptive EU strip compensation
-    const euExtra = analysis.eu_in_box ? 0.02 : 0.13;  // 2% margin if included, 13% if not
-    const leftX  = Math.max(0, plate.tl.x - pw * euExtra);
-    const rightX = Math.min(1, plate.tr.x + pw * 0.03); // small right margin
+    // Step 2 — Validate GPT corners: center near PR detection, reasonable aspect ratio
+    if (corners) {
+      const ecx = (corners.tl.x + corners.tr.x + corners.br.x + corners.bl.x) / 4;
+      const ecy = (corners.tl.y + corners.tr.y + corners.br.y + corners.bl.y) / 4;
+      const prCx = (plate.tl.x + plate.tr.x) / 2;
+      const prCy = (plate.tl.y + plate.bl.y) / 2;
+      const epw = Math.max(corners.tr.x - corners.tl.x, corners.br.x - corners.bl.x);
+      const eph = Math.max(corners.bl.y - corners.tl.y, corners.br.y - corners.tr.y);
+      const ratio = eph > 0 ? epw / eph : 0;
+      const pw = plate.tr.x - plate.tl.x;
+      const centerOk = Math.abs(ecx - prCx) < pw * 1.5 && Math.abs(ecy - prCy) < pw * 2.0;
+      const ratioOk  = ratio >= 1.5 && ratio <= 12.0;
+      const inBounds = ['tl','tr','br','bl'].every(k =>
+        corners[k].x >= 0 && corners[k].x <= 1 && corners[k].y >= 0 && corners[k].y <= 1
+      );
+      if (!centerOk || !ratioOk || !inBounds) {
+        console.warn(`GPT corners rejected: ratio=${ratio.toFixed(2)} centerOk=${centerOk} inBounds=${inBounds} — using PR fallback`);
+        corners = null;
+      } else {
+        console.log(`GPT corners accepted ✓ ratio=${ratio.toFixed(2)}`);
+      }
+    }
 
-    // Height: perspective trapezoid based on detected angle
-    // PERSP=0.40 calibrated for typical showroom distances (~3-5m from camera)
-    const theta = analysis.angle_deg * Math.PI / 180;
-    const PERSP = 0.40;
-    const nearH = ph * (1 + Math.sin(theta) * PERSP);
-    const farH  = ph * (1 - Math.sin(theta) * PERSP);
-    const leftH  = analysis.near_side === "left"  ? nearH
-                 : analysis.near_side === "right" ? farH : ph;
-    const rightH = analysis.near_side === "right" ? nearH
-                 : analysis.near_side === "left"  ? farH : ph;
-    console.log(`Corners: x=[${leftX.toFixed(3)},${rightX.toFixed(3)}] leftH=${leftH.toFixed(4)} rightH=${rightH.toFixed(4)}`);
+    // Step 3 — Fallback: if GPT failed, build a flat rectangle from PR data
+    if (!corners) {
+      console.log("Fallback: building rectangle from PR bounding box");
+      const pw = plate.tr.x - plate.tl.x;
+      const ph = pw / 4.73;
+      const cx = (plate.tl.x + plate.tr.x) / 2;
+      const cy = (plate.tl.y + plate.bl.y) / 2;
+      corners = {
+        tl: { x: Math.max(0, cx - pw * 0.62), y: Math.max(0, cy - ph * 0.55) },
+        tr: { x: Math.min(1, cx + pw * 0.53), y: Math.max(0, cy - ph * 0.55) },
+        br: { x: Math.min(1, cx + pw * 0.53), y: Math.min(1, cy + ph * 0.55) },
+        bl: { x: Math.max(0, cx - pw * 0.62), y: Math.min(1, cy + ph * 0.55) },
+      };
+    }
 
-    const corners = {
-      tl: { x: leftX,  y: Math.max(0, cy - leftH  * 0.5) },
-      tr: { x: rightX, y: Math.max(0, cy - rightH * 0.5) },
-      br: { x: rightX, y: Math.min(1, cy + rightH * 0.5) },
-      bl: { x: leftX,  y: Math.min(1, cy + leftH  * 0.5) },
-    };
-
-    const px = p => ({ x: p.x * c.width, y: p.y * c.height });
-    const tl = px(corners.tl), tr = px(corners.tr), br = px(corners.br), bl = px(corners.bl);
-    console.log(`Final corners TL(${Math.round(tl.x)},${Math.round(tl.y)}) TR(${Math.round(tr.x)},${Math.round(tr.y)}) BR(${Math.round(br.x)},${Math.round(br.y)}) BL(${Math.round(bl.x)},${Math.round(bl.y)})`);
-    drawPerspective(ctx, logoImg, tl, tr, br, bl);
+    // Step 4 — Convert to canvas pixels and draw
+    const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
+    const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
+    const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
+    console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
+    drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound };
 }
