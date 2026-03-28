@@ -46,28 +46,51 @@ function extractJSON(txt) {
   return null;
 }
 
-// Call GPT-4o Vision to get the exact 4 perspective corners of the plate.
-// Falls back to null on any error — caller handles the fallback.
-async function getGPTCorners(b64, prBox, plateText) {
+// Call GPT-4o Vision to get the perspective angle of the plate.
+// Returns { near_side: "left"|"right"|"none", angle_deg: number } or null on error.
+async function getGPTAngle(b64, plateText) {
   try {
-    console.log("getGPTCorners: calling GPT-4o, plate text:", plateText || "(unknown)");
+    console.log("getGPTAngle: calling GPT-4o, plate text:", plateText || "(unknown)");
     const r = await fetch("/api/corners", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ b64, prBox, plateText }),
+      body: JSON.stringify({ b64, plateText }),
     });
     const data = await r.json();
-    if (!data.found || !data.corners) {
-      console.warn("getGPTCorners: no corners returned", data);
+    if (data.error) {
+      console.warn("getGPTAngle: API error", data);
       return null;
     }
-    const { tl, tr, br, bl } = data.corners;
-    console.log(`GPT-4o corners: TL(${tl.x.toFixed(3)},${tl.y.toFixed(3)}) TR(${tr.x.toFixed(3)},${tr.y.toFixed(3)}) BR(${br.x.toFixed(3)},${br.y.toFixed(3)}) BL(${bl.x.toFixed(3)},${bl.y.toFixed(3)})`);
-    return data.corners;
+    console.log(`GPT-4o angle: near_side="${data.near_side}" angle_deg=${data.angle_deg}`);
+    return { near_side: data.near_side ?? "none", angle_deg: data.angle_deg ?? 0 };
   } catch(e) {
-    console.error("getGPTCorners error:", e);
+    console.error("getGPTAngle error:", e);
     return null;
   }
+}
+
+// Build trapezoid corners from PR bounding box + GPT-4o angle.
+// PR gives us reliable x position and width; GPT-4o gives perspective direction.
+function buildCorners(plate, near_side, angle_deg) {
+  const pw  = plate.tr.x - plate.tl.x;
+  const ph  = pw / 4.73;                          // real French plate ratio 520×110mm
+  const cx  = (plate.tl.x + plate.tr.x) / 2;
+  const cy  = (plate.tl.y + plate.bl.y) / 2;     // PR center — best y estimate
+
+  const theta = (angle_deg ?? 0) * Math.PI / 180;
+  const PERSP = 0.35;
+  const nearH = ph * (1 + Math.sin(theta) * PERSP);
+  const farH  = ph * (1 - Math.sin(theta) * PERSP);
+  const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
+  const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
+
+  console.log(`buildCorners: pw=${pw.toFixed(3)} ph=${ph.toFixed(3)} cx=${cx.toFixed(3)} cy=${cy.toFixed(3)} leftH=${leftH.toFixed(3)} rightH=${rightH.toFixed(3)}`);
+  return {
+    tl: { x: Math.max(0, cx - pw * 0.5), y: Math.max(0, cy - leftH  * 0.5) },
+    tr: { x: Math.min(1, cx + pw * 0.5), y: Math.max(0, cy - rightH * 0.5) },
+    br: { x: Math.min(1, cx + pw * 0.5), y: Math.min(1, cy + rightH * 0.5) },
+    bl: { x: Math.max(0, cx - pw * 0.5), y: Math.min(1, cy + leftH  * 0.5) },
+  };
 }
 
 // Perspective-correct rendering via horizontal strip decomposition.
@@ -141,51 +164,19 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)})`);
+    console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
 
-    // Step 1 — GPT-4o Vision: get exact perspective corners (trapezoid for angled cars)
-    // Pass the plate text from PR so GPT-4o searches for the exact registration number
-    let corners = await getGPTCorners(b64, plate, plate.plateText);
+    // Step 1 — GPT-4o: detect perspective angle only (near_side + angle_deg)
+    const gpt = await getGPTAngle(b64, plate.plateText);
 
-    // Step 2 — Validate GPT corners: center near PR detection, reasonable aspect ratio
-    if (corners) {
-      const ecx = (corners.tl.x + corners.tr.x + corners.br.x + corners.bl.x) / 4;
-      const ecy = (corners.tl.y + corners.tr.y + corners.br.y + corners.bl.y) / 4;
-      const prCx = (plate.tl.x + plate.tr.x) / 2;
-      const prCy = (plate.tl.y + plate.bl.y) / 2;
-      const epw = Math.max(corners.tr.x - corners.tl.x, corners.br.x - corners.bl.x);
-      const eph = Math.max(corners.bl.y - corners.tl.y, corners.br.y - corners.tr.y);
-      const ratio = eph > 0 ? epw / eph : 0;
-      const pw = plate.tr.x - plate.tl.x;
-      const centerOk = Math.abs(ecx - prCx) < pw * 1.5 && Math.abs(ecy - prCy) < pw * 2.0;
-      const ratioOk  = ratio >= 1.5 && ratio <= 12.0;
-      const inBounds = ['tl','tr','br','bl'].every(k =>
-        corners[k].x >= 0 && corners[k].x <= 1 && corners[k].y >= 0 && corners[k].y <= 1
-      );
-      if (!centerOk || !ratioOk || !inBounds) {
-        console.warn(`GPT corners rejected: ratio=${ratio.toFixed(2)} centerOk=${centerOk} inBounds=${inBounds} — using PR fallback`);
-        corners = null;
-      } else {
-        console.log(`GPT corners accepted ✓ ratio=${ratio.toFixed(2)}`);
-      }
-    }
+    // Step 2 — Build trapezoid: PR gives position, GPT-4o gives angle
+    // Fallback to flat (angle=0) if GPT-4o fails
+    const near_side  = gpt?.near_side  ?? "none";
+    const angle_deg  = gpt?.angle_deg  ?? 0;
+    console.log(`Using angle: near_side="${near_side}" angle_deg=${angle_deg}`);
+    const corners = buildCorners(plate, near_side, angle_deg);
 
-    // Step 3 — Fallback: if GPT failed, build a flat rectangle from PR data
-    if (!corners) {
-      console.log("Fallback: building rectangle from PR bounding box");
-      const pw = plate.tr.x - plate.tl.x;
-      const ph = pw / 4.73;
-      const cx = (plate.tl.x + plate.tr.x) / 2;
-      const cy = (plate.tl.y + plate.bl.y) / 2;
-      corners = {
-        tl: { x: Math.max(0, cx - pw * 0.62), y: Math.max(0, cy - ph * 0.55) },
-        tr: { x: Math.min(1, cx + pw * 0.53), y: Math.max(0, cy - ph * 0.55) },
-        br: { x: Math.min(1, cx + pw * 0.53), y: Math.min(1, cy + ph * 0.55) },
-        bl: { x: Math.max(0, cx - pw * 0.62), y: Math.min(1, cy + ph * 0.55) },
-      };
-    }
-
-    // Step 4 — Convert to canvas pixels and draw
+    // Step 3 — Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
     const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);

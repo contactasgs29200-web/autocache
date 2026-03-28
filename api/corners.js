@@ -26,23 +26,20 @@ export default async function handler(req, res) {
   if (!b64)    return res.status(400).json({ error: 'Missing b64 image' });
 
   const plateHint = plateText
-    ? `The registration number on the plate is: "${plateText.toUpperCase()}" — look for this exact text on the plate.`
-    : `Look for the rectangular plate with a registration number (letters and numbers, e.g. AB-123-CD format).`;
+    ? `The registration number on this plate is "${plateText.toUpperCase()}".`
+    : `There is a license plate on the front bumper.`;
 
-  const prompt = `This is a car photo. Find the vehicle LICENSE PLATE and return the exact coordinates of its 4 physical corners.
+  const prompt = `Car photo. ${plateHint}
 
-${plateHint}
-
-IMPORTANT:
-- The license plate is at the BOTTOM of the front bumper, near ground level — NOT the grill, badge, or logo
-- If the car is at an angle, the plate appears as a TRAPEZOID (one side taller) — return the actual angled corners, NOT a bounding box rectangle
-- Include the blue EU identification strip on the left edge
-- Coordinates are fractions of image width (x) and height (y), from 0.0 to 1.0
+Looking at this license plate, answer these 2 questions:
+1. Which EDGE of the plate appears TALLER in the photo because it is physically closer to the camera?
+   - "left"  = left edge is taller (car faces right in image)
+   - "right" = right edge is taller (car faces left in image)
+   - "none"  = plate looks flat / car is straight-on
+2. How many degrees is the car rotated from straight-on? (0=straight, 20=slight angle, 40=strong angle)
 
 Return ONLY this JSON, no other text:
-{"tl":{"x":0.0,"y":0.0},"tr":{"x":0.0,"y":0.0},"br":{"x":0.0,"y":0.0},"bl":{"x":0.0,"y":0.0}}
-
-tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left of the license plate.`;
+{"near_side":"left|right|none","angle_deg":0}`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -83,16 +80,13 @@ tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left of the license plate.
     const raw = extractJSON(text);
     if (!raw) return res.status(500).json({ error: 'No JSON in GPT-4o response', text });
 
-    const corners = JSON.parse(raw);
-    const pts = ['tl','tr','br','bl'];
-    for (const k of pts) {
-      if (!corners[k] || typeof corners[k].x !== 'number' || typeof corners[k].y !== 'number') {
-        return res.status(500).json({ error: `Invalid corner: ${k}`, corners });
-      }
+    const angle = JSON.parse(raw);
+    if (typeof angle.near_side !== 'string' || typeof angle.angle_deg !== 'number') {
+      return res.status(500).json({ error: 'Invalid angle response from GPT-4o', angle });
     }
 
-    console.log('GPT-4o corners:', JSON.stringify(corners));
-    return res.json({ found: true, corners });
+    console.log('GPT-4o angle:', JSON.stringify(angle));
+    return res.json({ near_side: angle.near_side, angle_deg: angle.angle_deg });
 
   } catch (e) {
     console.error('corners.js error:', e);
