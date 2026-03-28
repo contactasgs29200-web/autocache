@@ -465,24 +465,52 @@ export default function AutoCache() {
   };
 
   // Sauvegarde le rognage dans le résultat (pour "Tout télécharger")
-  const saveCrop = () => {
+  const saveCrop = async () => {
     if (!lightbox) return;
-    const img = new Image();
-    img.onload = () => {
-      const sx = Math.round(cropBox.x * img.naturalWidth);
-      const sy = Math.round(cropBox.y * img.naturalHeight);
-      const sw = Math.round(cropBox.w * img.naturalWidth);
-      const sh = Math.round(cropBox.h * img.naturalHeight);
-      const canvas = document.createElement('canvas');
-      canvas.width = sw; canvas.height = sh;
-      canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-      const croppedDataURL = canvas.toDataURL('image/jpeg', 0.95);
-      const updated = { ...lightbox, processed: croppedDataURL, cropped: true };
-      setResults(prev => prev.map(r => r === lightbox ? updated : r));
-      setLightbox(updated);
-      setCropMode(false);
+    const { x, y, w, h } = cropBox;
+
+    // Rogne un dataURL selon la zone normalisée (x,y,w,h)
+    const cropURL = async (src) => {
+      const img = await loadImg(src);
+      const sx = Math.round(x * img.naturalWidth);
+      const sy = Math.round(y * img.naturalHeight);
+      const sw = Math.round(w * img.naturalWidth);
+      const sh = Math.round(h * img.naturalHeight);
+      const c = document.createElement('canvas');
+      c.width = sw; c.height = sh;
+      c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      return c.toDataURL('image/jpeg', 0.95);
     };
-    img.src = lightbox.processed;
+
+    const croppedProcessed = await cropURL(lightbox.processed);
+    const croppedBase = lightbox.baseDataURL ? await cropURL(lightbox.baseDataURL) : null;
+
+    // Recalcule les coins dans le repère de l'image rognée
+    let newCorners = null;
+    if (lightbox.corners) {
+      const remap = p => ({
+        x: Math.max(0, Math.min(1, (p.x - x) / w)),
+        y: Math.max(0, Math.min(1, (p.y - y) / h)),
+      });
+      newCorners = {
+        tl: remap(lightbox.corners.tl),
+        tr: remap(lightbox.corners.tr),
+        br: remap(lightbox.corners.br),
+        bl: remap(lightbox.corners.bl),
+      };
+    }
+
+    const updated = {
+      ...lightbox,
+      processed: croppedProcessed,
+      baseDataURL: croppedBase ?? lightbox.baseDataURL,
+      corners: newCorners,
+      cropped: true,
+    };
+    setResults(prev => prev.map(r => r === lightbox ? updated : r));
+    setLightbox(updated);
+    setAdjustCorners(newCorners); // synchronise les points oranges
+    setCropMode(false);
   };
 
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
@@ -859,19 +887,24 @@ export default function AutoCache() {
             {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
             {adjustMode && adjustCorners && (
               <div style={{ position: "absolute", inset: 0, cursor: adjustDrag ? "grabbing" : "crosshair" }}>
-                {/* Contour du trapèze */}
-                <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible" }}>
+                {/* Contour du trapèze — viewBox 0-100 = % de l'image, pas d'unité % en SVG */}
+                <svg
+                  viewBox="0 0 100 100"
+                  preserveAspectRatio="none"
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                >
                   <polygon
                     points={[
-                      `${adjustCorners.tl.x * 100}%,${adjustCorners.tl.y * 100}%`,
-                      `${adjustCorners.tr.x * 100}%,${adjustCorners.tr.y * 100}%`,
-                      `${adjustCorners.br.x * 100}%,${adjustCorners.br.y * 100}%`,
-                      `${adjustCorners.bl.x * 100}%,${adjustCorners.bl.y * 100}%`,
+                      `${adjustCorners.tl.x * 100},${adjustCorners.tl.y * 100}`,
+                      `${adjustCorners.tr.x * 100},${adjustCorners.tr.y * 100}`,
+                      `${adjustCorners.br.x * 100},${adjustCorners.br.y * 100}`,
+                      `${adjustCorners.bl.x * 100},${adjustCorners.bl.y * 100}`,
                     ].join(" ")}
                     fill="rgba(232,160,32,0.08)"
                     stroke="#e8a020"
-                    strokeWidth="1.5"
-                    strokeDasharray="6 4"
+                    strokeWidth="0.4"
+                    strokeDasharray="2.5 1.5"
+                    vectorEffect="non-scaling-stroke"
                   />
                 </svg>
                 {/* Points de coin draggables */}
