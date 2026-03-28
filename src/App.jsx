@@ -98,31 +98,39 @@ function extractJSON(txt) {
 // Most dealer photos have the car at a 3/4 angle — apply a generous minimum.
 // plate center > 0.5 → car faces right (hood right) → near_side = "left"
 // plate center < 0.5 → car faces left  (hood left)  → near_side = "right"
+// Fallback heuristique : utilisé uniquement si GPT-4o échoue.
+// Pas de minimum forcé : plaque centrée → vue de face → 0°.
 function estimateAngleFromPosition(plate) {
   const cx = (plate.tl.x + plate.tr.x) / 2;
-  const offset = Math.abs(cx - 0.5);            // 0 = centered, 0.5 = far edge
+  const offset = Math.abs(cx - 0.5);
+  if (offset < 0.06) return { near_side: "none", angle_deg: 0 }; // vue de face
   const near_side = cx >= 0.5 ? "left" : "right";
-  // Minimum 20°, grows with offset — caps at 38°
-  const angle_deg = Math.round(Math.min(38, 20 + offset * 72));
+  const angle_deg = Math.round(Math.min(35, offset * 70));
   return { near_side, angle_deg };
 }
 
 // Build trapezoid corners from PR bounding box + perspective angle.
-// PR gives us reliable x position and width; angle gives perspective direction.
+// Utilise la HAUTEUR RÉELLE détectée par PlateRecognizer (plus fiable que le ratio théorique).
+// PERSP réduit à 0.40 : la plaque réelle ne se déforme pas autant que 0.85 le suggérait.
 function buildCorners(plate, near_side, angle_deg) {
   const pw  = plate.tr.x - plate.tl.x;
-  const ph  = pw / 4.73;                          // real French plate ratio 520×110mm
   const cx  = (plate.tl.x + plate.tr.x) / 2;
-  const cy  = (plate.tl.y + plate.bl.y) / 2;     // PR center — best y estimate
+  const cy  = (plate.tl.y + plate.bl.y) / 2;
 
-  const theta = angle_deg * Math.PI / 180;
-  const PERSP = 0.85;                             // perspective exaggeration factor
-  const nearH = ph * (1 + Math.sin(theta) * PERSP);
-  const farH  = ph * (1 - Math.sin(theta) * PERSP);
+  // Hauteur : on fait confiance à PlateRecognizer, mais on sanity-check avec le ratio 520×110mm
+  const phDetected  = plate.bl.y - plate.tl.y;
+  const phTheory    = pw / 4.73;
+  // Clamp : jamais moins de 80% du théorique, jamais plus de 160% (évite les boîtes aberrantes)
+  const ph = Math.max(phTheory * 0.80, Math.min(phDetected, phTheory * 1.60));
+
+  const theta  = angle_deg * Math.PI / 180;
+  const PERSP  = 0.40;                              // facteur de perspective réaliste (était 0.85)
+  const nearH  = ph * (1 + Math.sin(theta) * PERSP);
+  const farH   = ph * (1 - Math.sin(theta) * PERSP);
   const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
   const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
 
-  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° leftH=${leftH.toFixed(4)} rightH=${rightH.toFixed(4)} ratio=${(leftH/rightH).toFixed(2)}x`, "color:orange;font-weight:bold");
+  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° ph=${ph.toFixed(4)} (det=${phDetected.toFixed(4)} th=${phTheory.toFixed(4)}) ratio=${(leftH/rightH).toFixed(2)}x`, "color:orange;font-weight:bold");
   return {
     tl: { x: Math.max(0, cx - pw * 0.5), y: Math.max(0, cy - leftH  * 0.5) },
     tr: { x: Math.min(1, cx + pw * 0.5), y: Math.max(0, cy - rightH * 0.5) },
