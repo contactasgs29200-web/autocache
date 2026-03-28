@@ -158,20 +158,22 @@ async function processPhoto(photoFile, logoImg, adj) {
   let plateFound = false;
   if (plate.found && logoImg) {
     plateFound = true;
-    // Step 1 — PR gives reliable center + width; derive height from real plate ratio 4.73:1
-    const cx = (plate.tl.x + plate.tr.x) / 2;
-    const cy = (plate.tl.y + plate.bl.y) / 2;
+    // Step 1 — PR gives reliable position + width; derive height from real plate ratio 4.73:1
+    // IMPORTANT: PR's bounding box bottom (bl.y) includes bumper below the plate — unreliable.
+    // PR's top (tl.y) is reliable. We anchor cy to the TOP of the PR box + half the plate height.
     const pw = plate.tr.x - plate.tl.x;
     const ph = pw / 4.73;
+    const cx = (plate.tl.x + plate.tr.x) / 2;
+    const cy = plate.tl.y + ph / 2;   // anchor to PR top, NOT center of PR box
     console.log(`PR seed: center(${cx.toFixed(3)},${cy.toFixed(3)}) pw=${pw.toFixed(3)} ph=${ph.toFixed(3)}`);
 
     // Step 2 — Ask Claude which side is closer, then compute the trapezoid mathematically.
     // Claude answers a simple perception question (reliable) instead of pixel coordinates (unreliable).
     const angleInfo = await getPlateAngle(b64, cx, cy);
     const theta = angleInfo.angle_deg * Math.PI / 180;
-    // Perspective scale factor: empirically calibrated for typical car-photo distances.
-    // At 35° the near edge appears ~15% taller than the far edge.
-    const PERSP = 0.25;
+    // Perspective scale factor: calibrated for typical showroom distances (~3-5m).
+    // At 35° → near edge ~20% taller than far edge. At 45° → ~28% taller.
+    const PERSP = 0.35;
     const nearH = ph * (1 + Math.sin(theta) * PERSP);  // taller side (closer to camera)
     const farH  = ph * (1 - Math.sin(theta) * PERSP);  // shorter side (farther from camera)
     const leftH  = angleInfo.near_side === "left"  ? nearH
