@@ -69,8 +69,19 @@ async function getGPTAngle(b64, plateText) {
   }
 }
 
-// Build trapezoid corners from PR bounding box + GPT-4o angle.
-// PR gives us reliable x position and width; GPT-4o gives perspective direction.
+// Heuristic fallback: estimate car angle from plate's horizontal position.
+// Cars in 3/4 view have their plate offset from image center.
+// plate center > 0.55 → car faces right (hood right, near_side=left)
+// plate center < 0.45 → car faces left  (hood left,  near_side=right)
+function estimateAngleFromPosition(plate) {
+  const cx = (plate.tl.x + plate.tr.x) / 2;
+  if (cx > 0.55) return { near_side: "left",  angle_deg: 22 };
+  if (cx < 0.45) return { near_side: "right", angle_deg: 22 };
+  return { near_side: "none", angle_deg: 0 };
+}
+
+// Build trapezoid corners from PR bounding box + perspective angle.
+// PR gives us reliable x position and width; angle gives perspective direction.
 function buildCorners(plate, near_side, angle_deg) {
   const pw  = plate.tr.x - plate.tl.x;
   const ph  = pw / 4.73;                          // real French plate ratio 520×110mm
@@ -78,13 +89,13 @@ function buildCorners(plate, near_side, angle_deg) {
   const cy  = (plate.tl.y + plate.bl.y) / 2;     // PR center — best y estimate
 
   const theta = (angle_deg ?? 0) * Math.PI / 180;
-  const PERSP = 0.35;
+  const PERSP = 0.45;                             // perspective exaggeration factor
   const nearH = ph * (1 + Math.sin(theta) * PERSP);
   const farH  = ph * (1 - Math.sin(theta) * PERSP);
   const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
   const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
 
-  console.log(`buildCorners: pw=${pw.toFixed(3)} ph=${ph.toFixed(3)} cx=${cx.toFixed(3)} cy=${cy.toFixed(3)} leftH=${leftH.toFixed(3)} rightH=${rightH.toFixed(3)}`);
+  console.log(`buildCorners: pw=${pw.toFixed(3)} ph=${ph.toFixed(3)} cx=${cx.toFixed(3)} cy=${cy.toFixed(3)} near_side=${near_side} angle=${angle_deg}° leftH=${leftH.toFixed(3)} rightH=${rightH.toFixed(3)}`);
   return {
     tl: { x: Math.max(0, cx - pw * 0.5), y: Math.max(0, cy - leftH  * 0.5) },
     tr: { x: Math.min(1, cx + pw * 0.5), y: Math.max(0, cy - rightH * 0.5) },
@@ -169,11 +180,20 @@ async function processPhoto(photoFile, logoImg, adj) {
     // Step 1 — GPT-4o: detect perspective angle only (near_side + angle_deg)
     const gpt = await getGPTAngle(b64, plate.plateText);
 
-    // Step 2 — Build trapezoid: PR gives position, GPT-4o gives angle
-    // Fallback to flat (angle=0) if GPT-4o fails
-    const near_side  = gpt?.near_side  ?? "none";
-    const angle_deg  = gpt?.angle_deg  ?? 0;
-    console.log(`Using angle: near_side="${near_side}" angle_deg=${angle_deg}`);
+    // Step 2 — Determine angle: GPT-4o if useful, else heuristic from plate position
+    let near_side, angle_deg;
+    if (gpt && gpt.near_side !== "none" && gpt.angle_deg > 5) {
+      // GPT-4o gave a real angle — use it
+      near_side = gpt.near_side;
+      angle_deg = gpt.angle_deg;
+      console.log(`Using GPT-4o angle: near_side="${near_side}" angle_deg=${angle_deg}`);
+    } else {
+      // GPT-4o returned flat/none — fall back to plate position heuristic
+      const est = estimateAngleFromPosition(plate);
+      near_side = est.near_side;
+      angle_deg = est.angle_deg;
+      console.log(`GPT-4o returned flat (${JSON.stringify(gpt)}) — using position heuristic: near_side="${near_side}" angle_deg=${angle_deg}`);
+    }
     const corners = buildCorners(plate, near_side, angle_deg);
 
     // Step 3 — Convert to canvas pixels and draw
