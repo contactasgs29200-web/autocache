@@ -356,8 +356,8 @@ function makeShowroomBackground(index, W, H) {
 
 // Miniatures pré-calculées une fois (évite de régénérer à chaque rendu)
 // Images réelles de showroom (null = fond généré par canvas)
-const SHOWROOM_IMAGES = ['/showrooms/luxury.jpg', null, null, null];
-const SHOWROOM_LABELS = ['Luxury', 'Nuit', 'Sunset', 'Blanc'];
+const SHOWROOM_IMAGES = ['/showrooms/luxury.jpg', '/showrooms/blanc.jpg', null, null];
+const SHOWROOM_LABELS = ['Luxury', 'Showroom Blanc', 'Sunset', 'Nuit'];
 const SHOWROOM_THUMBS = [0, 1, 2, 3].map(i => SHOWROOM_IMAGES[i] ?? makeShowroomBackground(i, 160, 90));
 
 // Redimensionne un dataUrl à maxPx max (côté le plus long) pour alléger l'envoi API
