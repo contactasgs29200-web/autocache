@@ -355,8 +355,10 @@ function makeShowroomBackground(index, W, H) {
 }
 
 // Miniatures pré-calculées une fois (évite de régénérer à chaque rendu)
-const SHOWROOM_THUMBS = [0, 1, 2, 3].map(i => makeShowroomBackground(i, 160, 90));
-const SHOWROOM_LABELS = ['Studio', 'Nuit', 'Sunset', 'Blanc'];
+// Images réelles de showroom (null = fond généré par canvas)
+const SHOWROOM_IMAGES = ['/showrooms/luxury.jpg', null, null, null];
+const SHOWROOM_LABELS = ['Luxury', 'Nuit', 'Sunset', 'Blanc'];
+const SHOWROOM_THUMBS = [0, 1, 2, 3].map(i => SHOWROOM_IMAGES[i] ?? makeShowroomBackground(i, 160, 90));
 
 // Redimensionne un dataUrl à maxPx max (côté le plus long) pour alléger l'envoi API
 function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
@@ -697,7 +699,7 @@ export default function AutoCache() {
     const showroomBgDataUrl = showroomEnabled
       ? (showroomSetupBg === 'custom' && showroomSetupCustomBg
           ? showroomSetupCustomBg
-          : makeShowroomBackground(showroomSetupBg, 1600, 900))
+          : (SHOWROOM_IMAGES[showroomSetupBg] ?? makeShowroomBackground(showroomSetupBg, 1600, 900)))
       : null;
 
     for (let i = 0; i < photos.length; i++) {
