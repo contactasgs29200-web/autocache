@@ -603,14 +603,6 @@ export default function AutoCache() {
   const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
   const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
 
-  // ── Mode Showroom (lightbox) ───────────────────────────────────────────────
-  const [showroomMode,     setShowroomMode]     = useState(false);
-  const [showroomBg,       setShowroomBg]        = useState(0);
-  const [showroomLoading,  setShowroomLoading]   = useState(false);
-  const [showroomCustomBg, setShowroomCustomBg]  = useState(null);
-  const showroomCanvasRef = useRef(null);
-  const showroomUploadRef = useRef(null);
-
   // ── Showroom Setup (page principale) ──────────────────────────────────────
   const [showroomEnabled,      setShowroomEnabled]      = useState(false);
   const [showroomSetupBg,      setShowroomSetupBg]      = useState(0);
@@ -710,14 +702,12 @@ export default function AutoCache() {
     setLightbox(r);
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
-    setShowroomMode(false); setShowroomBg(0); setShowroomLoading(false); setShowroomCustomBg(null);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
   const closeLightbox = () => {
     setLightbox(null);
     setCropMode(false); setCropDrag(null);
     setAdjustMode(false); setAdjustDrag(null);
-    setShowroomMode(false); setShowroomLoading(false);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
 
@@ -966,27 +956,6 @@ export default function AutoCache() {
     })();
     return () => { cancelled = true; };
   }, [adjustMode, lightbox?.baseDataURL]);
-
-  // ── Showroom : re-composite dès que bg ou cutout change ──────────────────
-  useEffect(() => {
-    if (!showroomMode || !lightbox?.cutoutDataURL) return;
-    let cancelled = false;
-    const bgDataUrl = showroomBg === 'custom' && showroomCustomBg
-      ? showroomCustomBg
-      : makeShowroomBackground(showroomBg, 1600, 900);
-    (async () => {
-      const canvas = showroomCanvasRef.current;
-      if (!canvas || cancelled) return;
-      canvas.width = 1600; canvas.height = 900;
-      const composited = await compositeCarOnBg(lightbox.cutoutDataURL, bgDataUrl, 1600, 900);
-      if (cancelled) return;
-      const img = await loadImg(composited);
-      if (cancelled) return;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-    })();
-    return () => { cancelled = true; };
-  }, [showroomMode, showroomBg, showroomCustomBg, lightbox?.cutoutDataURL]);
 
   if (authLoading) return (
     <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1319,7 +1288,7 @@ export default function AutoCache() {
       {/* ── Lightbox + rognage ──────────────────────────────────── */}
       {lightbox && (
         <div
-          onClick={cropMode || adjustMode || showroomMode ? undefined : closeLightbox}
+          onClick={cropMode || adjustMode ? undefined : closeLightbox}
           onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
           onMouseUp={() => {
             setCropDrag(null);
@@ -1368,33 +1337,6 @@ export default function AutoCache() {
                 >⊹ Ajuster</button>
               )}
 
-              {/* Bouton Showroom */}
-              <button
-                onClick={async e => {
-                  e.stopPropagation();
-                  if (showroomMode) { setShowroomMode(false); return; }
-                  setCropMode(false); setCropDrag(null);
-                  setAdjustMode(false); setAdjustDrag(null);
-                  setShowroomMode(true);
-                  if (!lightbox.cutoutDataURL) {
-                    setShowroomLoading(true);
-                    try {
-                      const cutout = await removeBackground(lightbox.processed);
-                      const updated = { ...lightbox, cutoutDataURL: cutout };
-                      setResults(prev => prev.map(r => r === lightbox ? updated : r));
-                      setLightbox(updated);
-                    } catch(err) {
-                      console.error('removeBackground error:', err);
-                      alert('Erreur suppression fond : ' + err.message);
-                      setShowroomMode(false);
-                    } finally {
-                      setShowroomLoading(false);
-                    }
-                  }
-                }}
-                style={{ background: showroomMode ? "#f26522" : "#181818", color: showroomMode ? "#090909" : "#f26522", border: `1px solid ${showroomMode ? "#f26522" : "#2a2a2a"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
-              >⬡ SHOWROOM</button>
-
               {/* Télécharger / Fermer ajustement */}
               {adjustMode ? (
                 <button
@@ -1410,22 +1352,7 @@ export default function AutoCache() {
                   onClick={e => { e.stopPropagation(); downloadCropped(); }}
                   style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >⬇ Télécharger rogné</button>
-              </>) : showroomMode ? (
-                <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    if (showroomLoading) return;
-                    const canvas = showroomCanvasRef.current;
-                    if (!canvas) return;
-                    const a = document.createElement('a');
-                    a.href = canvas.toDataURL('image/jpeg', 0.94);
-                    a.download = `showroom_${lightbox.name || 'autocache'}.jpg`;
-                    a.click();
-                  }}
-                  disabled={showroomLoading}
-                  style={{ background: showroomLoading ? "#555" : "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: showroomLoading ? "wait" : "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
-                >{showroomLoading ? "◌ TRAITEMENT..." : "⬇ TÉLÉCHARGER SHOWROOM"}</button>
-              ) : (
+              </>) : (
                 <button
                   onClick={e => { e.stopPropagation(); downloadOne(lightbox); }}
                   style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
@@ -1464,12 +1391,7 @@ export default function AutoCache() {
               display: "inline-block",
               lineHeight: 0,
             }}>
-            {showroomMode ? (
-              <canvas
-                ref={showroomCanvasRef}
-                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh" }}
-              />
-            ) : adjustMode ? (
+            {adjustMode ? (
               <canvas
                 ref={adjustCanvasRef}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh" }}
@@ -1589,62 +1511,12 @@ export default function AutoCache() {
             </div>
           )}
 
-          {/* ── Sélecteur de fond Showroom ── */}
-          {showroomMode && (
-            <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: "min(1100px, 100vw - 32px)", marginTop: 10, padding: "12px 16px", background: "#0f0f0f", border: "1px solid #222", borderRadius: 3 }}>
-              {showroomLoading ? (
-                <div style={{ textAlign: "center", padding: "14px 0", fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 3 }}>
-                  ◌ SUPPRESSION DU FOND EN COURS...
-                </div>
-              ) : (
-                <>
-                  <div style={{ fontSize: 9, letterSpacing: 3, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
-                    {[0, 1, 2, 3].map(idx => {
-                      const isActive = showroomBg === idx;
-                      return (
-                        <div key={idx} onClick={() => setShowroomBg(idx)}
-                          style={{ cursor: "pointer", border: `2px solid ${isActive ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 82, flexShrink: 0, transition: "border-color 0.15s" }}>
-                          <img src={SHOWROOM_THUMBS[idx]} style={{ display: "block", width: "100%", height: 46, objectFit: "cover" }} />
-                          <div style={{ background: isActive ? "#f26522" : "#141414", color: isActive ? "#090909" : "#555", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "3px 0", textTransform: "uppercase" }}>
-                            {SHOWROOM_LABELS[idx]}
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {/* Upload fond custom */}
-                    <div onClick={() => showroomUploadRef.current?.click()}
-                      style={{ cursor: "pointer", border: `2px solid ${showroomBg === 'custom' ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 82, flexShrink: 0, display: "flex", flexDirection: "column", background: "#111", transition: "border-color 0.15s" }}>
-                      {showroomCustomBg
-                        ? <img src={showroomCustomBg} style={{ display: "block", width: "100%", height: 46, objectFit: "cover" }} />
-                        : <div style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#333" }}>+</div>
-                      }
-                      <div style={{ background: showroomBg === 'custom' ? "#f26522" : "#141414", color: showroomBg === 'custom' ? "#090909" : "#555", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "3px 0", textTransform: "uppercase" }}>
-                        Custom
-                      </div>
-                    </div>
-                    <input ref={showroomUploadRef} type="file" accept="image/*" style={{ display: "none" }}
-                      onChange={e => {
-                        const f = e.target.files?.[0]; if (!f) return;
-                        const reader = new FileReader();
-                        reader.onload = ev => { setShowroomCustomBg(ev.target.result); setShowroomBg('custom'); };
-                        reader.readAsDataURL(f);
-                        e.target.value = '';
-                      }} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
           {/* ── Pied ── */}
           <div style={{ marginTop: 10, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
             {adjustMode
               ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
               ? "Inclinaison · Glisser la zone · Coins oranges pour redimensionner · 💾 Sauvegarder"
-              : showroomMode
-              ? "Choisir un fond · Importer votre propre image · ⬇ Télécharger le résultat"
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
