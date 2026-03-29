@@ -1261,8 +1261,9 @@ export default function AutoCache() {
                   />
                 </svg>
                 {/* Points de coin draggables */}
-                {[["tl","nwse-resize"],["tr","nesw-resize"],["br","nwse-resize"],["bl","nesw-resize"]].map(([corner, cur]) => (
-                  <div
+                {[["tl","nwse-resize"],["tr","nesw-resize"],["br","nwse-resize"],["bl","nesw-resize"]].map(([corner, cur]) => {
+                  const isDragging = adjustDrag?.corner === corner;
+                  return <div
                     key={corner}
                     onMouseDown={e => startAdjustDrag(e, corner)}
                     style={{
@@ -1270,16 +1271,17 @@ export default function AutoCache() {
                       left: `${adjustCorners[corner].x * 100}%`,
                       top:  `${adjustCorners[corner].y * 100}%`,
                       width: 12, height: 12,
-                      background: "#e8a020",
-                      border: "2px solid #fff",
+                      background: isDragging ? "transparent" : "#e8a020",
+                      border: isDragging ? "2px solid rgba(255,255,255,0.25)" : "2px solid #fff",
                       borderRadius: "50%",
                       transform: "translate(-50%,-50%)",
                       cursor: cur,
                       zIndex: 10,
-                      boxShadow: "0 0 5px rgba(0,0,0,0.8)",
+                      boxShadow: isDragging ? "none" : "0 0 5px rgba(0,0,0,0.8)",
+                      transition: "background 0.05s, border 0.05s",
                     }}
-                  />
-                ))}
+                  />;
+                })}
               </div>
             )}
 
