@@ -378,8 +378,8 @@ function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
 
 // Suppression de fond via /api/removebg
 async function removeBackground(dataUrl) {
-  // Réduit à 1024px max pour rester sous la limite 4.5 MB de Vercel
-  const small = await shrinkDataUrl(dataUrl, 1024, 0.88);
+  // Réduit à 1600px max — qualité 0.95 : bon compromis netteté / limite Vercel 4.5 MB
+  const small = await shrinkDataUrl(dataUrl, 1600, 0.95);
   const b64 = small.split(',')[1];
   const r = await fetch('/api/removebg', {
     method: 'POST',
@@ -403,6 +403,8 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bgImg, 0, 0, W, H);
   const scale = Math.min((W * 0.92) / carImg.width, (H * 0.78) / carImg.height);
   const cw = carImg.width * scale;
@@ -410,6 +412,8 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const carX = (W - cw) / 2 + offsetX;
   const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
   ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.shadowColor = 'rgba(0,0,0,0.55)';
   ctx.shadowBlur  = Math.round(W * 0.025);
   ctx.shadowOffsetY = Math.round(H * 0.012);
@@ -428,7 +432,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
-  return c.toDataURL('image/jpeg', 0.94);
+  return c.toDataURL('image/jpeg', 0.97);
 }
 
 // Détecte l'orientation réelle de la voiture via GPT-4o Vision (detail:low, ~$0.001)
@@ -881,6 +885,22 @@ export default function AutoCache() {
     setAdjustCorners(newCorners);
     setCropAngle(180);
     setCropMode(false);
+    // Régénère le showroom sur la base rognée si showroom actif
+    if (lightbox.showroomBgUrl) {
+      const snap = { ...updated };
+      const nudge = showroomNudge;
+      (async () => {
+        try {
+          const cutout = await removeBackground(snap.baseDataURL);
+          const logoImgEl = await loadImg(snap.logoPreview);
+          const newShowroom = await compositeCarOnBg(cutout, snap.showroomBgUrl, 1600, 900,
+            logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y);
+          const withSR = { ...snap, cutoutDataURL: cutout, showroomDataURL: newShowroom };
+          setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
+          setLightbox(prev => prev?.name === snap.name ? withSR : prev);
+        } catch(e) { console.error('showroom regen (crop):', e); }
+      })();
+    }
   };
 
   // ── Rendu live du canvas de rognage ──────────────────────────────────────
@@ -1400,6 +1420,19 @@ export default function AutoCache() {
                 const updated = { ...lightbox, processed: newDataURL, corners: latestCorners };
                 setResults(prev => prev.map(r => r === lightbox ? updated : r));
                 setLightbox(updated);
+                // Régénère le showroom avec les nouveaux coins (sans appel remove.bg)
+                if (lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
+                  const snap = { ...lightbox, corners: latestCorners };
+                  const nudge = showroomNudge;
+                  loadImg(snap.logoPreview).then(logoImgEl =>
+                    compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 1600, 900,
+                      logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y)
+                  ).then(newShowroom => {
+                    const withSR = { ...updated, showroomDataURL: newShowroom };
+                    setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
+                    setLightbox(prev => prev?.name === snap.name ? withSR : prev);
+                  }).catch(e => console.error('showroom regen (adjust):', e));
+                }
               }
             }
             setAdjustDrag(null);
