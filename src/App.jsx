@@ -389,7 +389,7 @@ async function removeBackground(dataUrl) {
     throw new Error(`remove.bg HTTP ${r.status}: ${txt.slice(0, 120)}`);
   }
   const data = await r.json();
-  if (!data.ok) throw new Error(data.error || 'remove.bg failed');
+  if (!data.ok) throw new Error(`${data.error || 'remove.bg failed'}${data.detail ? ' — ' + data.detail : ''}`);
   return `data:image/png;base64,${data.b64png}`;
 }
 

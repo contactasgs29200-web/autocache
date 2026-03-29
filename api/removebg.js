@@ -19,8 +19,9 @@ export default async function handler(req, res) {
 
   try {
     const formData = new FormData();
-    formData.append('image_base64', b64);
+    formData.append('image_file_b64', b64);
     formData.append('size', 'auto');
+    formData.append('type', 'car');
 
     const response = await fetch('https://api.remove.bg/v1.0/removebg', {
       method: 'POST',
