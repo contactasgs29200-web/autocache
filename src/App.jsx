@@ -688,7 +688,7 @@ export default function AutoCache() {
     setTab("results");
   };
 
-  const downloadOne = r => { const a = document.createElement("a"); a.href = r.processed; a.download = `autocache_${r.name}`; a.click(); };
+  const downloadOne = r => { const a = document.createElement("a"); a.href = r.showroomDataURL || r.processed; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click(); };
   const downloadAll = () => results.forEach(downloadOne);
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
   const canStart = logo && photos.length > 0 && !processing;
@@ -1261,7 +1261,7 @@ export default function AutoCache() {
                   {results.map((r, i) => (
                     <div key={i} style={{ background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
-                        <img src={r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#111", display: "block" }} />
+                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#111", display: "block" }} />
                         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
                           <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>
                             {r.plateFound ? "✓ PLAQUE CACHÉE" : "⚠ NON DÉTECTÉE"}
@@ -1404,7 +1404,7 @@ export default function AutoCache() {
             ) : (
               <img
                 ref={cropImgRef}
-                src={lightbox.processed}
+                src={lightbox.showroomDataURL || lightbox.processed}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
               />
             )}
