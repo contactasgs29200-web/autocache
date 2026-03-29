@@ -25,11 +25,11 @@ function applyRoundedClip(ctx, W, H, radius) {
 
 // ── Polices disponibles pour le cache plaque généré ──────────────────────
 const LOGO_FONTS = [
-  { key: "impact",   family: "Impact, Arial Black, sans-serif", label: "IMPACT",   style: "bold" },
-  { key: "rajdhani", family: "'Rajdhani', sans-serif",           label: "Rajdhani", style: "bold" },
-  { key: "oswald",   family: "'Oswald', sans-serif",             label: "Oswald",   style: "bold" },
-  { key: "bebas",    family: "'Bebas Neue', sans-serif",         label: "Bebas",    style: "normal" },
-  { key: "georgia",  family: "Georgia, serif",                   label: "Georgia",  style: "bold" },
+  { key: "impact",    family: "Impact, Arial Black, sans-serif", label: "IMPACT",   weight: "900" },
+  { key: "rajdhani",  family: "'Rajdhani', sans-serif",           label: "Rajdhani", weight: "700" },
+  { key: "cormorant", family: "'Cormorant Garamond', serif",      label: "Élégant",  weight: "600" },
+  { key: "bebas",     family: "'Bebas Neue', sans-serif",         label: "Bebas",    weight: "400" },
+  { key: "georgia",   family: "Georgia, serif",                   label: "Georgia",  weight: "700" },
 ];
 
 // ── Cache plaque généré ───────────────────────────────────────────────────
@@ -52,10 +52,10 @@ function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact") {
   const f = LOGO_FONTS.find(f => f.key === fontKey) ?? LOGO_FONTS[0];
   ctx.fillStyle = fg;
   let sz = Math.round(H * 0.52);
-  ctx.font = `${f.style} ${sz}px ${f.family}`;
+  ctx.font = `${f.weight} ${sz}px ${f.family}`;
   while (ctx.measureText(txt).width > W * 0.88 && sz > 16) {
     sz -= 2;
-    ctx.font = `${f.style} ${sz}px ${f.family}`;
+    ctx.font = `${f.weight} ${sz}px ${f.family}`;
   }
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText(txt, W / 2, H / 2);
@@ -1064,7 +1064,7 @@ export default function AutoCache() {
                         {LOGO_FONTS.map(f => (
                           <div key={f.key} onClick={() => setGenFont(f.key)}
                             style={{ background: genFont === f.key ? "#1a1200" : "#141414", border: `1px solid ${genFont === f.key ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, padding: "8px 4px", cursor: "pointer", textAlign: "center", display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
-                            <span style={{ fontFamily: f.family, fontWeight: f.style === "bold" ? 700 : 400, fontSize: 15, color: genFont === f.key ? "#f26522" : "#aaa", lineHeight: 1 }}>
+                            <span style={{ fontFamily: f.family, fontWeight: f.weight, fontSize: 15, color: genFont === f.key ? "#f26522" : "#aaa", lineHeight: 1 }}>
                               {(genText.trim() || "ABC").toUpperCase().slice(0, 4)}
                             </span>
                             <span style={{ fontSize: 7, color: genFont === f.key ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase" }}>{f.label}</span>
