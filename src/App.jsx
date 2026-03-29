@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { removeBackground as removeBgImgly } from "@imgly/background-removal";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
@@ -376,23 +377,23 @@ function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
   });
 }
 
-// Suppression de fond via /api/removebg
+// Suppression de fond — moteur IA local @imgly/background-removal
+// Modèle ONNX (~40 MB) téléchargé une seule fois par le navigateur puis mis en cache.
+// Traite à 2000 px → netteté réelle vs 500 px max du plan gratuit remove.bg.
 async function removeBackground(dataUrl) {
-  // Réduit à 1600px max — qualité 0.95 : bon compromis netteté / limite Vercel 4.5 MB
-  const small = await shrinkDataUrl(dataUrl, 1600, 0.95);
-  const b64 = small.split(',')[1];
-  const r = await fetch('/api/removebg', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ b64 }),
+  // Réduit à 2000 px pour équilibrer qualité / temps de traitement (~5-15 s)
+  const small  = await shrinkDataUrl(dataUrl, 2000, 0.96);
+  const blob   = await fetch(small).then(r => r.blob());
+  const result = await removeBgImgly(blob, {
+    output: { format: 'image/png', quality: 1.0 },
   });
-  if (!r.ok) {
-    const txt = await r.text();
-    throw new Error(`remove.bg HTTP ${r.status}: ${txt.slice(0, 120)}`);
-  }
-  const data = await r.json();
-  if (!data.ok) throw new Error(`${data.error || 'remove.bg failed'}${data.detail ? ' — ' + data.detail : ''}`);
-  return `data:image/png;base64,${data.b64png}`;
+  // Convertit le Blob PNG résultant en data URL persistable
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(result);
+  });
 }
 
 // Composite : pose la voiture découpée sur le fond de showroom
