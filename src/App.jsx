@@ -110,19 +110,20 @@ function estimateAngleFromPosition(plate) {
 }
 
 // Build trapezoid corners from PR bounding box + perspective angle.
-// Ancrage sur le BAS de la boîte PR (ymax) : le bas de la plaque est fiable.
-// Le HAUT de la boîte PR est souvent trop haut (inclut cadre plastique / renfoncement).
-// Hauteur théorique 520×110 mm : plus stable que la hauteur détectée.
-function buildCorners(plate, near_side, angle_deg) {
+// plateCenter (optionnel) : centre détecté par GPT-4o {cx, cy, w, h} — plus fiable que la boîte PR.
+// Si absent : fallback sur le centre de la boîte PR.
+function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
   const pw  = plate.tr.x - plate.tl.x;
+
+  // Position X : toujours depuis PR (fiable horizontalement)
   const cx  = (plate.tl.x + plate.tr.x) / 2;
 
-  // Hauteur : ratio théorique (520 × 110 mm) — indépendant du bruit PR sur le haut de boîte
-  const ph = pw / 4.73;
+  // Position Y : GPT-4o voit la plaque directement → cy précis
+  // Fallback : centre de la boîte PR (souvent bruité mais mieux que rien)
+  const cy  = plateCenter ? plateCenter.cy : (plate.tl.y + plate.bl.y) / 2;
 
-  // Ancrer sur le BAS de la boîte PR plutôt que le centre
-  // → immunise contre l'excès de plastique/cadre inclus AU-DESSUS de la plaque
-  const cy = plate.bl.y - ph * 0.5;
+  // Hauteur : ratio théorique 520×110mm (stable, indépendant des bounding box bruitées)
+  const ph  = pw / 4.73;
 
   const theta  = angle_deg * Math.PI / 180;
   const PERSP  = 0.40;
@@ -131,8 +132,7 @@ function buildCorners(plate, near_side, angle_deg) {
   const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
   const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
 
-  const phDetected = plate.bl.y - plate.tl.y;
-  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° ph=${ph.toFixed(4)} phDetected=${phDetected.toFixed(4)} cy=${cy.toFixed(4)} yBottom=${plate.bl.y.toFixed(4)}`, "color:orange;font-weight:bold");
+  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° cy=${cy.toFixed(4)} (${plateCenter ? "GPT-4o" : "PR center"}) ph=${ph.toFixed(4)}`, "color:orange;font-weight:bold");
   return {
     tl: { x: Math.max(0, cx - pw * 0.5), y: Math.max(0, cy - leftH  * 0.5) },
     tr: { x: Math.min(1, cx + pw * 0.5), y: Math.max(0, cy - rightH * 0.5) },
@@ -352,9 +352,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
 
-    // Angle réel via GPT-4o (corners.js), fallback heuristique si échec
+    // Angle + centre plaque via GPT-4o (corners.js), fallback heuristique si échec
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-    savedCorners = buildCorners(plate, near_side, angle_deg);
+    const plateCenter = angleData?.plateCenter ?? null;
+    savedCorners = buildCorners(plate, near_side, angle_deg, plateCenter);
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });

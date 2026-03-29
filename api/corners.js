@@ -25,24 +25,31 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set in environment' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64 image' });
 
-  const prompt = `Look at this car photo. Answer 2 questions about the car's orientation:
+  const prompt = `Look at this car photo. Answer 3 questions:
 
-QUESTION 1 — Which direction is the car's FRONT (hood/bonnet/headlights) pointing?
+QUESTION 1 — License plate center position (normalized 0.0–1.0):
+Find the rectangular license plate (the plate with letters/numbers, NOT the plastic holder or bumper).
+Return its CENTER coordinates and size:
+- cx: horizontal center (0.0 = left edge of image, 1.0 = right edge)
+- cy: vertical center (0.0 = top edge of image, 1.0 = bottom edge)
+- w:  width of the plate only
+- h:  height of the plate only
+Be precise — measure the plate itself, not the surrounding plastic frame or bumper recess.
+
+QUESTION 2 — Car orientation (hood/headlights direction):
 - "right" = the car's front/nose points toward the RIGHT side of the image
 - "left"  = the car's front/nose points toward the LEFT side of the image
 - "none"  = the car faces straight toward the camera (symmetric front view)
 
-QUESTION 2 — How strongly is the car angled? Pick the best estimate:
-- 0  = perfectly straight-on (we see a symmetric front face)
-- 15 = slight 3/4 angle (one headlight slightly more visible)
-- 25 = typical dealer 3/4 angle (both headlights visible but one side dominates)
-- 35 = strong 3/4 angle (we see a lot of the side of the car)
+QUESTION 3 — Angle estimate:
+- 0  = perfectly straight-on (symmetric front face)
+- 15 = slight 3/4 angle
+- 25 = typical dealer 3/4 angle
+- 35 = strong 3/4 angle
 - 45 = almost side-on
 
-IMPORTANT RULE: Most dealer photos are taken at a 3/4 angle (20-35°). Only use 0 if the car is truly symmetric and perfectly straight-on.
-
 Return ONLY this JSON (no explanation):
-{"hood_points":"right|left|none","angle_deg":25}`;
+{"plate":{"cx":0.65,"cy":0.74,"w":0.18,"h":0.04},"hood_points":"left","angle_deg":25}`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -88,16 +95,20 @@ Return ONLY this JSON (no explanation):
       return res.status(500).json({ error: 'Invalid angle response from GPT-4o', gpt });
     }
 
-    // Convert hood direction → near_side (which edge of the plate is closer to camera)
-    // hood points RIGHT → left side of car is closer → left edge of plate is taller
-    // hood points LEFT  → right side of car is closer → right edge of plate is taller
     const near_side = gpt.hood_points === 'right' ? 'left'
                     : gpt.hood_points === 'left'  ? 'right'
                     : 'none';
     const angle_deg = gpt.angle_deg;
 
-    console.log('GPT-4o angle:', JSON.stringify({ hood_points: gpt.hood_points, near_side, angle_deg }));
-    return res.json({ near_side, angle_deg });
+    // Centre de la plaque détecté par GPT-4o (cx, cy, w, h normalisés)
+    const p = gpt.plate;
+    const plateCenter = (p && typeof p.cx === 'number' && typeof p.cy === 'number' &&
+                         typeof p.w  === 'number' && typeof p.h  === 'number')
+      ? { cx: p.cx, cy: p.cy, w: p.w, h: p.h }
+      : null;
+
+    console.log('GPT-4o result:', JSON.stringify({ hood_points: gpt.hood_points, near_side, angle_deg, plateCenter }));
+    return res.json({ near_side, angle_deg, plateCenter });
 
   } catch (e) {
     console.error('corners.js error:', e);
