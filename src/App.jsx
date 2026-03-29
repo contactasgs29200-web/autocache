@@ -283,6 +283,105 @@ function polishHeadlights(ctx, lights, W, H) {
   }
 }
 
+// ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
+function makeShowroomBackground(index, W, H) {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+
+  if (index === 0) {
+    // Studio béton anthracite — classique photo auto
+    const bg = ctx.createRadialGradient(W * 0.5, H * 0.38, 0, W * 0.5, H * 0.5, W * 0.75);
+    bg.addColorStop(0, '#3a3a3a'); bg.addColorStop(0.55, '#1e1e1e'); bg.addColorStop(1, '#090909');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    const floorY = H * 0.62;
+    const floor = ctx.createLinearGradient(0, floorY, 0, H);
+    floor.addColorStop(0, 'rgba(80,80,80,0.55)'); floor.addColorStop(0.5, 'rgba(40,40,40,0.25)'); floor.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = floor; ctx.fillRect(0, floorY, W, H - floorY);
+    const band = ctx.createLinearGradient(0, H * 0.28, 0, H * 0.38);
+    band.addColorStop(0, 'rgba(255,255,255,0)'); band.addColorStop(0.5, 'rgba(255,255,255,0.04)'); band.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = band; ctx.fillRect(0, H * 0.28, W, H * 0.10);
+
+  } else if (index === 1) {
+    // Showroom premium bleu nuit
+    const bg = ctx.createLinearGradient(0, 0, W * 0.6, H);
+    bg.addColorStop(0, '#0a0e1a'); bg.addColorStop(0.4, '#0d1530'); bg.addColorStop(1, '#060810');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    const halo = ctx.createRadialGradient(W * 0.5, H * 0.3, 0, W * 0.5, H * 0.3, W * 0.55);
+    halo.addColorStop(0, 'rgba(30,80,180,0.22)'); halo.addColorStop(0.4, 'rgba(10,40,100,0.12)'); halo.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
+    const floorY = H * 0.60;
+    const floor = ctx.createLinearGradient(0, floorY, 0, H);
+    floor.addColorStop(0, 'rgba(20,50,120,0.45)'); floor.addColorStop(0.6, 'rgba(5,15,40,0.20)'); floor.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = floor; ctx.fillRect(0, floorY, W, H - floorY);
+
+  } else if (index === 2) {
+    // Coucher de soleil — extérieur doré
+    const sky = ctx.createLinearGradient(0, 0, 0, H * 0.62);
+    sky.addColorStop(0, '#1a0a00'); sky.addColorStop(0.25, '#5c2200'); sky.addColorStop(0.55, '#c85a00'); sky.addColorStop(0.75, '#e8820a'); sky.addColorStop(1, '#f0aa3a');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H * 0.62);
+    const ground = ctx.createLinearGradient(0, H * 0.62, 0, H);
+    ground.addColorStop(0, '#2a1a08'); ground.addColorStop(0.3, '#1a1008'); ground.addColorStop(1, '#0e0a06');
+    ctx.fillStyle = ground; ctx.fillRect(0, H * 0.62, W, H * 0.38);
+    const sunRefl = ctx.createRadialGradient(W * 0.5, H * 0.62, 0, W * 0.5, H * 0.62, W * 0.4);
+    sunRefl.addColorStop(0, 'rgba(200,100,0,0.35)'); sunRefl.addColorStop(0.5, 'rgba(120,50,0,0.15)'); sunRefl.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sunRefl; ctx.fillRect(0, H * 0.55, W, H * 0.45);
+    const sun = ctx.createRadialGradient(W * 0.5, H * 0.5, 0, W * 0.5, H * 0.5, W * 0.15);
+    sun.addColorStop(0, 'rgba(255,220,100,0.55)'); sun.addColorStop(0.4, 'rgba(255,160,30,0.25)'); sun.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sun; ctx.fillRect(0, H * 0.30, W, H * 0.40);
+
+  } else {
+    // Studio blanc lacé — photo professionnelle lumineuse
+    const bg = ctx.createRadialGradient(W * 0.5, H * 0.35, 0, W * 0.5, H * 0.5, W * 0.75);
+    bg.addColorStop(0, '#ffffff'); bg.addColorStop(0.55, '#ececec'); bg.addColorStop(1, '#cccccc');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    const floorY = H * 0.62;
+    const floor = ctx.createLinearGradient(0, floorY, 0, H);
+    floor.addColorStop(0, 'rgba(0,0,0,0.12)'); floor.addColorStop(0.6, 'rgba(0,0,0,0.05)'); floor.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = floor; ctx.fillRect(0, floorY, W, H - floorY);
+  }
+
+  return c.toDataURL('image/jpeg', 0.95);
+}
+
+// Miniatures pré-calculées une fois (évite de régénérer à chaque rendu)
+const SHOWROOM_THUMBS = [0, 1, 2, 3].map(i => makeShowroomBackground(i, 160, 90));
+const SHOWROOM_LABELS = ['Studio', 'Nuit', 'Sunset', 'Blanc'];
+
+// Suppression de fond via /api/removebg
+async function removeBackground(dataUrl) {
+  const b64 = dataUrl.split(',')[1];
+  const r = await fetch('/api/removebg', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ b64 }),
+  });
+  const data = await r.json();
+  if (!data.ok) throw new Error(data.error || 'remove.bg failed');
+  return `data:image/png;base64,${data.b64png}`;
+}
+
+// Composite : pose la voiture découpée sur le fond de showroom
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H) {
+  const [bgImg, carImg] = await Promise.all([loadImg(bgDataUrl), loadImg(cutoutDataUrl)]);
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bgImg, 0, 0, W, H);
+  const scale = Math.min((W * 0.92) / carImg.width, (H * 0.78) / carImg.height);
+  const cw = carImg.width * scale;
+  const ch = carImg.height * scale;
+  const cx = (W - cw) / 2;
+  const cy = H * 0.62 - ch * 0.82;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur  = Math.round(W * 0.025);
+  ctx.shadowOffsetY = Math.round(H * 0.012);
+  ctx.drawImage(carImg, cx, cy, cw, ch);
+  ctx.restore();
+  return c.toDataURL('image/jpeg', 0.94);
+}
+
 // Détecte l'orientation réelle de la voiture via GPT-4o Vision (detail:low, ~$0.001)
 // Retourne { near_side: "left"|"right"|"none", angle_deg: number }
 // ou null en cas d'échec (fallback sur estimateAngleFromPosition)
@@ -504,6 +603,14 @@ export default function AutoCache() {
   const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
   const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
 
+  // ── Mode Showroom ──────────────────────────────────────────────────────────
+  const [showroomMode,     setShowroomMode]     = useState(false);
+  const [showroomBg,       setShowroomBg]        = useState(0);
+  const [showroomLoading,  setShowroomLoading]   = useState(false);
+  const [showroomCustomBg, setShowroomCustomBg]  = useState(null);
+  const showroomCanvasRef = useRef(null);
+  const showroomUploadRef = useRef(null);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user || null);
@@ -580,12 +687,14 @@ export default function AutoCache() {
     setLightbox(r);
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
+    setShowroomMode(false); setShowroomBg(0); setShowroomLoading(false); setShowroomCustomBg(null);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
   const closeLightbox = () => {
     setLightbox(null);
     setCropMode(false); setCropDrag(null);
     setAdjustMode(false); setAdjustDrag(null);
+    setShowroomMode(false); setShowroomLoading(false);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
 
@@ -834,6 +943,27 @@ export default function AutoCache() {
     })();
     return () => { cancelled = true; };
   }, [adjustMode, lightbox?.baseDataURL]);
+
+  // ── Showroom : re-composite dès que bg ou cutout change ──────────────────
+  useEffect(() => {
+    if (!showroomMode || !lightbox?.cutoutDataURL) return;
+    let cancelled = false;
+    const bgDataUrl = showroomBg === 'custom' && showroomCustomBg
+      ? showroomCustomBg
+      : makeShowroomBackground(showroomBg, 1600, 900);
+    (async () => {
+      const canvas = showroomCanvasRef.current;
+      if (!canvas || cancelled) return;
+      canvas.width = 1600; canvas.height = 900;
+      const composited = await compositeCarOnBg(lightbox.cutoutDataURL, bgDataUrl, 1600, 900);
+      if (cancelled) return;
+      const img = await loadImg(composited);
+      if (cancelled) return;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+    })();
+    return () => { cancelled = true; };
+  }, [showroomMode, showroomBg, showroomCustomBg, lightbox?.cutoutDataURL]);
 
   if (authLoading) return (
     <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1116,7 +1246,7 @@ export default function AutoCache() {
       {/* ── Lightbox + rognage ──────────────────────────────────── */}
       {lightbox && (
         <div
-          onClick={cropMode || adjustMode ? undefined : closeLightbox}
+          onClick={cropMode || adjustMode || showroomMode ? undefined : closeLightbox}
           onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
           onMouseUp={() => {
             setCropDrag(null);
@@ -1165,6 +1295,33 @@ export default function AutoCache() {
                 >⊹ Ajuster</button>
               )}
 
+              {/* Bouton Showroom */}
+              <button
+                onClick={async e => {
+                  e.stopPropagation();
+                  if (showroomMode) { setShowroomMode(false); return; }
+                  setCropMode(false); setCropDrag(null);
+                  setAdjustMode(false); setAdjustDrag(null);
+                  setShowroomMode(true);
+                  if (!lightbox.cutoutDataURL) {
+                    setShowroomLoading(true);
+                    try {
+                      const cutout = await removeBackground(lightbox.processed);
+                      const updated = { ...lightbox, cutoutDataURL: cutout };
+                      setResults(prev => prev.map(r => r === lightbox ? updated : r));
+                      setLightbox(updated);
+                    } catch(err) {
+                      console.error('removeBackground error:', err);
+                      alert('Erreur suppression fond : ' + err.message);
+                      setShowroomMode(false);
+                    } finally {
+                      setShowroomLoading(false);
+                    }
+                  }
+                }}
+                style={{ background: showroomMode ? "#f26522" : "#181818", color: showroomMode ? "#090909" : "#f26522", border: `1px solid ${showroomMode ? "#f26522" : "#2a2a2a"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+              >⬡ SHOWROOM</button>
+
               {/* Télécharger / Fermer ajustement */}
               {adjustMode ? (
                 <button
@@ -1180,7 +1337,22 @@ export default function AutoCache() {
                   onClick={e => { e.stopPropagation(); downloadCropped(); }}
                   style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >⬇ Télécharger rogné</button>
-              </>) : (
+              </>) : showroomMode ? (
+                <button
+                  onClick={e => {
+                    e.stopPropagation();
+                    if (showroomLoading) return;
+                    const canvas = showroomCanvasRef.current;
+                    if (!canvas) return;
+                    const a = document.createElement('a');
+                    a.href = canvas.toDataURL('image/jpeg', 0.94);
+                    a.download = `showroom_${lightbox.name || 'autocache'}.jpg`;
+                    a.click();
+                  }}
+                  disabled={showroomLoading}
+                  style={{ background: showroomLoading ? "#555" : "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: showroomLoading ? "wait" : "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                >{showroomLoading ? "◌ TRAITEMENT..." : "⬇ TÉLÉCHARGER SHOWROOM"}</button>
+              ) : (
                 <button
                   onClick={e => { e.stopPropagation(); downloadOne(lightbox); }}
                   style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
@@ -1219,7 +1391,12 @@ export default function AutoCache() {
               display: "inline-block",
               lineHeight: 0,
             }}>
-            {adjustMode ? (
+            {showroomMode ? (
+              <canvas
+                ref={showroomCanvasRef}
+                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh" }}
+              />
+            ) : adjustMode ? (
               <canvas
                 ref={adjustCanvasRef}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh" }}
@@ -1339,12 +1516,62 @@ export default function AutoCache() {
             </div>
           )}
 
+          {/* ── Sélecteur de fond Showroom ── */}
+          {showroomMode && (
+            <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: "min(1100px, 100vw - 32px)", marginTop: 10, padding: "12px 16px", background: "#0f0f0f", border: "1px solid #222", borderRadius: 3 }}>
+              {showroomLoading ? (
+                <div style={{ textAlign: "center", padding: "14px 0", fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 3 }}>
+                  ◌ SUPPRESSION DU FOND EN COURS...
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 9, letterSpacing: 3, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
+                    {[0, 1, 2, 3].map(idx => {
+                      const isActive = showroomBg === idx;
+                      return (
+                        <div key={idx} onClick={() => setShowroomBg(idx)}
+                          style={{ cursor: "pointer", border: `2px solid ${isActive ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 82, flexShrink: 0, transition: "border-color 0.15s" }}>
+                          <img src={SHOWROOM_THUMBS[idx]} style={{ display: "block", width: "100%", height: 46, objectFit: "cover" }} />
+                          <div style={{ background: isActive ? "#f26522" : "#141414", color: isActive ? "#090909" : "#555", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "3px 0", textTransform: "uppercase" }}>
+                            {SHOWROOM_LABELS[idx]}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* Upload fond custom */}
+                    <div onClick={() => showroomUploadRef.current?.click()}
+                      style={{ cursor: "pointer", border: `2px solid ${showroomBg === 'custom' ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 82, flexShrink: 0, display: "flex", flexDirection: "column", background: "#111", transition: "border-color 0.15s" }}>
+                      {showroomCustomBg
+                        ? <img src={showroomCustomBg} style={{ display: "block", width: "100%", height: 46, objectFit: "cover" }} />
+                        : <div style={{ height: 46, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#333" }}>+</div>
+                      }
+                      <div style={{ background: showroomBg === 'custom' ? "#f26522" : "#141414", color: showroomBg === 'custom' ? "#090909" : "#555", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "3px 0", textTransform: "uppercase" }}>
+                        Custom
+                      </div>
+                    </div>
+                    <input ref={showroomUploadRef} type="file" accept="image/*" style={{ display: "none" }}
+                      onChange={e => {
+                        const f = e.target.files?.[0]; if (!f) return;
+                        const reader = new FileReader();
+                        reader.onload = ev => { setShowroomCustomBg(ev.target.result); setShowroomBg('custom'); };
+                        reader.readAsDataURL(f);
+                        e.target.value = '';
+                      }} />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {/* ── Pied ── */}
           <div style={{ marginTop: 10, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
             {adjustMode
               ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
               ? "Inclinaison · Glisser la zone · Coins oranges pour redimensionner · 💾 Sauvegarder"
+              : showroomMode
+              ? "Choisir un fond · Importer votre propre image · ⬇ Télécharger le résultat"
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
