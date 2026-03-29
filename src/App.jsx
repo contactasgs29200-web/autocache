@@ -396,7 +396,8 @@ async function removeBackground(dataUrl) {
 }
 
 // Composite : pose la voiture découpée sur le fond de showroom
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H) {
+// logoImg + corners + bgColor permettent de redessiner le cache plaque en qualité native
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff') {
   const [bgImg, carImg] = await Promise.all([loadImg(bgDataUrl), loadImg(cutoutDataUrl)]);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -405,14 +406,27 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H) {
   const scale = Math.min((W * 0.92) / carImg.width, (H * 0.78) / carImg.height);
   const cw = carImg.width * scale;
   const ch = carImg.height * scale;
-  const cx = (W - cw) / 2;
-  const cy = H * 0.62 - ch * 0.82;
+  const carX = (W - cw) / 2;
+  const carY = H * 0.82 - ch; // bas de la voiture ancré à 82 % de la hauteur
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.55)';
   ctx.shadowBlur  = Math.round(W * 0.025);
   ctx.shadowOffsetY = Math.round(H * 0.012);
-  ctx.drawImage(carImg, cx, cy, cw, ch);
+  ctx.drawImage(carImg, carX, carY, cw, ch);
   ctx.restore();
+  // Cache plaque redessiné en qualité native (corners normalisés 0-1 → pixels composite)
+  if (logoImg && corners) {
+    const mp = p => ({ x: carX + p.x * cw, y: carY + p.y * ch });
+    const ptl = mp(corners.tl), ptr = mp(corners.tr);
+    const pbr = mp(corners.br), pbl = mp(corners.bl);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
+    ctx.restore();
+    drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
+  }
   return c.toDataURL('image/jpeg', 0.94);
 }
 
@@ -707,8 +721,10 @@ export default function AutoCache() {
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
-          const cutout = await removeBackground(r.processed);
-          const showroomImg = await compositeCarOnBg(cutout, showroomBgDataUrl, 1600, 900);
+          // On envoie la photo propre (sans cache plaque) à remove.bg → meilleur détourage
+          const cutout = await removeBackground(r.baseDataURL);
+          // Cache plaque redessiné nativement sur le composite (pas de double compression)
+          const showroomImg = await compositeCarOnBg(cutout, showroomBgDataUrl, 1600, 900, logoImg, r.corners, bgColor);
           entry.cutoutDataURL = cutout;
           entry.showroomDataURL = showroomImg;
         } catch(e) {
