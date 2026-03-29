@@ -358,14 +358,36 @@ function makeShowroomBackground(index, W, H) {
 const SHOWROOM_THUMBS = [0, 1, 2, 3].map(i => makeShowroomBackground(i, 160, 90));
 const SHOWROOM_LABELS = ['Studio', 'Nuit', 'Sunset', 'Blanc'];
 
+// Redimensionne un dataUrl à maxPx max (côté le plus long) pour alléger l'envoi API
+function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width  = Math.round(img.width  * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.src = dataUrl;
+  });
+}
+
 // Suppression de fond via /api/removebg
 async function removeBackground(dataUrl) {
-  const b64 = dataUrl.split(',')[1];
+  // Réduit à 1024px max pour rester sous la limite 4.5 MB de Vercel
+  const small = await shrinkDataUrl(dataUrl, 1024, 0.88);
+  const b64 = small.split(',')[1];
   const r = await fetch('/api/removebg', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ b64 }),
   });
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error(`remove.bg HTTP ${r.status}: ${txt.slice(0, 120)}`);
+  }
   const data = await r.json();
   if (!data.ok) throw new Error(data.error || 'remove.bg failed');
   return `data:image/png;base64,${data.b64png}`;
