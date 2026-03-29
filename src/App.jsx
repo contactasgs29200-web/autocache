@@ -23,10 +23,19 @@ function applyRoundedClip(ctx, W, H, radius) {
   ctx.clip();
 }
 
+// ── Polices disponibles pour le cache plaque généré ──────────────────────
+const LOGO_FONTS = [
+  { key: "impact",   family: "Impact, Arial Black, sans-serif", label: "IMPACT",   style: "bold" },
+  { key: "rajdhani", family: "'Rajdhani', sans-serif",           label: "Rajdhani", style: "bold" },
+  { key: "oswald",   family: "'Oswald', sans-serif",             label: "Oswald",   style: "bold" },
+  { key: "bebas",    family: "'Bebas Neue', sans-serif",         label: "Bebas",    style: "normal" },
+  { key: "georgia",  family: "Georgia, serif",                   label: "Georgia",  style: "bold" },
+];
+
 // ── Cache plaque généré ───────────────────────────────────────────────────
 // Génère un canvas 1040×220 (ratio 4.73:1) avec texte, couleurs et coins arrondis.
 // radius : 0 = coins droits, 50 = forme de pilule (% de H)
-function makeLogoDataURL(text, bg, fg, radius) {
+function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact") {
   const W = 1040, H = 220;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
@@ -40,12 +49,13 @@ function makeLogoDataURL(text, bg, fg, radius) {
 
   // Texte principal (taille auto)
   const txt = (text.trim() || "VOTRE TEXTE").toUpperCase();
+  const f = LOGO_FONTS.find(f => f.key === fontKey) ?? LOGO_FONTS[0];
   ctx.fillStyle = fg;
   let sz = Math.round(H * 0.52);
-  ctx.font = `bold ${sz}px Arial, sans-serif`;
+  ctx.font = `${f.style} ${sz}px ${f.family}`;
   while (ctx.measureText(txt).width > W * 0.88 && sz > 16) {
     sz -= 2;
-    ctx.font = `bold ${sz}px Arial, sans-serif`;
+    ctx.font = `${f.style} ${sz}px ${f.family}`;
   }
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText(txt, W / 2, H / 2);
@@ -579,6 +589,7 @@ export default function AutoCache() {
   const [genText,  setGenText]  = useState("");
   const [genBg,    setGenBg]    = useState("#0d2b6b");
   const [genFg,    setGenFg]    = useState("#ffffff");
+  const [genFont,  setGenFont]  = useState("impact");
   const [logoRadius, setLogoRadius] = useState(1); // 0–10 : arrondi des coins, commun import+génération
   const [lightbox, setLightbox] = useState(null);
   const [cropMode, setCropMode] = useState(false);
@@ -623,8 +634,8 @@ export default function AutoCache() {
   // Regénère le cache plaque dès qu'un paramètre change (mode génération)
   useEffect(() => {
     if (logoMode !== "generate") return;
-    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, logoRadius * 5), generated: true, bgColor: genBg });
-  }, [logoMode, genText, genBg, genFg, logoRadius]);
+    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, logoRadius * 5, genFont), generated: true, bgColor: genBg });
+  }, [logoMode, genText, genBg, genFg, logoRadius, genFont]);
 
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
@@ -1044,6 +1055,22 @@ export default function AutoCache() {
                         placeholder="Nom de votre garage"
                         style={{ width: "100%", background: "#141414", border: "1px solid #2a2a2a", color: "#ddd5c8", padding: "9px 10px", fontFamily: "'Rajdhani',sans-serif", fontSize: 16, fontWeight: 600, borderRadius: 2, outline: "none" }}
                       />
+                    </div>
+
+                    {/* Police */}
+                    <div>
+                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 8, textTransform: "uppercase" }}>Police d'écriture</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
+                        {LOGO_FONTS.map(f => (
+                          <div key={f.key} onClick={() => setGenFont(f.key)}
+                            style={{ background: genFont === f.key ? "#1a1200" : "#141414", border: `1px solid ${genFont === f.key ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, padding: "8px 4px", cursor: "pointer", textAlign: "center", display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+                            <span style={{ fontFamily: f.family, fontWeight: f.style === "bold" ? 700 : 400, fontSize: 15, color: genFont === f.key ? "#f26522" : "#aaa", lineHeight: 1 }}>
+                              {(genText.trim() || "ABC").toUpperCase().slice(0, 4)}
+                            </span>
+                            <span style={{ fontSize: 7, color: genFont === f.key ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase" }}>{f.label}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
                     {/* Couleur de fond */}
