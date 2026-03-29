@@ -603,13 +603,19 @@ export default function AutoCache() {
   const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
   const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
 
-  // ── Mode Showroom ──────────────────────────────────────────────────────────
+  // ── Mode Showroom (lightbox) ───────────────────────────────────────────────
   const [showroomMode,     setShowroomMode]     = useState(false);
   const [showroomBg,       setShowroomBg]        = useState(0);
   const [showroomLoading,  setShowroomLoading]   = useState(false);
   const [showroomCustomBg, setShowroomCustomBg]  = useState(null);
   const showroomCanvasRef = useRef(null);
   const showroomUploadRef = useRef(null);
+
+  // ── Showroom Setup (page principale) ──────────────────────────────────────
+  const [showroomEnabled,      setShowroomEnabled]      = useState(false);
+  const [showroomSetupBg,      setShowroomSetupBg]      = useState(0);
+  const [showroomSetupCustomBg, setShowroomSetupCustomBg] = useState(null);
+  const showroomSetupUploadRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -663,9 +669,26 @@ export default function AutoCache() {
     }
     const bgColor = logo.bgColor || "#ffffff";
     const all = [];
+    const showroomBgDataUrl = showroomEnabled
+      ? (showroomSetupBg === 'custom' && showroomSetupCustomBg
+          ? showroomSetupCustomBg
+          : makeShowroomBackground(showroomSetupBg, 1600, 900))
+      : null;
+
     for (let i = 0; i < photos.length; i++) {
       const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish);
-      all.push({ ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated });
+      const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
+      if (showroomEnabled && showroomBgDataUrl) {
+        try {
+          const cutout = await removeBackground(r.processed);
+          const showroomImg = await compositeCarOnBg(cutout, showroomBgDataUrl, 1600, 900);
+          entry.cutoutDataURL = cutout;
+          entry.showroomDataURL = showroomImg;
+        } catch(e) {
+          console.error('Showroom processing error:', e);
+        }
+      }
+      all.push(entry);
       setResults([...all]);
       setProgress({ n: i + 1, total: photos.length });
     }
@@ -1179,9 +1202,59 @@ export default function AutoCache() {
                 )}
               </section>
 
+              {/* ── 03 — Showroom Virtuel ── */}
+              <section>
+                <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Showroom Virtuel</div>
+                <div onClick={() => setShowroomEnabled(p => !p)}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${showroomEnabled ? "#f26522" : "#1c1c1c"}`, borderRadius: showroomEnabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled ? "#f26522" : "#333"}`, background: showroomEnabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {showroomEnabled && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>⬡ Showroom Virtuel</div>
+                    <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Détourage IA · Fond de showroom · Inclus au traitement</div>
+                  </div>
+                </div>
+                {showroomEnabled && (
+                  <div style={{ padding: "12px 14px", background: "#0a0a0a", border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px" }}>
+                    <div style={{ fontSize: 9, letterSpacing: 2, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "stretch" }}>
+                      {[0, 1, 2, 3].map(idx => {
+                        const isActive = showroomSetupBg === idx;
+                        return (
+                          <div key={idx} onClick={e => { e.stopPropagation(); setShowroomSetupBg(idx); }}
+                            style={{ cursor: "pointer", border: `2px solid ${isActive ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, transition: "border-color 0.12s" }}>
+                            <img src={SHOWROOM_THUMBS[idx]} style={{ display: "block", width: "100%", height: 39, objectFit: "cover" }} />
+                            <div style={{ background: isActive ? "#f26522" : "#141414", color: isActive ? "#090909" : "#555", fontSize: 7, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>
+                              {SHOWROOM_LABELS[idx]}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div onClick={e => { e.stopPropagation(); showroomSetupUploadRef.current?.click(); }}
+                        style={{ cursor: "pointer", border: `2px solid ${showroomSetupBg === 'custom' ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, display: "flex", flexDirection: "column", background: "#111", transition: "border-color 0.12s" }}>
+                        {showroomSetupCustomBg
+                          ? <img src={showroomSetupCustomBg} style={{ display: "block", width: "100%", height: 39, objectFit: "cover" }} />
+                          : <div style={{ height: 39, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#333" }}>+</div>
+                        }
+                        <div style={{ background: showroomSetupBg === 'custom' ? "#f26522" : "#141414", color: showroomSetupBg === 'custom' ? "#090909" : "#555", fontSize: 7, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>Custom</div>
+                      </div>
+                      <input ref={showroomSetupUploadRef} type="file" accept="image/*" style={{ display: "none" }}
+                        onChange={e => {
+                          const f = e.target.files?.[0]; if (!f) return;
+                          const reader = new FileReader();
+                          reader.onload = ev => { setShowroomSetupCustomBg(ev.target.result); setShowroomSetupBg('custom'); };
+                          reader.readAsDataURL(f);
+                          e.target.value = '';
+                        }} />
+                    </div>
+                  </div>
+                )}
+              </section>
+
               <section>
                 <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "#141414", color: canStart ? "#090909" : "#333", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
-                  {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}`}
+                  {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}${showroomEnabled ? " + Showroom" : ""}`}
                 </button>
                 {processing && (
                   <div style={{ marginTop: 12 }}>
