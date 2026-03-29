@@ -110,27 +110,29 @@ function estimateAngleFromPosition(plate) {
 }
 
 // Build trapezoid corners from PR bounding box + perspective angle.
-// Utilise la HAUTEUR RÉELLE détectée par PlateRecognizer (plus fiable que le ratio théorique).
-// PERSP réduit à 0.40 : la plaque réelle ne se déforme pas autant que 0.85 le suggérait.
+// Ancrage sur le BAS de la boîte PR (ymax) : le bas de la plaque est fiable.
+// Le HAUT de la boîte PR est souvent trop haut (inclut cadre plastique / renfoncement).
+// Hauteur théorique 520×110 mm : plus stable que la hauteur détectée.
 function buildCorners(plate, near_side, angle_deg) {
   const pw  = plate.tr.x - plate.tl.x;
   const cx  = (plate.tl.x + plate.tr.x) / 2;
-  const cy  = (plate.tl.y + plate.bl.y) / 2;
 
-  // Hauteur : on fait confiance à PlateRecognizer, mais on sanity-check avec le ratio 520×110mm
-  const phDetected  = plate.bl.y - plate.tl.y;
-  const phTheory    = pw / 4.73;
-  // Clamp : jamais moins de 80% du théorique, jamais plus de 160% (évite les boîtes aberrantes)
-  const ph = Math.max(phTheory * 0.80, Math.min(phDetected, phTheory * 1.60));
+  // Hauteur : ratio théorique (520 × 110 mm) — indépendant du bruit PR sur le haut de boîte
+  const ph = pw / 4.73;
+
+  // Ancrer sur le BAS de la boîte PR plutôt que le centre
+  // → immunise contre l'excès de plastique/cadre inclus AU-DESSUS de la plaque
+  const cy = plate.bl.y - ph * 0.5;
 
   const theta  = angle_deg * Math.PI / 180;
-  const PERSP  = 0.40;                              // facteur de perspective réaliste (était 0.85)
+  const PERSP  = 0.40;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
   const farH   = ph * (1 - Math.sin(theta) * PERSP);
   const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
   const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
 
-  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° ph=${ph.toFixed(4)} (det=${phDetected.toFixed(4)} th=${phTheory.toFixed(4)}) ratio=${(leftH/rightH).toFixed(2)}x`, "color:orange;font-weight:bold");
+  const phDetected = plate.bl.y - plate.tl.y;
+  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° ph=${ph.toFixed(4)} phDetected=${phDetected.toFixed(4)} cy=${cy.toFixed(4)} yBottom=${plate.bl.y.toFixed(4)}`, "color:orange;font-weight:bold");
   return {
     tl: { x: Math.max(0, cx - pw * 0.5), y: Math.max(0, cy - leftH  * 0.5) },
     tr: { x: Math.min(1, cx + pw * 0.5), y: Math.max(0, cy - rightH * 0.5) },
