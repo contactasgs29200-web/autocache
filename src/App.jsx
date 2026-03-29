@@ -398,7 +398,7 @@ async function removeBackground(dataUrl) {
 // Composite : pose la voiture découpée sur le fond de showroom
 // logoImg + corners + bgColor permettent de redessiner le cache plaque en qualité native
 // offsetX / offsetY permettent de repositionner la voiture après génération (flèches)
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0) {
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0) {
   const [bgImg, carImg] = await Promise.all([loadImg(bgDataUrl), loadImg(cutoutDataUrl)]);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -406,7 +406,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bgImg, 0, 0, W, H);
-  const scale = Math.min((W * 0.92) / carImg.width, (H * 0.78) / carImg.height);
+  const scale = Math.min((W * 0.92) / carImg.width, (H * 0.78) / carImg.height) * zoom;
   const cw = carImg.width * scale;
   const ch = carImg.height * scale;
   const carX = (W - cw) / 2 + offsetX;
@@ -663,9 +663,11 @@ export default function AutoCache() {
   const [showroomSetupBg,      setShowroomSetupBg]      = useState(0);
   const [showroomSetupCustomBg, setShowroomSetupCustomBg] = useState(null);
   const showroomSetupUploadRef = useRef(null);
-  // ── Showroom nudge (repositionnement voiture via flèches) ─────────────────
+  // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
+  const [showroomZoom,    setShowroomZoom]    = useState(1.0);
   const [showroomNudging, setShowroomNudging] = useState(false);
+  const zoomTimerRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -764,15 +766,16 @@ export default function AutoCache() {
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
-    setShowroomNudge({ x: 0, y: 0 });
+    setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
+    setShowroomZoom(r.showroomZoom ?? 1.0);
   };
 
   const NUDGE_STEP = 50; // pas de déplacement en px sur canvas 1600×900
-  const nudgeShowroom = async (dx, dy) => {
+
+  // Recomposite central — utilisé par flèches ET slider zoom
+  const recompositeShowroom = (nudge, zoom) => {
     setLightbox(prev => {
       if (!prev?.cutoutDataURL || showroomNudging) return prev;
-      const newNudge = { x: showroomNudge.x + dx, y: showroomNudge.y + dy };
-      setShowroomNudge(newNudge);
       setShowroomNudging(true);
       (async () => {
         try {
@@ -780,16 +783,28 @@ export default function AutoCache() {
           const newImg = await compositeCarOnBg(
             prev.cutoutDataURL, prev.showroomBgUrl, 1600, 900,
             logoImgEl, prev.corners, prev.bgColor,
-            newNudge.x, newNudge.y
+            nudge.x, nudge.y, zoom
           );
-          const updated = { ...prev, showroomDataURL: newImg };
+          const updated = { ...prev, showroomDataURL: newImg, showroomOffset: nudge, showroomZoom: zoom };
           setLightbox(updated);
-          setResults(rs => rs.map(r => r === prev ? updated : r));
-        } catch(e) { console.error('nudge error', e); }
+          setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
+        } catch(e) { console.error('recomposite error', e); }
         setShowroomNudging(false);
       })();
       return prev;
     });
+  };
+
+  const nudgeShowroom = (dx, dy) => {
+    const newNudge = { x: showroomNudge.x + dx, y: showroomNudge.y + dy };
+    setShowroomNudge(newNudge);
+    recompositeShowroom(newNudge, showroomZoom);
+  };
+
+  const onZoomChange = (z) => {
+    setShowroomZoom(z);
+    clearTimeout(zoomTimerRef.current);
+    zoomTimerRef.current = setTimeout(() => recompositeShowroom(showroomNudge, z), 250);
   };
   const closeLightbox = () => {
     setLightbox(null);
@@ -889,13 +904,14 @@ export default function AutoCache() {
     if (lightbox.showroomBgUrl) {
       const snap = { ...updated };
       const nudge = showroomNudge;
+      const zoom  = showroomZoom;
       (async () => {
         try {
           const cutout = await removeBackground(snap.baseDataURL);
           const logoImgEl = await loadImg(snap.logoPreview);
           const newShowroom = await compositeCarOnBg(cutout, snap.showroomBgUrl, 1600, 900,
-            logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y);
-          const withSR = { ...snap, cutoutDataURL: cutout, showroomDataURL: newShowroom };
+            logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y, zoom);
+          const withSR = { ...snap, cutoutDataURL: cutout, showroomDataURL: newShowroom, showroomOffset: nudge, showroomZoom: zoom };
           setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
           setLightbox(prev => prev?.name === snap.name ? withSR : prev);
         } catch(e) { console.error('showroom regen (crop):', e); }
@@ -1424,11 +1440,12 @@ export default function AutoCache() {
                 if (lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
                   const snap = { ...lightbox, corners: latestCorners };
                   const nudge = showroomNudge;
+                  const zoom  = showroomZoom;
                   loadImg(snap.logoPreview).then(logoImgEl =>
                     compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 1600, 900,
-                      logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y)
+                      logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom)
                   ).then(newShowroom => {
-                    const withSR = { ...updated, showroomDataURL: newShowroom };
+                    const withSR = { ...updated, showroomDataURL: newShowroom, showroomOffset: nudge, showroomZoom: zoom };
                     setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
                     setLightbox(prev => prev?.name === snap.name ? withSR : prev);
                   }).catch(e => console.error('showroom regen (adjust):', e));
@@ -1678,14 +1695,36 @@ export default function AutoCache() {
             </div>
           )}
 
+          {/* ── Slider zoom showroom ── */}
+          {lightbox.showroomDataURL && !cropMode && !adjustMode && (
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, width: "min(500px, 90vw)" }}
+            >
+              <span style={{ fontSize: 16, userSelect: "none" }}>🔍</span>
+              <input
+                type="range"
+                min="0.5" max="2.5" step="0.05"
+                value={showroomZoom}
+                onChange={e => onZoomChange(parseFloat(e.target.value))}
+                disabled={showroomNudging}
+                style={{ flex: 1, accentColor: "#f26522", cursor: showroomNudging ? "not-allowed" : "pointer", height: 4 }}
+              />
+              <span style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", minWidth: 34, textAlign: "right" }}>
+                ×{showroomZoom.toFixed(2)}
+              </span>
+              {showroomNudging && <span style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace" }}>…</span>}
+            </div>
+          )}
+
           {/* ── Pied ── */}
-          <div style={{ marginTop: 10, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
+          <div style={{ marginTop: 8, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
             {adjustMode
               ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
               ? "Inclinaison · Glisser la zone · Coins oranges pour redimensionner · 💾 Sauvegarder"
               : lightbox.showroomDataURL
-              ? "Flèches pour repositionner la voiture · Molette pour zoomer · Cliquer en dehors pour fermer"
+              ? "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto · Cliquer en dehors pour fermer"
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
