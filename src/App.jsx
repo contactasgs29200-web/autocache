@@ -1699,7 +1699,7 @@ export default function AutoCache() {
           {lightbox.showroomDataURL && !cropMode && !adjustMode && (
             <div
               onClick={e => e.stopPropagation()}
-              style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, width: "min(500px, 90vw)" }}
+              style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 52, width: "min(500px, 90vw)" }}
             >
               <span style={{ fontSize: 16, userSelect: "none" }}>🔍</span>
               <input
