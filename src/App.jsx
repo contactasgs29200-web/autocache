@@ -397,7 +397,8 @@ async function removeBackground(dataUrl) {
 
 // Composite : pose la voiture découpée sur le fond de showroom
 // logoImg + corners + bgColor permettent de redessiner le cache plaque en qualité native
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff') {
+// offsetX / offsetY permettent de repositionner la voiture après génération (flèches)
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0) {
   const [bgImg, carImg] = await Promise.all([loadImg(bgDataUrl), loadImg(cutoutDataUrl)]);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -406,8 +407,8 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const scale = Math.min((W * 0.92) / carImg.width, (H * 0.78) / carImg.height);
   const cw = carImg.width * scale;
   const ch = carImg.height * scale;
-  const carX = (W - cw) / 2;
-  const carY = H * 0.82 - ch; // bas de la voiture ancré à 82 % de la hauteur
+  const carX = (W - cw) / 2 + offsetX;
+  const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.55)';
   ctx.shadowBlur  = Math.round(W * 0.025);
@@ -492,7 +493,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Lustrage des optiques : correction chromatique localisée sur les phares/feux
   if (lights.length > 0) polishHeadlights(ctx, lights, c.width, c.height);
   // Save photo without plate for later re-rendering in "Ajuster" mode
-  const baseDataURL = c.toDataURL("image/jpeg", 0.93);
+  // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
+  const baseDataURL = c.toDataURL("image/jpeg", 0.97);
   let plateFound = false;
   let savedCorners = null;
   if (plate.found && logoImg) {
@@ -657,6 +659,9 @@ export default function AutoCache() {
   const [showroomSetupBg,      setShowroomSetupBg]      = useState(0);
   const [showroomSetupCustomBg, setShowroomSetupCustomBg] = useState(null);
   const showroomSetupUploadRef = useRef(null);
+  // ── Showroom nudge (repositionnement voiture via flèches) ─────────────────
+  const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
+  const [showroomNudging, setShowroomNudging] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -727,6 +732,7 @@ export default function AutoCache() {
           const showroomImg = await compositeCarOnBg(cutout, showroomBgDataUrl, 1600, 900, logoImg, r.corners, bgColor);
           entry.cutoutDataURL = cutout;
           entry.showroomDataURL = showroomImg;
+          entry.showroomBgUrl  = showroomBgDataUrl; // conservé pour recomposite via flèches
         } catch(e) {
           console.error('Showroom processing error:', e);
         }
@@ -754,6 +760,32 @@ export default function AutoCache() {
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
+    setShowroomNudge({ x: 0, y: 0 });
+  };
+
+  const NUDGE_STEP = 50; // pas de déplacement en px sur canvas 1600×900
+  const nudgeShowroom = async (dx, dy) => {
+    setLightbox(prev => {
+      if (!prev?.cutoutDataURL || showroomNudging) return prev;
+      const newNudge = { x: showroomNudge.x + dx, y: showroomNudge.y + dy };
+      setShowroomNudge(newNudge);
+      setShowroomNudging(true);
+      (async () => {
+        try {
+          const logoImgEl = await loadImg(prev.logoPreview);
+          const newImg = await compositeCarOnBg(
+            prev.cutoutDataURL, prev.showroomBgUrl, 1600, 900,
+            logoImgEl, prev.corners, prev.bgColor,
+            newNudge.x, newNudge.y
+          );
+          const updated = { ...prev, showroomDataURL: newImg };
+          setLightbox(updated);
+          setResults(rs => rs.map(r => r === prev ? updated : r));
+        } catch(e) { console.error('nudge error', e); }
+        setShowroomNudging(false);
+      })();
+      return prev;
+    });
   };
   const closeLightbox = () => {
     setLightbox(null);
@@ -1578,12 +1610,49 @@ export default function AutoCache() {
             </div>
           )}
 
+          {/* ── Flèches repositionnement showroom ── */}
+          {lightbox.showroomDataURL && !cropMode && !adjustMode && (
+            <div onClick={e => e.stopPropagation()} style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 1010 }}>
+              {/* Style commun flèche */}
+              {[
+                { dir: "up",    dx: 0,          dy: -NUDGE_STEP, label: "▲", style: { top: "8%",  left: "50%", transform: "translateX(-50%)" } },
+                { dir: "down",  dx: 0,          dy:  NUDGE_STEP, label: "▼", style: { bottom: "8%", left: "50%", transform: "translateX(-50%)" } },
+                { dir: "left",  dx: -NUDGE_STEP, dy: 0,          label: "◀", style: { left: "2%",  top: "50%",  transform: "translateY(-50%)" } },
+                { dir: "right", dx:  NUDGE_STEP, dy: 0,          label: "▶", style: { right: "2%", top: "50%",  transform: "translateY(-50%)" } },
+              ].map(({ dir, dx, dy, label, style }) => (
+                <button
+                  key={dir}
+                  onClick={e => { e.stopPropagation(); nudgeShowroom(dx, dy); }}
+                  disabled={showroomNudging}
+                  style={{
+                    position: "fixed",
+                    ...style,
+                    pointerEvents: "all",
+                    width: 52, height: 52,
+                    borderRadius: "50%",
+                    background: showroomNudging ? "rgba(30,30,30,0.6)" : "rgba(242,101,34,0.82)",
+                    border: "2px solid rgba(255,255,255,0.18)",
+                    color: "#fff",
+                    fontSize: 20,
+                    cursor: showroomNudging ? "not-allowed" : "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    boxShadow: "0 2px 12px rgba(0,0,0,0.7)",
+                    transition: "background 0.15s",
+                    zIndex: 1010,
+                  }}
+                >{showroomNudging ? "…" : label}</button>
+              ))}
+            </div>
+          )}
+
           {/* ── Pied ── */}
           <div style={{ marginTop: 10, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
             {adjustMode
               ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
               ? "Inclinaison · Glisser la zone · Coins oranges pour redimensionner · 💾 Sauvegarder"
+              : lightbox.showroomDataURL
+              ? "Flèches pour repositionner la voiture · Molette pour zoomer · Cliquer en dehors pour fermer"
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
