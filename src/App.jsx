@@ -902,8 +902,9 @@ export default function AutoCache() {
       // Mode showroom : rogne uniquement l'image composite finale
       const croppedShowroom = await rotateAndCropDataURL(lightbox.showroomDataURL, deg, box);
       const updated = { ...lightbox, showroomDataURL: croppedShowroom,
-        showroomBaseURL: null, cropped: true };
-      setResults(prev => prev.map(r => r === lightbox ? updated : r));
+        showroomBaseURL: null, showroomTransform: null,
+        cutoutDataURL: null, showroomBgUrl: null, cropped: true };
+      setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       setCropAngle(180);
       setCropMode(false);
@@ -1696,8 +1697,8 @@ export default function AutoCache() {
             </div>
           )}
 
-          {/* ── Flèches repositionnement showroom ── */}
-          {lightbox.showroomDataURL && !cropMode && !adjustMode && (
+          {/* ── Flèches repositionnement showroom (masquées après rognage) ── */}
+          {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && (
             <div onClick={e => e.stopPropagation()} style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 1010 }}>
               {/* Style commun flèche */}
               {[
@@ -1731,8 +1732,8 @@ export default function AutoCache() {
             </div>
           )}
 
-          {/* ── Slider zoom showroom ── */}
-          {lightbox.showroomDataURL && !cropMode && !adjustMode && (
+          {/* ── Slider zoom showroom (masqué après rognage) ── */}
+          {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && (
             <div
               onClick={e => e.stopPropagation()}
               style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 52, width: "min(500px, 90vw)" }}
