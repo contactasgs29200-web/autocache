@@ -584,9 +584,7 @@ function AuthScreen({ onAuth }) {
     setError(""); setSuccess(""); setLoading(true);
     try {
       if (mode === "reset") {
-        const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: window.location.origin,
-        });
+        const { error } = await supabase.auth.resetPasswordForEmail(email);
         if (error) throw error;
         setSuccess("Email de réinitialisation envoyé ! Vérifiez votre boîte de réception.");
       } else if (mode === "login") {
