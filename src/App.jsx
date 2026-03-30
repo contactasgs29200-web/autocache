@@ -37,7 +37,7 @@ const LOGO_FONTS = [
 // Génère un canvas 1040×220 (ratio 4.73:1) avec texte, couleurs et coins arrondis.
 // radius : 0 = coins droits, 50 = forme de pilule (% de H)
 function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact") {
-  const W = 1040, H = 220;
+  const W = 3120, H = 660;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
   const ctx = c.getContext("2d");
@@ -366,7 +366,7 @@ function makeShowroomBackground(index, W, H) {
     ctx.fillStyle = floor; ctx.fillRect(0, floorY, W, H - floorY);
   }
 
-  return c.toDataURL('image/jpeg', 0.95);
+  return c.toDataURL('image/jpeg', 0.97);
 }
 
 // Miniatures pré-calculées une fois (évite de régénérer à chaque rendu)
@@ -547,7 +547,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.93), plateFound, baseDataURL, corners: savedCorners };
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -869,7 +869,7 @@ export default function AutoCache() {
     c.width = sw; c.height = sh;
     c.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
     const a = document.createElement('a');
-    a.href = c.toDataURL('image/jpeg', 0.95);
+    a.href = c.toDataURL('image/jpeg', 0.97);
     a.download = `autocache_rogné_${lightbox.name}`;
     a.click();
   };
@@ -893,7 +893,7 @@ export default function AutoCache() {
     const c2 = document.createElement('canvas');
     c2.width = sw; c2.height = sh;
     c2.getContext('2d').drawImage(c1, sx, sy, sw, sh, 0, 0, sw, sh);
-    return c2.toDataURL('image/jpeg', 0.95);
+    return c2.toDataURL('image/jpeg', 0.97);
   };
 
   // Sauvegarde le rognage (+ rotation) dans le résultat (pour "Tout télécharger")
@@ -1474,7 +1474,7 @@ export default function AutoCache() {
                   setLightbox(updated);
                 } else {
                   // Mode normal : sauvegarde la photo avec le cache plaque
-                  const newDataURL = canvas.toDataURL('image/jpeg', 0.93);
+                  const newDataURL = canvas.toDataURL('image/jpeg', 0.97);
                   const updated = { ...lightbox, processed: newDataURL, corners: latestCorners };
                   setResults(prev => prev.map(r => r === lightbox ? updated : r));
                   setLightbox(updated);
