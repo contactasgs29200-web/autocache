@@ -713,6 +713,25 @@ export default function AutoCache() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // ── Auto-déconnexion après 1 h d'inactivité ──
+  useEffect(() => {
+    if (!user) return;
+    const IDLE_MS = 60 * 60 * 1000; // 1 heure
+    let timer = setTimeout(() => {
+      supabase.auth.signOut();
+    }, IDLE_MS);
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { supabase.auth.signOut(); }, IDLE_MS);
+    };
+    const events = ["mousedown", "keydown", "touchstart", "scroll"];
+    events.forEach(e => window.addEventListener(e, reset, { passive: true }));
+    return () => {
+      clearTimeout(timer);
+      events.forEach(e => window.removeEventListener(e, reset));
+    };
+  }, [user]);
+
   // Regénère le cache plaque dès qu'un paramètre change (mode génération)
   useEffect(() => {
     if (logoMode !== "generate") return;
