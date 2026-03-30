@@ -441,12 +441,6 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     const mp = p => ({ x: carX + p.x * cw, y: carY + p.y * ch });
     const ptl = mp(corners.tl), ptr = mp(corners.tr);
     const pbr = mp(corners.br), pbl = mp(corners.bl);
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-    ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
-    ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
