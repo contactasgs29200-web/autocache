@@ -896,6 +896,20 @@ export default function AutoCache() {
     if (!lightbox) return;
     const deg = cropAngle - 180;   // rotation réelle : 0 = photo droite
     const box = cropBox;
+    const isShowroom = !!lightbox.showroomDataURL;
+
+    if (isShowroom) {
+      // Mode showroom : rogne uniquement l'image composite finale
+      const croppedShowroom = await rotateAndCropDataURL(lightbox.showroomDataURL, deg, box);
+      const updated = { ...lightbox, showroomDataURL: croppedShowroom,
+        showroomBaseURL: null, cropped: true };
+      setResults(prev => prev.map(r => r === lightbox ? updated : r));
+      setLightbox(updated);
+      setCropAngle(180);
+      setCropMode(false);
+      return;
+    }
+
     const [croppedProcessed, croppedBase] = await Promise.all([
       rotateAndCropDataURL(lightbox.processed,   deg, box),
       rotateAndCropDataURL(lightbox.baseDataURL, deg, box),
@@ -918,23 +932,6 @@ export default function AutoCache() {
     setAdjustCorners(newCorners);
     setCropAngle(180);
     setCropMode(false);
-    // Régénère le showroom sur la base rognée si showroom actif
-    if (lightbox.showroomBgUrl) {
-      const snap = { ...updated };
-      const nudge = showroomNudge;
-      const zoom  = showroomZoom;
-      (async () => {
-        try {
-          const cutout = await removeBackground(snap.baseDataURL);
-          const logoImgEl = await loadImg(snap.logoPreview);
-          const newShowroom = await compositeCarOnBg(cutout, snap.showroomBgUrl, 2400, 1350,
-            logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y, zoom);
-          const withSR = { ...snap, cutoutDataURL: cutout, showroomDataURL: newShowroom, showroomOffset: nudge, showroomZoom: zoom };
-          setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
-          setLightbox(prev => prev?.name === snap.name ? withSR : prev);
-        } catch(e) { console.error('showroom regen (crop):', e); }
-      })();
-    }
   };
 
   // ── Rendu live du canvas de rognage ──────────────────────────────────────
@@ -956,17 +953,19 @@ export default function AutoCache() {
     ctx.drawImage(img, -W / 2, -H / 2); ctx.restore();
   };
 
-  // Charge la photo dès que le mode Rogner s'ouvre
+  // Charge la photo (ou le showroom) dès que le mode Rogner s'ouvre
   useEffect(() => {
-    if (!cropMode || !lightbox?.processed) return;
+    if (!cropMode || !lightbox) return;
+    const src = lightbox.showroomDataURL || lightbox.processed;
+    if (!src) return;
     let cancelled = false;
-    loadImg(lightbox.processed).then(img => {
+    loadImg(src).then(img => {
       if (cancelled) return;
       cropBaseImgRef.current = img;
       renderCropPreview(cropAngle);
     });
     return () => { cancelled = true; };
-  }, [cropMode, lightbox?.processed]);
+  }, [cropMode, lightbox?.showroomDataURL, lightbox?.processed]);
 
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
   const startAdjustDrag = (e, corner) => {
