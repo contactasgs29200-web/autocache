@@ -583,7 +583,13 @@ function AuthScreen({ onAuth }) {
   const submit = async () => {
     setError(""); setSuccess(""); setLoading(true);
     try {
-      if (mode === "login") {
+      if (mode === "reset") {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: window.location.origin,
+        });
+        if (error) throw error;
+        setSuccess("Email de réinitialisation envoyé ! Vérifiez votre boîte de réception.");
+      } else if (mode === "login") {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         onAuth(data.user);
@@ -620,13 +626,26 @@ function AuthScreen({ onAuth }) {
             }}>{label}</button>
           ))}
         </div>
-        {[["Email", email, setEmail, "email"], ["Mot de passe", password, setPassword, "password"]].map(([label, val, set, type]) => (
+        {[["Email", email, setEmail, "email"], ...(mode !== "reset" ? [["Mot de passe", password, setPassword, "password"]] : [])].map(([label, val, set, type]) => (
           <div key={type} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 9, letterSpacing: 2, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
             <input type={type} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()}
               style={{ width: "100%", background: "#141414", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none" }} />
           </div>
         ))}
+        {mode === "login" && (
+          <div style={{ textAlign: "right", marginBottom: 14, marginTop: -8 }}>
+            <span onClick={() => { setMode("reset"); setError(""); setSuccess(""); }}
+              style={{ fontSize: 10, color: "#f26522", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
+              Mot de passe oublié ?
+            </span>
+          </div>
+        )}
+        {mode === "reset" && (
+          <div style={{ fontSize: 10, color: "#666", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.5 }}>
+            Entrez votre email. Vous recevrez un lien pour réinitialiser votre mot de passe.
+          </div>
+        )}
         {error && <div style={{ fontSize: 10, color: "#e55", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>⚠ {error}</div>}
         {success && <div style={{ fontSize: 10, color: "#5a5", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>✓ {success}</div>}
         <button onClick={submit} disabled={loading} style={{
@@ -636,8 +655,16 @@ function AuthScreen({ onAuth }) {
           letterSpacing: 4, textTransform: "uppercase", borderRadius: 3,
           opacity: loading ? 0.7 : 1, marginTop: 4
         }}>
-          {loading ? "..." : mode === "login" ? "Se connecter" : "Créer mon compte"}
+          {loading ? "..." : mode === "login" ? "Se connecter" : mode === "reset" ? "Envoyer le lien" : "Créer mon compte"}
         </button>
+        {mode === "reset" && (
+          <div style={{ textAlign: "center", marginTop: 14 }}>
+            <span onClick={() => { setMode("login"); setError(""); setSuccess(""); }}
+              style={{ fontSize: 10, color: "#555", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
+              ← Retour à la connexion
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
