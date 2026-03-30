@@ -449,7 +449,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
-  const dataURL = c.toDataURL('image/jpeg', 0.97);
+  const dataURL = c.toDataURL('image/jpeg', 0.98);
   if (returnFull) return { dataURL, baseURL, transform: { carX, carY, cw, ch, W, H } };
   return dataURL;
 }
@@ -745,7 +745,7 @@ export default function AutoCache() {
     const showroomBgDataUrl = showroomEnabled
       ? (showroomSetupBg === 'custom' && showroomSetupCustomBg
           ? showroomSetupCustomBg
-          : (SHOWROOM_IMAGES[showroomSetupBg] ?? makeShowroomBackground(showroomSetupBg, 1600, 900)))
+          : (SHOWROOM_IMAGES[showroomSetupBg] ?? makeShowroomBackground(showroomSetupBg, 2400, 1350)))
       : null;
 
     for (let i = 0; i < photos.length; i++) {
@@ -756,7 +756,7 @@ export default function AutoCache() {
           // On envoie la photo propre (sans cache plaque) à remove.bg → meilleur détourage
           const cutout = await removeBackground(r.baseDataURL);
           // Cache plaque redessiné nativement sur le composite (pas de double compression)
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 1600, 900, logoImg, r.corners, bgColor, 0, 0, 1.0, true);
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true);
           entry.cutoutDataURL     = cutout;
           entry.showroomDataURL   = sr.dataURL;
           entry.showroomBaseURL   = sr.baseURL;
@@ -793,7 +793,7 @@ export default function AutoCache() {
     setShowroomZoom(r.showroomZoom ?? 1.0);
   };
 
-  const NUDGE_STEP = 50; // pas de déplacement en px sur canvas 1600×900
+  const NUDGE_STEP = 75; // pas de déplacement en px sur canvas 2400×1350
 
   // Recomposite central — utilisé par flèches ET slider zoom
   const recompositeShowroom = (nudge, zoom) => {
@@ -804,7 +804,7 @@ export default function AutoCache() {
         try {
           const logoImgEl = await loadImg(prev.logoPreview);
           const sr = await compositeCarOnBg(
-            prev.cutoutDataURL, prev.showroomBgUrl, 1600, 900,
+            prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
             logoImgEl, prev.corners, prev.bgColor,
             nudge.x, nudge.y, zoom, true
           );
@@ -932,7 +932,7 @@ export default function AutoCache() {
         try {
           const cutout = await removeBackground(snap.baseDataURL);
           const logoImgEl = await loadImg(snap.logoPreview);
-          const newShowroom = await compositeCarOnBg(cutout, snap.showroomBgUrl, 1600, 900,
+          const newShowroom = await compositeCarOnBg(cutout, snap.showroomBgUrl, 2400, 1350,
             logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y, zoom);
           const withSR = { ...snap, cutoutDataURL: cutout, showroomDataURL: newShowroom, showroomOffset: nudge, showroomZoom: zoom };
           setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
@@ -955,7 +955,7 @@ export default function AutoCache() {
     const cW = Math.round(W * cosA + H * sinA);
     const cH = Math.round(W * sinA + H * cosA);
     canvas.width = cW; canvas.height = cH;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d'); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, cW, cH);
     ctx.save(); ctx.translate(cW / 2, cH / 2); ctx.rotate(rad);
     ctx.drawImage(img, -W / 2, -H / 2); ctx.restore();
@@ -985,7 +985,7 @@ export default function AutoCache() {
     const baseImg = adjustBaseImgRef.current;
     const logoImg = adjustLogoImgRef.current;
     if (!canvas || !baseImg) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d'); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(baseImg, 0, 0);
     if (logoImg && corners) {
@@ -1484,7 +1484,7 @@ export default function AutoCache() {
                     const nudge = showroomNudge;
                     const zoom  = showroomZoom;
                     loadImg(snap.logoPreview).then(logoImgEl =>
-                      compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 1600, 900,
+                      compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
                         logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true)
                     ).then(sr => {
                       const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
