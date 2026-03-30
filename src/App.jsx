@@ -36,7 +36,7 @@ const LOGO_FONTS = [
 // ── Cache plaque généré ───────────────────────────────────────────────────
 // Génère un canvas 1040×220 (ratio 4.73:1) avec texte, couleurs et coins arrondis.
 // radius : 0 = coins droits, 50 = forme de pilule (% de H)
-function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact") {
+function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact", borderColor = null, borderWidth = 0) {
   const W = 3120, H = 660;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
@@ -44,9 +44,22 @@ function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact") {
 
   applyRoundedClip(ctx, W, H, radius);
 
-  // Fond principal
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
+  // Liseret : remplir tout avec la couleur du liseret, puis dessiner le fond en retrait
+  const bw = Math.round(borderWidth * H / 100); // épaisseur en pixels (% de H)
+  if (borderColor && bw > 0) {
+    ctx.fillStyle = borderColor;
+    ctx.fillRect(0, 0, W, H);
+    // Fond principal en retrait
+    ctx.save();
+    ctx.translate(bw, bw);
+    applyRoundedClip(ctx, W - bw * 2, H - bw * 2, Math.max(0, radius - bw));
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W - bw * 2, H - bw * 2);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+  }
 
   // Texte principal (taille auto)
   const txt = (text.trim() || "VOTRE TEXTE").toUpperCase();
@@ -650,6 +663,8 @@ export default function AutoCache() {
   const [genBg,    setGenBg]    = useState("#0d2b6b");
   const [genFg,    setGenFg]    = useState("#ffffff");
   const [genFont,  setGenFont]  = useState("impact");
+  const [genBorderColor, setGenBorderColor] = useState("#ffffff");
+  const [genBorderWidth, setGenBorderWidth] = useState(0); // 0–10 : épaisseur du liseret
   const [logoRadius, setLogoRadius] = useState(1); // 0–10 : arrondi des coins, commun import+génération
   const [lightbox, setLightbox] = useState(null);
   const [cropMode, setCropMode] = useState(false);
@@ -701,8 +716,8 @@ export default function AutoCache() {
   // Regénère le cache plaque dès qu'un paramètre change (mode génération)
   useEffect(() => {
     if (logoMode !== "generate") return;
-    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, logoRadius * 5, genFont), generated: true, bgColor: genBg });
-  }, [logoMode, genText, genBg, genFg, logoRadius, genFont]);
+    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, logoRadius * 5, genFont, genBorderWidth > 0 ? genBorderColor : null, genBorderWidth), generated: true, bgColor: genBg });
+  }, [logoMode, genText, genBg, genFg, logoRadius, genFont, genBorderColor, genBorderWidth]);
 
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
@@ -1232,6 +1247,31 @@ export default function AutoCache() {
                         <input type="color" value={genFg} onChange={e => setGenFg(e.target.value)}
                           title="Couleur personnalisée"
                           style={{ width: 26, height: 26, padding: 0, border: "1px solid #2a2a2a", borderRadius: 3, cursor: "pointer", background: "none" }} />
+                      </div>
+                    </div>
+
+                    {/* Liseret (bordure) */}
+                    <div>
+                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Liseret (bordure)</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          {["#ffffff","#000000","#ffcc00","#c0c0c0","#f26522"].map(col => (
+                            <div key={col} onClick={() => { setGenBorderColor(col); if (genBorderWidth === 0) setGenBorderWidth(3); }}
+                              style={{ width: 22, height: 22, background: col, borderRadius: 3, cursor: "pointer", border: genBorderColor === col && genBorderWidth > 0 ? "2px solid #f26522" : "2px solid #2a2a2a", flexShrink: 0 }} />
+                          ))}
+                          <input type="color" value={genBorderColor} onChange={e => { setGenBorderColor(e.target.value); if (genBorderWidth === 0) setGenBorderWidth(3); }}
+                            title="Couleur personnalisée"
+                            style={{ width: 22, height: 22, padding: 0, border: "1px solid #2a2a2a", borderRadius: 3, cursor: "pointer", background: "none" }} />
+                        </div>
+                        <input
+                          type="range" min="0" max="10" step="1"
+                          value={genBorderWidth}
+                          onChange={e => setGenBorderWidth(parseInt(e.target.value))}
+                          style={{ flex: 1, accentColor: "#f26522", height: 3 }}
+                        />
+                        <span style={{ fontSize: 10, color: genBorderWidth > 0 ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
+                          {genBorderWidth === 0 ? "Off" : genBorderWidth}
+                        </span>
                       </div>
                     </div>
 
