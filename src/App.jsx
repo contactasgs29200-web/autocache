@@ -152,6 +152,20 @@ function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
   };
 }
 
+// Conversion corners photo (0-1) ↔ showroom (0-1)
+// t = { carX, carY, cw, ch, W, H } issu de compositeCarOnBg
+function cornersToShowroom(corners, t) {
+  const m = p => ({ x: (t.carX + p.x * t.cw) / t.W, y: (t.carY + p.y * t.ch) / t.H });
+  return { tl: m(corners.tl), tr: m(corners.tr), br: m(corners.br), bl: m(corners.bl) };
+}
+function cornersFromShowroom(sc, t) {
+  const u = p => ({
+    x: Math.max(0, Math.min(1, (p.x * t.W - t.carX) / t.cw)),
+    y: Math.max(0, Math.min(1, (p.y * t.H - t.carY) / t.ch)),
+  });
+  return { tl: u(sc.tl), tr: u(sc.tr), br: u(sc.br), bl: u(sc.bl) };
+}
+
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
 function drawPerspective(ctx, img, tl, tr, br, bl) {
@@ -399,7 +413,7 @@ async function removeBackground(dataUrl) {
 // Composite : pose la voiture découpée sur le fond de showroom
 // logoImg + corners + bgColor permettent de redessiner le cache plaque en qualité native
 // offsetX / offsetY permettent de repositionner la voiture après génération (flèches)
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0) {
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false) {
   const [bgImg, carImg] = await Promise.all([loadImg(bgDataUrl), loadImg(cutoutDataUrl)]);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -420,6 +434,8 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   ctx.shadowOffsetY = Math.round(H * 0.012);
   ctx.drawImage(carImg, carX, carY, cw, ch);
   ctx.restore();
+  // Snapshot avant plaque (pour Ajuster en mode showroom)
+  const baseURL = returnFull ? c.toDataURL('image/jpeg', 0.97) : null;
   // Cache plaque redessiné en qualité native (corners normalisés 0-1 → pixels composite)
   if (logoImg && corners) {
     const mp = p => ({ x: carX + p.x * cw, y: carY + p.y * ch });
@@ -433,7 +449,9 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
-  return c.toDataURL('image/jpeg', 0.97);
+  const dataURL = c.toDataURL('image/jpeg', 0.97);
+  if (returnFull) return { dataURL, baseURL, transform: { carX, carY, cw, ch, W, H } };
+  return dataURL;
 }
 
 // Détecte l'orientation réelle de la voiture via GPT-4o Vision (detail:low, ~$0.001)
@@ -654,8 +672,10 @@ export default function AutoCache() {
   const cropBaseImgRef   = useRef(null); // photo chargée pour le canvas de rognage
   const lbContainerRef   = useRef(null); // ref sur le conteneur de la lightbox (zoom/pan)
   const adjustCanvasRef  = useRef(null); // canvas live-preview en mode Ajuster
-  const adjustBaseImgRef = useRef(null); // photo de base chargée pour le canvas
-  const adjustLogoImgRef = useRef(null); // logo traité chargé pour le canvas
+  const adjustBaseImgRef           = useRef(null);
+  const adjustLogoImgRef           = useRef(null);
+  const adjustIsShowroomRef        = useRef(false);
+  const adjustShowroomTransformRef = useRef(null);
   const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
   const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
 
@@ -736,10 +756,12 @@ export default function AutoCache() {
           // On envoie la photo propre (sans cache plaque) à remove.bg → meilleur détourage
           const cutout = await removeBackground(r.baseDataURL);
           // Cache plaque redessiné nativement sur le composite (pas de double compression)
-          const showroomImg = await compositeCarOnBg(cutout, showroomBgDataUrl, 1600, 900, logoImg, r.corners, bgColor);
-          entry.cutoutDataURL = cutout;
-          entry.showroomDataURL = showroomImg;
-          entry.showroomBgUrl  = showroomBgDataUrl; // conservé pour recomposite via flèches
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 1600, 900, logoImg, r.corners, bgColor, 0, 0, 1.0, true);
+          entry.cutoutDataURL     = cutout;
+          entry.showroomDataURL   = sr.dataURL;
+          entry.showroomBaseURL   = sr.baseURL;
+          entry.showroomTransform = sr.transform;
+          entry.showroomBgUrl     = showroomBgDataUrl;
         } catch(e) {
           console.error('Showroom processing error:', e);
         }
@@ -781,12 +803,12 @@ export default function AutoCache() {
       (async () => {
         try {
           const logoImgEl = await loadImg(prev.logoPreview);
-          const newImg = await compositeCarOnBg(
+          const sr = await compositeCarOnBg(
             prev.cutoutDataURL, prev.showroomBgUrl, 1600, 900,
             logoImgEl, prev.corners, prev.bgColor,
-            nudge.x, nudge.y, zoom
+            nudge.x, nudge.y, zoom, true
           );
-          const updated = { ...prev, showroomDataURL: newImg, showroomOffset: nudge, showroomZoom: zoom };
+          const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
         } catch(e) { console.error('recomposite error', e); }
@@ -1040,13 +1062,22 @@ export default function AutoCache() {
     });
   };
 
-  // Pré-charge photo + logo dans les refs dès que le mode Ajuster s'ouvre,
-  // puis rend la preview initiale sur le canvas.
+  // Pré-charge photo (ou fond showroom) + logo dès que le mode Ajuster s'ouvre.
+  // En mode showroom : canvas = showroomBaseURL (1600×900), coins convertis en espace showroom.
   useEffect(() => {
     if (!adjustMode || !lightbox?.baseDataURL) return;
     let cancelled = false;
+    const isShowroom = !!(lightbox.showroomBaseURL && lightbox.showroomTransform);
+    adjustIsShowroomRef.current        = isShowroom;
+    adjustShowroomTransformRef.current = isShowroom ? lightbox.showroomTransform : null;
+    // Conversion coins → espace showroom AVANT le chargement async (drag réactif)
+    if (isShowroom) {
+      const sc = cornersToShowroom(adjustCorners, lightbox.showroomTransform);
+      adjustCornersRef.current = sc;
+      setAdjustCorners(sc);
+    }
     (async () => {
-      const baseImg = await loadImg(lightbox.baseDataURL);
+      const baseImg = await loadImg(isShowroom ? lightbox.showroomBaseURL : lightbox.baseDataURL);
       const rawLogo = lightbox.logoPreview ? await loadImg(lightbox.logoPreview) : null;
       if (cancelled) return;
       let logoForRender = null;
@@ -1069,9 +1100,9 @@ export default function AutoCache() {
       adjustLogoBgRef.current  = lightbox.bgColor || '#ffffff';
       const canvas = adjustCanvasRef.current;
       if (canvas && !cancelled) {
-        canvas.width  = baseImg.naturalWidth;
-        canvas.height = baseImg.naturalHeight;
-        renderAdjustPreview(adjustCorners);
+        canvas.width  = isShowroom ? lightbox.showroomTransform.W : baseImg.naturalWidth;
+        canvas.height = isShowroom ? lightbox.showroomTransform.H : baseImg.naturalHeight;
+        renderAdjustPreview(adjustCornersRef.current);
       }
     })();
     return () => { cancelled = true; };
@@ -1432,24 +1463,35 @@ export default function AutoCache() {
             if (adjustDrag && adjustCornersRef.current) {
               const canvas = adjustCanvasRef.current;
               if (canvas) {
-                const newDataURL = canvas.toDataURL('image/jpeg', 0.93);
                 const latestCorners = adjustCornersRef.current;
-                const updated = { ...lightbox, processed: newDataURL, corners: latestCorners };
-                setResults(prev => prev.map(r => r === lightbox ? updated : r));
-                setLightbox(updated);
-                // Régénère le showroom avec les nouveaux coins (sans appel remove.bg)
-                if (lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
-                  const snap = { ...lightbox, corners: latestCorners };
-                  const nudge = showroomNudge;
-                  const zoom  = showroomZoom;
-                  loadImg(snap.logoPreview).then(logoImgEl =>
-                    compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 1600, 900,
-                      logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom)
-                  ).then(newShowroom => {
-                    const withSR = { ...updated, showroomDataURL: newShowroom, showroomOffset: nudge, showroomZoom: zoom };
-                    setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
-                    setLightbox(prev => prev?.name === snap.name ? withSR : prev);
-                  }).catch(e => console.error('showroom regen (adjust):', e));
+                if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
+                  // Mode showroom : le canvas EST déjà fond+voiture+cache plaque à qualité native
+                  const t = adjustShowroomTransformRef.current;
+                  const photoCorners   = cornersFromShowroom(latestCorners, t);
+                  const newShowroomURL = canvas.toDataURL('image/jpeg', 0.97);
+                  const updated = { ...lightbox, corners: photoCorners, showroomDataURL: newShowroomURL };
+                  setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
+                  setLightbox(updated);
+                } else {
+                  // Mode normal : sauvegarde la photo avec le cache plaque
+                  const newDataURL = canvas.toDataURL('image/jpeg', 0.93);
+                  const updated = { ...lightbox, processed: newDataURL, corners: latestCorners };
+                  setResults(prev => prev.map(r => r === lightbox ? updated : r));
+                  setLightbox(updated);
+                  // Régénère le showroom avec les nouveaux coins si showroom actif
+                  if (lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
+                    const snap = { ...lightbox, corners: latestCorners };
+                    const nudge = showroomNudge;
+                    const zoom  = showroomZoom;
+                    loadImg(snap.logoPreview).then(logoImgEl =>
+                      compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 1600, 900,
+                        logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true)
+                    ).then(sr => {
+                      const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
+                      setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
+                      setLightbox(prev => prev?.name === snap.name ? withSR : prev);
+                    }).catch(e => console.error('showroom regen (adjust):', e));
+                  }
                 }
               }
             }
