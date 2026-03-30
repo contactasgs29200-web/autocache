@@ -534,6 +534,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
     console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
+    // Interpolation haute qualité pour le logo (important : logo 3120px → ~300px sur la photo)
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     // Remplir le trapèze avec bgColor : comble les micro-écarts entre bandes et sert de fond aux coins arrondis
     ctx.save();
     ctx.beginPath();
@@ -735,9 +738,7 @@ export default function AutoCache() {
       flatCanvas.height = rawLogo.naturalHeight || rawLogo.height;
       const flatCtx = flatCanvas.getContext("2d");
       if (logoRadius > 0) applyRoundedClip(flatCtx, flatCanvas.width, flatCanvas.height, logoRadius * 5);
-      flatCtx.fillStyle = "#ffffff";
-      flatCtx.fillRect(0, 0, flatCanvas.width, flatCanvas.height);
-      flatCtx.drawImage(rawLogo, 0, 0);
+      flatCtx.drawImage(rawLogo, 0, 0); // pas de fond blanc : préserve les couleurs et transparences d'origine
       logoImg = flatCanvas;
     }
     const bgColor = logo.bgColor || "#ffffff";
@@ -1090,8 +1091,7 @@ export default function AutoCache() {
           flat.height = rawLogo.naturalHeight || rawLogo.height;
           const fctx = flat.getContext('2d');
           if (logoRadius > 0) applyRoundedClip(fctx, flat.width, flat.height, logoRadius * 5);
-          fctx.fillStyle = '#ffffff'; fctx.fillRect(0, 0, flat.width, flat.height);
-          fctx.drawImage(rawLogo, 0, 0);
+          fctx.drawImage(rawLogo, 0, 0); // pas de fond blanc : préserve les couleurs d'origine
           logoForRender = flat;
         }
       }
