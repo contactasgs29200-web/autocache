@@ -467,14 +467,28 @@ async function removeBackground(dataUrl) {
 // Composite : pose la voiture découpée sur le fond de showroom
 // logoImg + corners + bgColor permettent de redessiner le cache plaque en qualité native
 // offsetX / offsetY permettent de repositionner la voiture après génération (flèches)
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false) {
-  const [bgImg, carImg] = await Promise.all([loadImg(bgDataUrl), loadImg(cutoutDataUrl)]);
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null) {
+  const loads = [loadImg(bgDataUrl), loadImg(cutoutDataUrl)];
+  if (wallLogoOpts?.src) loads.push(loadImg(wallLogoOpts.src));
+  const [bgImg, carImg, wallImg] = await Promise.all(loads);
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const ctx = c.getContext('2d');
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bgImg, 0, 0, W, H);
+  // Logo mural dessiné sur le mur (AVANT la voiture)
+  if (wallImg && wallLogoOpts) {
+    const wScale = wallLogoOpts.scale || 0.18;
+    const ww = W * wScale;
+    const wh = ww * (wallImg.naturalHeight / wallImg.naturalWidth);
+    const wx = (wallLogoOpts.x ?? 0.5) * W - ww / 2;
+    const wy = (wallLogoOpts.y ?? 0.25) * H - wh / 2;
+    ctx.save();
+    ctx.globalAlpha = wallLogoOpts.opacity ?? 0.85;
+    ctx.drawImage(wallImg, wx, wy, ww, wh);
+    ctx.restore();
+  }
   const scale = Math.min((W * 0.92) / carImg.width, (H * 0.78) / carImg.height) * zoom;
   const cw = carImg.width * scale;
   const ch = carImg.height * scale;
@@ -762,6 +776,12 @@ export default function AutoCache() {
   const [showroomSetupBg,      setShowroomSetupBg]      = useState(0);
   const [showroomSetupCustomBg, setShowroomSetupCustomBg] = useState(null);
   const showroomSetupUploadRef = useRef(null);
+  // ── Logo mural (affiché sur le mur du showroom) ──────────────────────────
+  const [wallLogo, setWallLogo]             = useState(null); // data URL du logo mural
+  const [wallLogoScale, setWallLogoScale]   = useState(0.18); // taille relative (0.05–0.40)
+  const [wallLogoOpacity, setWallLogoOpacity] = useState(0.85);
+  const wallLogoUploadRef = useRef(null);
+  const [wallLogoDrag, setWallLogoDrag]     = useState(null); // drag en cours dans la lightbox
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
   const [showroomZoom,    setShowroomZoom]    = useState(1.0);
@@ -860,12 +880,17 @@ export default function AutoCache() {
           // On envoie la photo propre (sans cache plaque) à remove.bg → meilleur détourage
           const cutout = await removeBackground(r.baseDataURL);
           // Cache plaque redessiné nativement sur le composite (pas de double compression)
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true);
+          const wOpts = wallLogo ? { src: wallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts);
           entry.cutoutDataURL     = cutout;
           entry.showroomDataURL   = sr.dataURL;
           entry.showroomBaseURL   = sr.baseURL;
           entry.showroomTransform = sr.transform;
           entry.showroomBgUrl     = showroomBgDataUrl;
+          entry.wallLogoSrc       = wallLogo;
+          entry.wallLogoPos       = { x: 0.5, y: 0.25 };
+          entry.wallLogoScale     = wallLogoScale;
+          entry.wallLogoOpacity   = wallLogoOpacity;
         } catch(e) {
           console.error('Showroom processing error:', e);
         }
@@ -907,10 +932,11 @@ export default function AutoCache() {
       (async () => {
         try {
           const logoImgEl = await loadImg(prev.logoPreview);
+          const wOpts = prev.wallLogoSrc ? { src: prev.wallLogoSrc, scale: prev.wallLogoScale, opacity: prev.wallLogoOpacity, x: prev.wallLogoPos?.x ?? 0.5, y: prev.wallLogoPos?.y ?? 0.25 } : null;
           const sr = await compositeCarOnBg(
             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
             logoImgEl, prev.corners, prev.bgColor,
-            nudge.x, nudge.y, zoom, true
+            nudge.x, nudge.y, zoom, true, wOpts
           );
           const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
           setLightbox(updated);
@@ -1590,6 +1616,43 @@ export default function AutoCache() {
                           e.target.value = '';
                         }} />
                     </div>
+
+                    {/* Logo mural */}
+                    <div style={{ marginTop: 14, borderTop: "1px solid #252525", paddingTop: 12 }}>
+                      <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Logo mural (sur le mur)</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div onClick={() => wallLogoUploadRef.current?.click()}
+                          style={{ width: 70, height: 39, border: `1px dashed ${wallLogo ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#161616", overflow: "hidden", flexShrink: 0 }}>
+                          {wallLogo
+                            ? <img src={wallLogo} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                            : <span style={{ fontSize: 18, color: "#444" }}>+</span>
+                          }
+                        </div>
+                        <input ref={wallLogoUploadRef} type="file" accept="image/*" style={{ display: "none" }}
+                          onChange={e => {
+                            const f = e.target.files?.[0]; if (!f) return;
+                            const reader = new FileReader();
+                            reader.onload = ev => setWallLogo(ev.target.result);
+                            reader.readAsDataURL(f);
+                            e.target.value = '';
+                          }} />
+                        {wallLogo && (<>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
+                            <input type="range" min="0.05" max="0.40" step="0.01" value={wallLogoScale}
+                              onChange={e => setWallLogoScale(parseFloat(e.target.value))}
+                              style={{ width: "100%", accentColor: "#f26522", height: 3 }} />
+                          </div>
+                          <button onClick={() => setWallLogo(null)}
+                            style={{ background: "transparent", border: "1px solid #2a2a2a", color: "#888", width: 22, height: 22, borderRadius: 3, cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+                        </>)}
+                      </div>
+                      {wallLogo && (
+                        <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 6 }}>
+                          Positionnez-le en cliquant sur l'image dans les résultats
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </section>
@@ -1689,9 +1752,10 @@ export default function AutoCache() {
                     const snap = { ...lightbox, corners: latestCorners };
                     const nudge = showroomNudge;
                     const zoom  = showroomZoom;
+                    const wOpts2 = snap.wallLogoSrc ? { src: snap.wallLogoSrc, scale: snap.wallLogoScale, opacity: snap.wallLogoOpacity, x: snap.wallLogoPos?.x ?? 0.5, y: snap.wallLogoPos?.y ?? 0.25 } : null;
                     loadImg(snap.logoPreview).then(logoImgEl =>
                       compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
-                        logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true)
+                        logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, wOpts2)
                     ).then(sr => {
                       const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
                       setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
@@ -1805,6 +1869,86 @@ export default function AutoCache() {
                 src={lightbox.showroomDataURL || lightbox.processed}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
               />
+            )}
+
+            {/* ── Overlay Wall Logo draggable ── */}
+            {!cropMode && !adjustMode && lightbox.wallLogoSrc && lightbox.showroomDataURL && (
+              <div
+                style={{ position: "absolute", inset: 0, cursor: wallLogoDrag ? "grabbing" : "default", zIndex: 5 }}
+                onMouseDown={e => {
+                  // Vérifier si le clic est sur le wall logo
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const mx = (e.clientX - rect.left) / rect.width;
+                  const my = (e.clientY - rect.top) / rect.height;
+                  const pos = lightbox.wallLogoPos || { x: 0.5, y: 0.25 };
+                  const logoW = lightbox.wallLogoScale || 0.18;
+                  // Estimer la hauteur du logo (approximation basée sur ratio 3:1)
+                  const logoH = logoW * 0.4;
+                  if (Math.abs(mx - pos.x) < logoW / 2 + 0.02 && Math.abs(my - pos.y) < logoH / 2 + 0.02) {
+                    e.preventDefault(); e.stopPropagation();
+                    setWallLogoDrag({ startMx: e.clientX, startMy: e.clientY, startPos: { ...pos } });
+                  }
+                }}
+                onMouseMove={e => {
+                  if (!wallLogoDrag) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const dx = (e.clientX - wallLogoDrag.startMx) / rect.width;
+                  const dy = (e.clientY - wallLogoDrag.startMy) / rect.height;
+                  const newPos = {
+                    x: Math.max(0.05, Math.min(0.95, wallLogoDrag.startPos.x + dx)),
+                    y: Math.max(0.05, Math.min(0.95, wallLogoDrag.startPos.y + dy)),
+                  };
+                  const updated = { ...lightbox, wallLogoPos: newPos };
+                  setLightbox(updated);
+                  setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
+                }}
+                onMouseUp={() => {
+                  if (wallLogoDrag && lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
+                    // Recomposite avec la nouvelle position
+                    const prev = lightbox;
+                    const nudge = showroomNudge;
+                    const zoom = showroomZoom;
+                    const wOpts = { src: prev.wallLogoSrc, scale: prev.wallLogoScale, opacity: prev.wallLogoOpacity, x: prev.wallLogoPos?.x ?? 0.5, y: prev.wallLogoPos?.y ?? 0.25 };
+                    (async () => {
+                      try {
+                        const logoImgEl = await loadImg(prev.logoPreview);
+                        const sr = await compositeCarOnBg(
+                          prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
+                          logoImgEl, prev.corners, prev.bgColor,
+                          nudge.x, nudge.y, zoom, true, wOpts
+                        );
+                        const upd = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform };
+                        setLightbox(upd);
+                        setResults(rs => rs.map(r => r.name === prev.name ? upd : r));
+                      } catch(e) { console.error('wall logo recomposite error', e); }
+                    })();
+                  }
+                  setWallLogoDrag(null);
+                }}
+              >
+                {/* Indicateur visuel de la position du logo (rectangle transparent draggable) */}
+                {(() => {
+                  const pos = lightbox.wallLogoPos || { x: 0.5, y: 0.25 };
+                  const s = lightbox.wallLogoScale || 0.18;
+                  return (
+                    <div style={{
+                      position: "absolute",
+                      left: `${(pos.x - s / 2) * 100}%`,
+                      top: `${(pos.y - s * 0.2) * 100}%`,
+                      width: `${s * 100}%`,
+                      height: `${s * 40}%`,
+                      border: wallLogoDrag ? "2px solid #f26522" : "1px dashed rgba(242,101,34,0.4)",
+                      borderRadius: 3,
+                      cursor: "grab",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      background: wallLogoDrag ? "rgba(242,101,34,0.08)" : "transparent",
+                      transition: wallLogoDrag ? "none" : "border-color 0.2s",
+                    }}>
+                      {!wallLogoDrag && <span style={{ fontSize: 8, color: "rgba(242,101,34,0.6)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", pointerEvents: "none" }}>Déplacer</span>}
+                    </div>
+                  );
+                })()}
+              </div>
             )}
 
             {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
