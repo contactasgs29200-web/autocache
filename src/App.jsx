@@ -967,10 +967,33 @@ export default function AutoCache() {
     const isShowroom = !!lightbox.showroomDataURL;
 
     if (isShowroom) {
-      // Mode showroom : rogne uniquement l'image composite finale
-      const croppedShowroom = await rotateAndCropDataURL(lightbox.showroomDataURL, deg, box);
+      // Mode showroom : rogne l'image composite + la base (sans plaque) pour Ajuster
+      const [croppedShowroom, croppedBase] = await Promise.all([
+        rotateAndCropDataURL(lightbox.showroomDataURL, deg, box),
+        rotateAndCropDataURL(lightbox.showroomBaseURL, deg, box),
+      ]);
+      // Recalcul du transform et des coins dans l'espace rogné (seulement sans rotation)
+      let newTransform = null;
+      let newCorners = lightbox.corners;
+      if (deg === 0 && lightbox.showroomTransform && croppedBase) {
+        const t = lightbox.showroomTransform;
+        const cropX = box.x * t.W, cropY = box.y * t.H;
+        const newW = Math.round(box.w * t.W), newH = Math.round(box.h * t.H);
+        newTransform = { carX: t.carX - cropX, carY: t.carY - cropY, cw: t.cw, ch: t.ch, W: newW, H: newH };
+        // Remap corners showroom → espace rogné
+        if (lightbox.corners) {
+          const sc = cornersToShowroom(lightbox.corners, t);
+          const remap = p => ({
+            x: Math.max(0, Math.min(1, (p.x * t.W - cropX) / newW)),
+            y: Math.max(0, Math.min(1, (p.y * t.H - cropY) / newH)),
+          });
+          const remappedSC = { tl: remap(sc.tl), tr: remap(sc.tr), br: remap(sc.br), bl: remap(sc.bl) };
+          newCorners = cornersFromShowroom(remappedSC, newTransform);
+        }
+      }
       const updated = { ...lightbox, showroomDataURL: croppedShowroom,
-        showroomBaseURL: null, showroomTransform: null,
+        showroomBaseURL: croppedBase, showroomTransform: newTransform,
+        corners: newCorners,
         cutoutDataURL: null, showroomBgUrl: null, cropped: true };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
@@ -996,7 +1019,7 @@ export default function AutoCache() {
     }
     const updated = { ...lightbox, processed: croppedProcessed,
       baseDataURL: croppedBase ?? lightbox.baseDataURL, corners: newCorners, cropped: true };
-    setResults(prev => prev.map(r => r === lightbox ? updated : r));
+    setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
     setLightbox(updated);
     setAdjustCorners(newCorners);
     setCropAngle(180);
@@ -1052,17 +1075,20 @@ export default function AutoCache() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(baseImg, 0, 0);
     if (logoImg && corners) {
-      const bgColor = adjustLogoBgRef.current || '#ffffff';
       const W = canvas.width, H = canvas.height;
       const toPixel = p => ({ x: p.x * W, y: p.y * H });
       const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
       const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-      ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-      ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
-      ctx.restore();
+      // Fond bgColor uniquement en mode non-showroom (couvre l'ancienne plaque)
+      if (!adjustIsShowroomRef.current) {
+        const bgColor = adjustLogoBgRef.current || '#ffffff';
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+        ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+        ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
+        ctx.restore();
+      }
       drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
     }
   };
@@ -1126,7 +1152,7 @@ export default function AutoCache() {
   };
 
   // Pré-charge photo (ou fond showroom) + logo dès que le mode Ajuster s'ouvre.
-  // En mode showroom : canvas = showroomBaseURL (1600×900), coins convertis en espace showroom.
+  // En mode showroom : canvas = showroomBaseURL, coins convertis en espace showroom.
   useEffect(() => {
     if (!adjustMode || !lightbox?.baseDataURL) return;
     let cancelled = false;
@@ -1134,13 +1160,15 @@ export default function AutoCache() {
     adjustIsShowroomRef.current        = isShowroom;
     adjustShowroomTransformRef.current = isShowroom ? lightbox.showroomTransform : null;
     // Conversion coins → espace showroom AVANT le chargement async (drag réactif)
-    if (isShowroom) {
+    if (isShowroom && adjustCorners) {
       const sc = cornersToShowroom(adjustCorners, lightbox.showroomTransform);
       adjustCornersRef.current = sc;
       setAdjustCorners(sc);
     }
+    // Source de l'image de base : showroom sans plaque > photo originale sans plaque
+    const baseSrc = isShowroom ? lightbox.showroomBaseURL : lightbox.baseDataURL;
     (async () => {
-      const baseImg = await loadImg(isShowroom ? lightbox.showroomBaseURL : lightbox.baseDataURL);
+      const baseImg = await loadImg(baseSrc);
       const rawLogo = lightbox.logoPreview ? await loadImg(lightbox.logoPreview) : null;
       if (cancelled) return;
       let logoForRender = null;
@@ -1168,7 +1196,7 @@ export default function AutoCache() {
       }
     })();
     return () => { cancelled = true; };
-  }, [adjustMode, lightbox?.baseDataURL]);
+  }, [adjustMode, lightbox?.baseDataURL, lightbox?.showroomBaseURL]);
 
   if (authLoading) return (
     <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1613,7 +1641,7 @@ export default function AutoCache() {
                   // Mode normal : sauvegarde la photo avec le cache plaque
                   const newDataURL = canvas.toDataURL('image/jpeg', 0.97);
                   const updated = { ...lightbox, processed: newDataURL, corners: latestCorners };
-                  setResults(prev => prev.map(r => r === lightbox ? updated : r));
+                  setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
                   setLightbox(updated);
                   // Régénère le showroom avec les nouveaux coins si showroom actif
                   if (lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
