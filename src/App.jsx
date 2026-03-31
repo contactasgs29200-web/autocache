@@ -726,14 +726,23 @@ export default function AutoCache() {
   const [showroomZoom,    setShowroomZoom]    = useState(1.0);
   const [showroomNudging, setShowroomNudging] = useState(false);
   const zoomTimerRef = useRef(null);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [recoveryMsg, setRecoveryMsg] = useState("");
+  const [recoveryErr, setRecoveryErr] = useState("");
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user || null);
       setAuthLoading(false);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user || null);
+      if (event === "PASSWORD_RECOVERY") {
+        setPasswordRecovery(true);
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -1166,6 +1175,56 @@ export default function AutoCache() {
       <div style={{ color: "#f26522", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 3 }}>CHARGEMENT...</div>
     </div>
   );
+
+  if (passwordRecovery) {
+    const submitNewPassword = async () => {
+      setRecoveryErr(""); setRecoveryMsg(""); setRecoveryLoading(true);
+      try {
+        if (newPassword.length < 6) throw new Error("Le mot de passe doit contenir au moins 6 caractères.");
+        if (newPassword !== newPasswordConfirm) throw new Error("Les mots de passe ne correspondent pas.");
+        const { error } = await supabase.auth.updateUser({ password: newPassword });
+        if (error) throw error;
+        setRecoveryMsg("Mot de passe mis à jour avec succès !");
+        setTimeout(() => { setPasswordRecovery(false); setNewPassword(""); setNewPasswordConfirm(""); setRecoveryMsg(""); }, 2000);
+      } catch (e) { setRecoveryErr(e.message || "Une erreur est survenue"); }
+      setRecoveryLoading(false);
+    };
+    return (
+      <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+        <div style={{ width: 380, padding: 40, background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
+            <svg width="22" height="22" viewBox="0 0 22 22">
+              <polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" />
+              <polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#0f0f0f" />
+            </svg>
+            <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", color: "#ddd5c8" }}>AutoCache</span>
+            <span style={{ fontSize: 9, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace" }}>PRO</span>
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 2, color: "#ddd5c8", textTransform: "uppercase", marginBottom: 24, textAlign: "center" }}>
+            Nouveau mot de passe
+          </div>
+          {[["Nouveau mot de passe", newPassword, setNewPassword], ["Confirmer le mot de passe", newPasswordConfirm, setNewPasswordConfirm]].map(([label, val, set]) => (
+            <div key={label} style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 9, letterSpacing: 2, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
+              <input type="password" value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submitNewPassword()}
+                style={{ width: "100%", background: "#141414", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none" }} />
+            </div>
+          ))}
+          {recoveryErr && <div style={{ fontSize: 10, color: "#e55", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>⚠ {recoveryErr}</div>}
+          {recoveryMsg && <div style={{ fontSize: 10, color: "#5a5", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>✓ {recoveryMsg}</div>}
+          <button onClick={submitNewPassword} disabled={recoveryLoading} style={{
+            width: "100%", background: "#f26522", color: "#090909", border: "none",
+            padding: "13px 24px", cursor: recoveryLoading ? "wait" : "pointer",
+            fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700,
+            letterSpacing: 4, textTransform: "uppercase", borderRadius: 3,
+            opacity: recoveryLoading ? 0.7 : 1, marginTop: 4
+          }}>
+            {recoveryLoading ? "..." : "Mettre à jour"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) return <AuthScreen onAuth={setUser} />;
 
