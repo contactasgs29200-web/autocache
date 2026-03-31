@@ -604,7 +604,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
 const Slider = ({ label, value, min, max, step, onChange }) => (
   <div style={{ marginBottom: 18 }}>
     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-      <span style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "#777", fontFamily: "'JetBrains Mono',monospace" }}>{label}</span>
+      <span style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "#999", fontFamily: "'JetBrains Mono',monospace" }}>{label}</span>
       <span style={{ fontSize: 11, color: "#f26522", fontFamily: "'JetBrains Mono',monospace" }}>{value.toFixed(2)}</span>
     </div>
     <input type="range" min={min} max={max} step={step} value={value}
@@ -643,8 +643,8 @@ function AuthScreen({ onAuth }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
-      <div style={{ width: 380, padding: 40, background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 4 }}>
+    <div style={{ minHeight: "100vh", background: "#0e0e0e", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+      <div style={{ width: 380, padding: 40, background: "#161616", border: "1px solid #252525", borderRadius: 4 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
           <svg width="22" height="22" viewBox="0 0 22 22">
             <polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" />
@@ -667,9 +667,9 @@ function AuthScreen({ onAuth }) {
         </div>
         {[["Email", email, setEmail, "email"], ...(mode !== "reset" ? [["Mot de passe", password, setPassword, "password"]] : [])].map(([label, val, set, type]) => (
           <div key={type} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 9, letterSpacing: 2, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
+            <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
             <input type={type} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()}
-              style={{ width: "100%", background: "#141414", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none" }} />
+              style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none" }} />
           </div>
         ))}
         {mode === "login" && (
@@ -699,7 +699,7 @@ function AuthScreen({ onAuth }) {
         {mode === "reset" && (
           <div style={{ textAlign: "center", marginTop: 14 }}>
             <span onClick={() => { setMode("login"); setError(""); setSuccess(""); }}
-              style={{ fontSize: 10, color: "#555", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
+              style={{ fontSize: 10, color: "#888", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
               ← Retour à la connexion
             </span>
           </div>
@@ -1240,7 +1240,7 @@ export default function AutoCache() {
   }, [adjustMode, lightbox?.baseDataURL, lightbox?.showroomBaseURL]);
 
   if (authLoading) return (
-    <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div style={{ minHeight: "100vh", background: "#0e0e0e", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ color: "#f26522", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 3 }}>CHARGEMENT...</div>
     </div>
   );
@@ -1259,8 +1259,8 @@ export default function AutoCache() {
       setRecoveryLoading(false);
     };
     return (
-      <div style={{ minHeight: "100vh", background: "#090909", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
-        <div style={{ width: 380, padding: 40, background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 4 }}>
+      <div style={{ minHeight: "100vh", background: "#0e0e0e", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+        <div style={{ width: 380, padding: 40, background: "#161616", border: "1px solid #252525", borderRadius: 4 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
             <svg width="22" height="22" viewBox="0 0 22 22">
               <polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" />
@@ -1274,9 +1274,9 @@ export default function AutoCache() {
           </div>
           {[["Nouveau mot de passe", newPassword, setNewPassword], ["Confirmer le mot de passe", newPasswordConfirm, setNewPasswordConfirm]].map(([label, val, set]) => (
             <div key={label} style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 9, letterSpacing: 2, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
               <input type="password" value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submitNewPassword()}
-                style={{ width: "100%", background: "#141414", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none" }} />
+                style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none" }} />
             </div>
           ))}
           {recoveryErr && <div style={{ fontSize: 10, color: "#e55", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>⚠ {recoveryErr}</div>}
@@ -1306,8 +1306,8 @@ export default function AutoCache() {
         input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#f26522;cursor:pointer;}
         ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:#f26522;border-radius:2px;}
       `}</style>
-      <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#090909", minHeight: "100vh", color: "#ddd5c8" }}>
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 28px", height: 56, borderBottom: "1px solid #181818", position: "sticky", top: 0, background: "#090909", zIndex: 10 }}>
+      <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#0e0e0e", minHeight: "100vh", color: "#e0dbd4" }}>
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 28px", height: 56, borderBottom: "1px solid #1e1e1e", position: "sticky", top: 0, background: "#0e0e0e", zIndex: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <svg width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
             <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase" }}>AutoCache</span>
@@ -1315,11 +1315,11 @@ export default function AutoCache() {
           </div>
           <nav style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {[["setup", "Configuration"], ["results", `Résultats${results.length ? ` · ${results.length}` : ""}`]].map(([t, label]) => (
-              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#555", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>{label}</button>
+              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>{label}</button>
             ))}
-            <div style={{ width: 1, height: 20, background: "#1c1c1c", margin: "0 4px" }} />
-            <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
-            <button onClick={logout} style={{ background: "transparent", border: "1px solid #1e1e1e", color: "#555", padding: "5px 12px", cursor: "pointer", borderRadius: 2, fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>Déconnexion</button>
+            <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />
+            <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
+            <button onClick={logout} style={{ background: "transparent", border: "1px solid #282828", color: "#777", padding: "5px 12px", cursor: "pointer", borderRadius: 2, fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>Déconnexion</button>
           </nav>
         </header>
 
@@ -1330,7 +1330,7 @@ export default function AutoCache() {
                 <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>01 — Cache plaque</div>
 
                 {/* ── Onglets Import / Générer ── */}
-                <div style={{ display: "flex", marginBottom: 14, background: "#0a0a0a", border: "1px solid #1c1c1c", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ display: "flex", marginBottom: 14, background: "#121212", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                   {[["import","Mon logo"],["generate","Générer"]].map(([m, label]) => (
                     <button key={m} onClick={() => {
                       if (m === "import") setLogo(null);
@@ -1343,22 +1343,22 @@ export default function AutoCache() {
 
                 {/* ── Mode : importer un fichier ── */}
                 {logoMode === "import" && (<>
-                  <div style={{ fontSize: 10, color: "#444", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>
+                  <div style={{ fontSize: 10, color: "#666", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>
                     {logo ? "✓ Logo chargé · cliquer pour changer" : "PNG avec transparence recommandé"}
                   </div>
                   <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
                     onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
                     onClick={() => logoRef.current?.click()}
-                    style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f0f" }}>
+                    style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#161616" }}>
                     {logo ? (
                       <div style={{ textAlign: "center" }}>
                         <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain", borderRadius: logoRadius > 0 ? `${Math.round(logoRadius * 4)}px` : 0 }} />
                         <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
                       </div>
                     ) : (
-                      <div style={{ textAlign: "center", color: "#333" }}>
+                      <div style={{ textAlign: "center", color: "#555" }}>
                         <div style={{ fontSize: 32, marginBottom: 8 }}>⬡</div>
-                        <div style={{ fontSize: 12, color: "#444" }}>Glisser votre logo ici</div>
+                        <div style={{ fontSize: 12, color: "#666" }}>Glisser votre logo ici</div>
                       </div>
                     )}
                   </div>
@@ -1366,25 +1366,25 @@ export default function AutoCache() {
 
                 {/* ── Mode : générer texte + couleur ── */}
                 {logoMode === "generate" && (
-                  <div style={{ background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 3, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 14 }}>
 
                     {/* Texte */}
                     <div>
-                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Texte du cache plaque</div>
+                      <div style={{ fontSize: 9, color: "#888", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Texte du cache plaque</div>
                       <input
                         type="text" value={genText} onChange={e => setGenText(e.target.value)}
                         placeholder="Nom de votre garage"
-                        style={{ width: "100%", background: "#141414", border: "1px solid #2a2a2a", color: "#ddd5c8", padding: "9px 10px", fontFamily: "'Rajdhani',sans-serif", fontSize: 16, fontWeight: 600, borderRadius: 2, outline: "none" }}
+                        style={{ width: "100%", background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#ddd5c8", padding: "9px 10px", fontFamily: "'Rajdhani',sans-serif", fontSize: 16, fontWeight: 600, borderRadius: 2, outline: "none" }}
                       />
                     </div>
 
                     {/* Police */}
                     <div>
-                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 8, textTransform: "uppercase" }}>Police d'écriture</div>
+                      <div style={{ fontSize: 9, color: "#888", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 8, textTransform: "uppercase" }}>Police d'écriture</div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
                         {LOGO_FONTS.map(f => (
                           <div key={f.key} onClick={() => setGenFont(f.key)}
-                            style={{ background: genFont === f.key ? "#1a1200" : "#141414", border: `1px solid ${genFont === f.key ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, padding: "8px 4px", cursor: "pointer", textAlign: "center", display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+                            style={{ background: genFont === f.key ? "#1a1200" : "#1a1a1a", border: `1px solid ${genFont === f.key ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, padding: "8px 4px", cursor: "pointer", textAlign: "center", display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
                             <span style={{ fontFamily: f.family, fontWeight: f.weight, fontSize: 15, color: genFont === f.key ? "#f26522" : "#aaa", lineHeight: 1 }}>
                               {(genText.trim() || "ABC").toUpperCase().slice(0, 4)}
                             </span>
@@ -1396,7 +1396,7 @@ export default function AutoCache() {
 
                     {/* Couleur de fond */}
                     <div>
-                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur de fond</div>
+                      <div style={{ fontSize: 9, color: "#888", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur de fond</div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                         {["#0d2b6b","#003399","#cc1414","#0d5c1e","#111111","#6b0d1a","#7c4700","#f26522"].map(col => (
                           <div key={col} onClick={() => setGenBg(col)}
@@ -1410,7 +1410,7 @@ export default function AutoCache() {
 
                     {/* Couleur du texte */}
                     <div>
-                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur du texte</div>
+                      <div style={{ fontSize: 9, color: "#888", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur du texte</div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         {["#ffffff","#ffcc00","#000000","#ff6600"].map(col => (
                           <div key={col} onClick={() => setGenFg(col)}
@@ -1424,7 +1424,7 @@ export default function AutoCache() {
 
                     {/* Liseret (bordure) */}
                     <div>
-                      <div style={{ fontSize: 9, color: "#555", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Liseret (bordure)</div>
+                      <div style={{ fontSize: 9, color: "#888", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Liseret (bordure)</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                           {["#ffffff","#000000","#ffcc00","#c0c0c0","#f26522"].map(col => (
@@ -1450,7 +1450,7 @@ export default function AutoCache() {
                     {/* Aperçu live */}
                     {logo?.preview && (
                       <div>
-                        <div style={{ fontSize: 9, color: "#444", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Aperçu</div>
+                        <div style={{ fontSize: 9, color: "#666", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Aperçu</div>
                         <img src={logo.preview} style={{ width: "100%", display: "block", border: "1px solid #2a2a2a" }} />
                       </div>
                     )}
@@ -1460,7 +1460,7 @@ export default function AutoCache() {
                 <input ref={logoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleLogoFile(e.target.files[0])} />
 
                 {/* ── Arrondi des coins (global import + génération) ── */}
-                <div style={{ marginTop: 16, background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 3, padding: "14px 16px" }}>
+                <div style={{ marginTop: 16, background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "14px 16px" }}>
                   <Slider label="Arrondi des coins" value={logoRadius} min={0} max={10} step={1} onChange={setLogoRadius} />
                 </div>
               </section>
@@ -1487,23 +1487,23 @@ export default function AutoCache() {
                     onClick={toggle}
                     style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${active ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none" }}
                   >
-                    <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${active ? "#f26522" : "#333"}`, background: active ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${active ? "#f26522" : "#444"}`, background: active ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                       {active && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                     </div>
                     <div>
                       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: active ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>{icon} {label}</div>
-                      <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
+                      <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
                     </div>
                   </div>
                 ))}
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                  <div style={{ fontSize: 10, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#333", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
-                  <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "#141414", border: `1px solid ${adjEnabled ? "#f26522" : "#2a2a2a"}`, color: adjEnabled ? "#090909" : "#444", padding: "4px 13px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>
+                  <div style={{ fontSize: 10, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#444", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
+                  <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "#1a1a1a", border: `1px solid ${adjEnabled ? "#f26522" : "#2a2a2a"}`, color: adjEnabled ? "#090909" : "#444", padding: "4px 13px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>
                     {adjEnabled ? "ON" : "OFF"}
                   </button>
                 </div>
-                <div style={{ background: "#0f0f0f", border: "1px solid #1c1c1c", borderRadius: 3, padding: "20px 18px", opacity: adjEnabled ? 1 : 0.35, pointerEvents: adjEnabled ? "auto" : "none" }}>
+                <div style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "20px 18px", opacity: adjEnabled ? 1 : 0.35, pointerEvents: adjEnabled ? "auto" : "none" }}>
                   <Slider label="Luminosité" value={adj.brightness} min={0.7} max={1.5} step={0.01} onChange={v => setAdj(p => ({...p, brightness: v}))} />
                   <Slider label="Contraste" value={adj.contrast} min={0.7} max={1.6} step={0.01} onChange={v => setAdj(p => ({...p, contrast: v}))} />
                   <Slider label="Saturation" value={adj.saturation} min={0.5} max={2.0} step={0.01} onChange={v => setAdj(p => ({...p, saturation: v}))} />
@@ -1517,10 +1517,10 @@ export default function AutoCache() {
                 <div onDragOver={e => { e.preventDefault(); setDragOver("photos"); }} onDragLeave={() => setDragOver(null)}
                   onDrop={e => { e.preventDefault(); setDragOver(null); handlePhotoFiles(e.dataTransfer.files); }}
                   onClick={() => photosRef.current?.click()}
-                  style={{ border: `1px dashed ${dragOver === "photos" ? "#f26522" : "#222"}`, borderRadius: 3, padding: "22px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#0f0f0f", marginBottom: 12 }}>
-                  <div style={{ textAlign: "center", color: "#333" }}>
+                  style={{ border: `1px dashed ${dragOver === "photos" ? "#f26522" : "#222"}`, borderRadius: 3, padding: "22px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#161616", marginBottom: 12 }}>
+                  <div style={{ textAlign: "center", color: "#555" }}>
                     <div style={{ fontSize: 30, marginBottom: 8 }}>◈</div>
-                    <div style={{ fontSize: 12, color: "#444" }}>Glisser les photos ici</div>
+                    <div style={{ fontSize: 12, color: "#666" }}>Glisser les photos ici</div>
                     <div style={{ fontSize: 10, marginTop: 3, color: "#2a2a2a" }}>JPG, PNG — plusieurs fichiers acceptés</div>
                   </div>
                 </div>
@@ -1530,15 +1530,15 @@ export default function AutoCache() {
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 5, maxHeight: 210, overflowY: "auto", marginBottom: 10 }}>
                       {photos.map(p => (
                         <div key={p.id} style={{ position: "relative" }}>
-                          <img src={p.preview} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", borderRadius: 2, border: "1px solid #1c1c1c", display: "block" }} />
+                          <img src={p.preview} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", borderRadius: 2, border: "1px solid #252525", display: "block" }} />
                           <button onClick={e => { e.stopPropagation(); setPhotos(prev => prev.filter(x => x.id !== p.id)); }}
                             style={{ position: "absolute", top: 2, right: 2, width: 15, height: 15, borderRadius: "50%", background: "#f26522", border: "none", color: "#090909", fontSize: 9, cursor: "pointer", fontWeight: 700 }}>×</button>
                         </div>
                       ))}
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: 10, color: "#555", fontFamily: "'JetBrains Mono',monospace" }}>{photos.length} photo{photos.length > 1 ? "s" : ""}</span>
-                      <button onClick={() => setPhotos([])} style={{ background: "transparent", border: "1px solid #1e1e1e", color: "#555", padding: "3px 10px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>Tout effacer</button>
+                      <span style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono',monospace" }}>{photos.length} photo{photos.length > 1 ? "s" : ""}</span>
+                      <button onClick={() => setPhotos([])} style={{ background: "transparent", border: "1px solid #1e1e1e", color: "#888", padding: "3px 10px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>Tout effacer</button>
                     </div>
                   </>
                 )}
@@ -1549,17 +1549,17 @@ export default function AutoCache() {
                 <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Showroom Virtuel</div>
                 <div onClick={() => setShowroomEnabled(p => !p)}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${showroomEnabled ? "#f26522" : "#1c1c1c"}`, borderRadius: showroomEnabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
-                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled ? "#f26522" : "#333"}`, background: showroomEnabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled ? "#f26522" : "#444"}`, background: showroomEnabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {showroomEnabled && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                   </div>
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>⬡ Showroom Virtuel</div>
-                    <div style={{ fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Détourage IA · Fond de showroom · Inclus au traitement</div>
+                    <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Détourage IA · Fond de showroom · Inclus au traitement</div>
                   </div>
                 </div>
                 {showroomEnabled && (
-                  <div style={{ padding: "12px 14px", background: "#0a0a0a", border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px" }}>
-                    <div style={{ fontSize: 9, letterSpacing: 2, color: "#555", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
+                  <div style={{ padding: "12px 14px", background: "#121212", border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px" }}>
+                    <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "stretch" }}>
                       {[0, 1, 2, 3].map(idx => {
                         const isActive = showroomSetupBg === idx;
@@ -1567,19 +1567,19 @@ export default function AutoCache() {
                           <div key={idx} onClick={e => { e.stopPropagation(); setShowroomSetupBg(idx); }}
                             style={{ cursor: "pointer", border: `2px solid ${isActive ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, transition: "border-color 0.12s" }}>
                             <img src={SHOWROOM_THUMBS[idx]} style={{ display: "block", width: "100%", height: 39, objectFit: "cover" }} />
-                            <div style={{ background: isActive ? "#f26522" : "#141414", color: isActive ? "#090909" : "#555", fontSize: 7, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>
+                            <div style={{ background: isActive ? "#f26522" : "#1a1a1a", color: isActive ? "#090909" : "#555", fontSize: 7, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>
                               {SHOWROOM_LABELS[idx]}
                             </div>
                           </div>
                         );
                       })}
                       <div onClick={e => { e.stopPropagation(); showroomSetupUploadRef.current?.click(); }}
-                        style={{ cursor: "pointer", border: `2px solid ${showroomSetupBg === 'custom' ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, display: "flex", flexDirection: "column", background: "#111", transition: "border-color 0.12s" }}>
+                        style={{ cursor: "pointer", border: `2px solid ${showroomSetupBg === 'custom' ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, display: "flex", flexDirection: "column", background: "#1e1e1e", transition: "border-color 0.12s" }}>
                         {showroomSetupCustomBg
                           ? <img src={showroomSetupCustomBg} style={{ display: "block", width: "100%", height: 39, objectFit: "cover" }} />
-                          : <div style={{ height: 39, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#333" }}>+</div>
+                          : <div style={{ height: 39, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#555" }}>+</div>
                         }
-                        <div style={{ background: showroomSetupBg === 'custom' ? "#f26522" : "#141414", color: showroomSetupBg === 'custom' ? "#090909" : "#555", fontSize: 7, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>Custom</div>
+                        <div style={{ background: showroomSetupBg === 'custom' ? "#f26522" : "#1a1a1a", color: showroomSetupBg === 'custom' ? "#090909" : "#555", fontSize: 7, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>Custom</div>
                       </div>
                       <input ref={showroomSetupUploadRef} type="file" accept="image/*" style={{ display: "none" }}
                         onChange={e => {
@@ -1595,18 +1595,18 @@ export default function AutoCache() {
               </section>
 
               <section>
-                <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "#141414", color: canStart ? "#090909" : "#333", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
+                <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "#1a1a1a", color: canStart ? "#090909" : "#444", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
                   {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}${showroomEnabled ? " + Showroom" : ""}`}
                 </button>
                 {processing && (
                   <div style={{ marginTop: 12 }}>
-                    <div style={{ height: 2, background: "#181818", borderRadius: 1, overflow: "hidden" }}>
+                    <div style={{ height: 2, background: "#1e1e1e", borderRadius: 1, overflow: "hidden" }}>
                       <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
                     </div>
-                    <div style={{ marginTop: 5, fontSize: 9, color: "#555", fontFamily: "'JetBrains Mono',monospace", textAlign: "right" }}>{pct}%</div>
+                    <div style={{ marginTop: 5, fontSize: 9, color: "#888", fontFamily: "'JetBrains Mono',monospace", textAlign: "right" }}>{pct}%</div>
                   </div>
                 )}
-                {!logo && <div style={{ marginTop: 10, fontSize: 10, color: "#444", fontFamily: "'JetBrains Mono',monospace" }}>⚠ Chargez votre logo pour continuer</div>}
+                {!logo && <div style={{ marginTop: 10, fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace" }}>⚠ Chargez votre logo pour continuer</div>}
               </section>
             </div>
           </div>
@@ -1615,7 +1615,7 @@ export default function AutoCache() {
         {tab === "results" && (
           <div style={{ maxWidth: 1200, margin: "0 auto", padding: "32px 28px" }}>
             {results.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "80px 0", color: "#333" }}>
+              <div style={{ textAlign: "center", padding: "80px 0", color: "#555" }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>◈</div>
                 <div style={{ fontSize: 14, letterSpacing: 2, textTransform: "uppercase" }}>Aucun résultat</div>
               </div>
@@ -1624,7 +1624,7 @@ export default function AutoCache() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
                   <div>
                     <div style={{ fontSize: 10, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>{results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""}</div>
-                    <div style={{ marginTop: 4, fontSize: 10, color: "#444", fontFamily: "'JetBrains Mono',monospace" }}>
+                    <div style={{ marginTop: 4, fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace" }}>
                       {results.filter(r => r.plateFound).length} détectée{results.filter(r => r.plateFound).length > 1 ? "s" : ""} · {results.filter(r => !r.plateFound).length} non détectée{results.filter(r => !r.plateFound).length > 1 ? "s" : ""}
                     </div>
                   </div>
@@ -1632,9 +1632,9 @@ export default function AutoCache() {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
                   {results.map((r, i) => (
-                    <div key={i} style={{ background: "#0f0f0f", border: "1px solid #1a1a1a", borderRadius: 3, overflow: "hidden" }}>
+                    <div key={i} style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
-                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#111", display: "block" }} />
+                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#1e1e1e", display: "block" }} />
                         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
                           <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>
                             {r.plateFound ? "✓ PLAQUE CACHÉE" : "⚠ NON DÉTECTÉE"}
@@ -1646,7 +1646,7 @@ export default function AutoCache() {
                         <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: "3px 7px", fontSize: 9, color: "#aaa", fontFamily: "'JetBrains Mono',monospace" }}>🔍 Agrandir</div>
                       </div>
                       <div style={{ padding: "9px 11px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #161616" }}>
-                        <div style={{ fontSize: 10, color: "#444", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "68%" }}>{r.name}</div>
+                        <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "68%" }}>{r.name}</div>
                         <button onClick={() => downloadOne(r)} style={{ background: "transparent", border: "1px solid #2a2a2a", color: "#f26522", padding: "4px 11px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>DL</button>
                       </div>
                     </div>
@@ -1708,7 +1708,7 @@ export default function AutoCache() {
         >
           {/* ── Barre du haut ── */}
           <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "0 4px", flexWrap: "wrap", gap: 8 }}>
-            <div style={{ fontSize: 10, color: "#555", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>
+            <div style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
 
               {/* Bouton Rogner toggle */}
@@ -1757,7 +1757,7 @@ export default function AutoCache() {
                 >⬇ Télécharger</button>
               )}
 
-              <button onClick={closeLightbox} style={{ background: "#181818", color: "#aaa", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 14, borderRadius: 2 }}>✕</button>
+              <button onClick={closeLightbox} style={{ background: "#1e1e1e", color: "#aaa", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 14, borderRadius: 2 }}>✕</button>
             </div>
           </div>
 
@@ -1887,7 +1887,7 @@ export default function AutoCache() {
 
           {/* ── Jauge d'inclinaison (mode Rogner) ── */}
           {cropMode && (
-            <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: "min(1100px, 100vw - 32px)", marginTop: 10, padding: "10px 16px 8px", background: "#0f0f0f", border: "1px solid #222", borderRadius: 3 }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: "min(1100px, 100vw - 32px)", marginTop: 10, padding: "10px 16px 8px", background: "#161616", border: "1px solid #222", borderRadius: 3 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
                 <span style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "#777", fontFamily: "'JetBrains Mono',monospace" }}>Inclinaison</span>
                 <span style={{ fontSize: 11, color: "#f26522", fontFamily: "'JetBrains Mono',monospace" }}>
@@ -1903,7 +1903,7 @@ export default function AutoCache() {
                 }}
                 style={{ width: "100%", accentColor: "#f26522", cursor: "pointer" }}
               />
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 9, color: "#333", fontFamily: "'JetBrains Mono',monospace" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 9, color: "#555", fontFamily: "'JetBrains Mono',monospace" }}>
                 <span>−180°</span><span>0°</span><span>+180°</span>
               </div>
             </div>
@@ -1967,7 +1967,7 @@ export default function AutoCache() {
           )}
 
           {/* ── Pied ── */}
-          <div style={{ marginTop: 8, fontSize: 9, color: "#444", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
+          <div style={{ marginTop: 8, fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
             {adjustMode
               ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
