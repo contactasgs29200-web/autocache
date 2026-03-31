@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { removeBackground as removeBgImgly } from "@imgly/background-removal";
+// @imgly/background-removal chargé dynamiquement (uniquement si showroom activé)
+let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
@@ -133,35 +134,44 @@ function estimateAngleFromPosition(plate) {
   return { near_side, angle_deg };
 }
 
-// Build trapezoid corners from PR bounding box + perspective angle.
-// plateCenter (optionnel) : centre détecté par GPT-4o {cx, cy, w, h} — plus fiable que la boîte PR.
-// Si absent : fallback sur le centre de la boîte PR.
+// Build trapezoid corners from PR bounding box.
+// Stratégie : utilise directement les 4 coins détectés par PlateRecognizer
+// (qui incluent déjà la perspective réelle) puis applique le ratio 520×110mm
+// pour corriger la hauteur tout en conservant la déformation horizontale.
 function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
-  const pw  = plate.tr.x - plate.tl.x;
+  // Centre de la plaque détectée (PR)
+  const cx = (plate.tl.x + plate.tr.x + plate.br.x + plate.bl.x) / 4;
+  const cy = plateCenter ? plateCenter.cy : (plate.tl.y + plate.tr.y + plate.br.y + plate.bl.y) / 4;
 
-  // Position X : toujours depuis PR (fiable horizontalement)
-  const cx  = (plate.tl.x + plate.tr.x) / 2;
+  // Largeur apparente (haut et bas séparément pour la perspective)
+  const topW  = plate.tr.x - plate.tl.x;
+  const botW  = plate.br.x - plate.bl.x;
 
-  // Position Y : GPT-4o voit la plaque directement → cy précis
-  // Fallback : centre de la boîte PR (souvent bruité mais mieux que rien)
-  const cy  = plateCenter ? plateCenter.cy : (plate.tl.y + plate.bl.y) / 2;
+  // Hauteur théorique basée sur le ratio 520×110mm (4.73:1)
+  // Utilise la largeur moyenne pour le calcul
+  const avgW = (topW + botW) / 2;
+  const ph   = avgW / 4.73;
 
-  // Hauteur : ratio théorique 520×110mm (stable, indépendant des bounding box bruitées)
-  const ph  = pw / 4.73;
+  // Décalage horizontal en perspective : le côté proche est décalé vers l'extérieur
+  // On reprend le décalage X réel de PR entre haut et bas
+  const topCx = (plate.tl.x + plate.tr.x) / 2;
+  const botCx = (plate.bl.x + plate.br.x) / 2;
+  const xShift = (topCx - botCx) * 0.5; // décalage en perspective (convergence vers point de fuite)
 
-  const theta  = angle_deg * Math.PI / 180;
-  const PERSP  = 0.40;
+  // Hauteur gauche/droite différente en perspective
+  const theta = angle_deg * Math.PI / 180;
+  const PERSP = 0.32;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
   const farH   = ph * (1 - Math.sin(theta) * PERSP);
   const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
   const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
 
-  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° cy=${cy.toFixed(4)} (${plateCenter ? "GPT-4o" : "PR center"}) ph=${ph.toFixed(4)}`, "color:orange;font-weight:bold");
+  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° cy=${cy.toFixed(4)} topW=${topW.toFixed(4)} botW=${botW.toFixed(4)} ph=${ph.toFixed(4)}`, "color:orange;font-weight:bold");
   return {
-    tl: { x: Math.max(0, cx - pw * 0.5), y: Math.max(0, cy - leftH  * 0.5) },
-    tr: { x: Math.min(1, cx + pw * 0.5), y: Math.max(0, cy - rightH * 0.5) },
-    br: { x: Math.min(1, cx + pw * 0.5), y: Math.min(1, cy + rightH * 0.5) },
-    bl: { x: Math.max(0, cx - pw * 0.5), y: Math.min(1, cy + leftH  * 0.5) },
+    tl: { x: Math.max(0, cx - topW * 0.5), y: Math.max(0, cy - leftH  * 0.5) },
+    tr: { x: Math.min(1, cx + topW * 0.5), y: Math.max(0, cy - rightH * 0.5) },
+    br: { x: Math.min(1, cx + botW * 0.5), y: Math.min(1, cy + rightH * 0.5) },
+    bl: { x: Math.max(0, cx - botW * 0.5), y: Math.min(1, cy + leftH  * 0.5) },
   };
 }
 
@@ -408,6 +418,11 @@ function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
 // Modèle ONNX (~40 MB) téléchargé une seule fois par le navigateur puis mis en cache.
 // Traite à 2000 px → netteté réelle vs 500 px max du plan gratuit remove.bg.
 async function removeBackground(dataUrl) {
+  // Import dynamique — le modèle ONNX (~40 MB) n'est téléchargé qu'au premier appel
+  if (!removeBgImgly) {
+    const mod = await import("@imgly/background-removal");
+    removeBgImgly = mod.removeBackground;
+  }
   // Réduit à 2000 px pour équilibrer qualité / temps de traitement (~5-15 s)
   const small  = await shrinkDataUrl(dataUrl, 2000, 0.96);
   const blob   = await fetch(small).then(r => r.blob());
@@ -500,12 +515,12 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
-  // Détection plaque + angle voiture + optiques en parallèle (aucun délai cumulé)
+  // Détection plaque + (angle GPT-4o seulement si showroom activé) + optiques en parallèle
   const [plate, angleData, lights] = await Promise.all([
     detectPlate(b64, imgW, imgH),
-    detectCarAngle(b64),
+    useGptAngle ? detectCarAngle(b64) : Promise.resolve(null),
     headlightPolish ? detectHeadlights(b64) : Promise.resolve([]),
   ]);
   const photoURL = URL.createObjectURL(photoFile);
@@ -812,7 +827,7 @@ export default function AutoCache() {
       : null;
 
     for (let i = 0; i < photos.length; i++) {
-      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish);
+      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
