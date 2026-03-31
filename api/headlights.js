@@ -26,16 +26,16 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set in environment' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64 image' });
 
-  const prompt = `Look at this car photo. Locate every headlight and taillight unit visible on the car.
+  const prompt = `Look at this car photo. Locate ONLY the FRONT headlights (phares avant) visible on the car. Do NOT include rear taillights, brake lights, or turn signals.
 
-For each light, return a bounding box in normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom edge of the image).
+For each front headlight, return a bounding box in normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom edge of the image).
 
 Rules:
 - x, y = top-left corner of the bounding box
 - w, h = width and height
-- Be generous with the box: include the full plastic lens, not just the bulb
-- Include all visible lights (front and rear)
-- If no lights are visible, return {"lights": []}
+- Be generous with the box: include the full plastic lens housing, not just the bulb
+- ONLY front headlights (the ones near the hood/bonnet). Exclude ALL rear lights.
+- If no front headlights are visible (e.g. car seen from behind), return {"lights": []}
 
 Return ONLY this JSON (no explanation):
 {"lights": [{"x": 0.12, "y": 0.40, "w": 0.14, "h": 0.09}]}`;

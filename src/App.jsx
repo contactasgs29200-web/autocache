@@ -280,13 +280,14 @@ async function detectHeadlights(b64) {
   }
 }
 
-// ── Lustrage des optiques : correction chromatique localisée ─────────────────
-// Pour chaque pixel jauni dans la boîte englobante, on calcule sa luminance
-// moyenne et on ramène R et B vers cette valeur neutre (bilan des blancs local).
-// La force de correction augmente avec le degré de jaunissement du pixel.
+// ── Lustrage des optiques avant : correction chromatique localisée ────────────
+// Réduit le voile jaune/blanc sur les phares avant en neutralisant la dominante
+// chaude et en augmentant la clarté + le contraste local.
+// Travaille uniquement sur les pixels à dominante chaude (jaune/ambré) ;
+// les pixels déjà neutres ou froids ne sont pas touchés.
 function polishHeadlights(ctx, lights, W, H) {
   for (const light of lights) {
-    const pad = 0.02;
+    const pad = 0.015;
     const px = Math.max(0, Math.round((light.x - pad) * W));
     const py = Math.max(0, Math.round((light.y - pad) * H));
     const pw = Math.min(W - px, Math.round((light.w + pad * 2) * W));
@@ -296,35 +297,60 @@ function polishHeadlights(ctx, lights, W, H) {
     const id = ctx.getImageData(px, py, pw, ph);
     const d  = id.data;
 
+    // Passe 1 : luminance moyenne de la zone (pour contraste local)
+    let sumLum = 0, count = 0;
+    for (let k = 0; k < d.length; k += 4) {
+      sumLum += d[k] * 0.299 + d[k+1] * 0.587 + d[k+2] * 0.114;
+      count++;
+    }
+    const avgLum = sumLum / count;
+
+    // Passe 2 : correction pixel par pixel
     for (let j = 0; j < ph; j++) {
       for (let i = 0; i < pw; i++) {
         const idx = (j * pw + i) * 4;
         const r = d[idx], g = d[idx + 1], b = d[idx + 2];
+        const lum = r * 0.299 + g * 0.587 + b * 0.114;
 
-        // Jaunissement = excès de rouge par rapport au bleu
-        const yellowness = (r - b) / 255;
-        if (yellowness < 0.03) continue; // pixel déjà assez neutre → on ne touche pas
+        // Jaunissement = excès de (R+G)/2 par rapport à B, normalisé
+        const warmth = ((r + g) / 2 - b) / 255;
+        if (warmth < 0.04) continue; // pixel neutre ou froid → ne pas toucher
 
-        // Fonte aux bords pour éviter les rectangles visibles
-        const ex = Math.min(i, pw - 1 - i) / (pw * 0.15);
-        const ey = Math.min(j, ph - 1 - j) / (ph * 0.15);
-        const edge = Math.min(1, ex, ey);
+        // Fonte aux bords (elliptique pour un rendu plus naturel)
+        const nx = (i / pw - 0.5) * 2;  // -1..1
+        const ny = (j / ph - 0.5) * 2;
+        const dist = Math.sqrt(nx * nx + ny * ny);
+        const edge = Math.max(0, Math.min(1, (1.2 - dist) / 0.5));
+        if (edge <= 0) continue;
 
-        // Intensité : pleine correction dès 12 % de jaunissement (yellowness ≥ 0.12)
-        const blend = edge * Math.min(1, yellowness * 8);
+        // Force de correction proportionnelle à la chaleur du pixel
+        const strength = edge * Math.min(1, warmth * 5) * 0.7;
 
-        // Cible neutre froide : R pousse sous la luminance, B au-dessus
-        // → résultat légèrement bleuté/blanc comme un optique propre
-        const lum = (r + g + b) / 3;
-        const targetR = Math.min(r, lum * 0.92); // R descend sous la luminance
-        const targetB = Math.max(b, lum * 1.10); // B monte au-dessus de la luminance
+        // Balance des blancs : ramène R et G vers une teinte neutre
+        // R descend légèrement, G reste ~stable, B monte légèrement
+        const targetR = lum * 0.97;
+        const targetG = lum * 1.00;
+        const targetB = lum * 1.05;
 
-        // Clarté forte pour simuler le polissage / verre transparent
-        const boost = blend * 30;
+        let newR = r + (targetR - r) * strength;
+        let newG = g + (targetG - g) * strength * 0.4; // G touché très peu
+        let newB = b + (targetB - b) * strength;
 
-        d[idx]     = Math.max(0, Math.min(255, r + (targetR - r) * blend + boost));
-        d[idx + 1] = Math.max(0, Math.min(255, g                          + boost));
-        d[idx + 2] = Math.max(0, Math.min(255, b + (targetB - b) * blend + boost));
+        // Micro-contraste local : éclaircir les zones sombres, assombrir les claires
+        const contrastBoost = (lum - avgLum) * 0.08 * edge;
+        newR += contrastBoost;
+        newG += contrastBoost;
+        newB += contrastBoost;
+
+        // Légère clarté pour simuler la transparence du verre
+        const clarityBoost = strength * 12;
+        newR += clarityBoost;
+        newG += clarityBoost;
+        newB += clarityBoost;
+
+        d[idx]     = Math.max(0, Math.min(255, Math.round(newR)));
+        d[idx + 1] = Math.max(0, Math.min(255, Math.round(newG)));
+        d[idx + 2] = Math.max(0, Math.min(255, Math.round(newB)));
       }
     }
     ctx.putImageData(id, px, py);
