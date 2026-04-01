@@ -799,6 +799,8 @@ export default function AutoCache() {
   const [lbZoom, setLbZoom] = useState(1);            // zoom de la lightbox (1 = normal, max 8)
   const [lbPan,  setLbPan]  = useState({ x: 0, y: 0 }); // décalage (px) du calque zoomé
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
+  const [settingsOpen, setSettingsOpen] = useState(false); // menu settings en haut à droite
+  const settingsRef = useRef(null); // ref pour fermer au clic extérieur
   const logoRef        = useRef();
   const photosRef      = useRef();
   const cropImgRef       = useRef(null); // ref sur l'<img> de la lightbox (hors crop)
@@ -873,6 +875,16 @@ export default function AutoCache() {
       events.forEach(e => window.removeEventListener(e, reset));
     };
   }, [user]);
+
+  // Fermer le menu settings au clic extérieur
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const handler = (e) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target)) setSettingsOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [settingsOpen]);
 
   // Regénère le cache plaque dès qu'un paramètre change (mode génération)
   useEffect(() => {
@@ -1402,8 +1414,67 @@ export default function AutoCache() {
               <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>{label}</button>
             ))}
             <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />
-            <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
-            <button onClick={logout} style={{ background: "transparent", border: "1px solid #282828", color: "#777", padding: "5px 12px", cursor: "pointer", borderRadius: 2, fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>Déconnexion</button>
+            {/* ── Bouton Settings + Menu déroulant ── */}
+            <div ref={settingsRef} style={{ position: "relative" }}>
+              <button onClick={() => setSettingsOpen(o => !o)}
+                style={{ background: settingsOpen ? "#1e1e1e" : "transparent", border: `1px solid ${settingsOpen ? "#f26522" : "#282828"}`, color: settingsOpen ? "#f26522" : "#777", padding: "5px 10px", cursor: "pointer", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}
+                title="Paramètres"
+              >
+                <span style={{ fontSize: 14 }}>⚙</span>
+                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", fontFamily: "'Rajdhani',sans-serif" }}>Menu</span>
+              </button>
+              {settingsOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 6px)", right: 0,
+                  background: "#141414", border: "1px solid #2a2a2a", borderRadius: 4,
+                  minWidth: 220, boxShadow: "0 8px 32px rgba(0,0,0,0.6)", zIndex: 2000,
+                  overflow: "hidden",
+                }}>
+                  {/* En-tête utilisateur */}
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid #222", background: "#111" }}>
+                    <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>Connecté en tant que</div>
+                    <div style={{ fontSize: 11, color: "#ddd5c8", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
+                  </div>
+                  {/* Menu items */}
+                  {[
+                    { icon: "👤", label: "Informations du compte", action: () => { setSettingsOpen(false); alert("Fonctionnalité à venir — gestion du profil"); } },
+                    { icon: "💳", label: "Abonnement", action: () => { setSettingsOpen(false); alert("Fonctionnalité à venir — gestion de l'abonnement"); } },
+                    { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); window.open("mailto:contact@autocache.fr", "_blank"); } },
+                  ].map((item, i) => (
+                    <button key={i} onClick={item.action}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10, width: "100%",
+                        padding: "10px 16px", background: "transparent", border: "none",
+                        color: "#bbb", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
+                        fontSize: 12, fontWeight: 600, letterSpacing: 1, textAlign: "left",
+                        borderBottom: "1px solid #1a1a1a", transition: "background 0.1s",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = "#1a1a1a"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                    >
+                      <span style={{ fontSize: 14, width: 20, textAlign: "center" }}>{item.icon}</span>
+                      {item.label}
+                    </button>
+                  ))}
+                  {/* Séparateur + Déconnexion */}
+                  <div style={{ height: 1, background: "#252525", margin: "2px 0" }} />
+                  <button onClick={() => { setSettingsOpen(false); logout(); }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 10, width: "100%",
+                      padding: "10px 16px", background: "transparent", border: "none",
+                      color: "#c0392b", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
+                      fontSize: 12, fontWeight: 700, letterSpacing: 1, textAlign: "left",
+                      transition: "background 0.1s",
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = "rgba(192,57,43,0.08)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    <span style={{ fontSize: 14, width: 20, textAlign: "center" }}>🚪</span>
+                    Déconnexion
+                  </button>
+                </div>
+              )}
+            </div>
           </nav>
         </header>
 
