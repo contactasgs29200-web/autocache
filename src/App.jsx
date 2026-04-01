@@ -673,6 +673,8 @@ function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -689,7 +691,12 @@ function AuthScreen({ onAuth }) {
         if (error) throw error;
         onAuth(data.user);
       } else {
-        const { error } = await supabase.auth.signUp({ email, password });
+        if (!fullName.trim()) throw new Error("Veuillez entrer votre nom ou nom d'entreprise.");
+        if (!phone.trim()) throw new Error("Veuillez entrer votre numéro de téléphone.");
+        const { error } = await supabase.auth.signUp({
+          email, password,
+          options: { data: { full_name: fullName.trim(), phone: phone.trim() } }
+        });
         if (error) throw error;
         setSuccess("Compte créé ! Vérifiez votre email puis connectez-vous.");
         setMode("login");
@@ -721,11 +728,19 @@ function AuthScreen({ onAuth }) {
             }}>{label}</button>
           ))}
         </div>
-        {[["Email", email, setEmail, "email"], ...(mode !== "reset" ? [["Mot de passe", password, setPassword, "password"]] : [])].map(([label, val, set, type]) => (
-          <div key={type} style={{ marginBottom: 16 }}>
+        {[
+          ["Email", email, setEmail, "email", true],
+          ...(mode === "signup" ? [
+            ["Nom / Nom d'entreprise", fullName, setFullName, "text", true],
+            ["Téléphone", phone, setPhone, "tel", true],
+          ] : []),
+          ...(mode !== "reset" ? [["Mot de passe", password, setPassword, "password", true]] : []),
+        ].map(([label, val, set, type]) => (
+          <div key={label} style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
             <input type={type} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()}
-              style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none" }} />
+              placeholder={type === "tel" ? "06 12 34 56 78" : ""}
+              style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none", boxSizing: "border-box" }} />
           </div>
         ))}
         {mode === "login" && (
@@ -1432,8 +1447,10 @@ export default function AutoCache() {
                 }}>
                   {/* En-tête utilisateur */}
                   <div style={{ padding: "12px 16px", borderBottom: "1px solid #222", background: "#111" }}>
-                    <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>Connecté en tant que</div>
-                    <div style={{ fontSize: 11, color: "#ddd5c8", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
+                    {user.user_metadata?.full_name && (
+                      <div style={{ fontSize: 12, color: "#ddd5c8", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>{user.user_metadata.full_name}</div>
+                    )}
+                    <div style={{ fontSize: 10, color: "#777", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
                   </div>
                   {/* Menu items */}
                   {[
