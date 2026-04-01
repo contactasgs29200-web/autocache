@@ -90,7 +90,7 @@ const WALL_FONTS = [
 ];
 
 // Génère un PNG transparent avec le texte mural (haute résolution)
-function makeWallTextDataURL(text, color, fontKey = "rajdhani") {
+function makeWallTextDataURL(text, color, fontKey = "rajdhani", strokeColor = null, strokeWidth = 0, underline = false) {
   const f = WALL_FONTS.find(f => f.key === fontKey) ?? WALL_FONTS[0];
   const txt = text.trim() || "VOTRE ENSEIGNE";
   // Canvas temporaire pour mesurer le texte
@@ -99,17 +99,40 @@ function makeWallTextDataURL(text, color, fontKey = "rajdhani") {
   const fontSize = 200;
   tctx.font = `${f.weight} ${fontSize}px ${f.family}`;
   const m = tctx.measureText(txt);
-  const W = Math.ceil(m.width) + 80;
-  const H = fontSize + 60;
+  const stroke = strokeColor && strokeWidth > 0 ? strokeWidth * 4 : 0; // ×4 car canvas haute résolution
+  const underlinePad = underline ? Math.round(fontSize * 0.12) : 0;
+  const W = Math.ceil(m.width) + 80 + stroke * 2;
+  const H = fontSize + 60 + stroke * 2 + underlinePad;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
   const ctx = c.getContext("2d");
-  // Fond transparent — texte seul
-  ctx.fillStyle = color;
   ctx.font = `${f.weight} ${fontSize}px ${f.family}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(txt, W / 2, H / 2);
+  const cx = W / 2;
+  const cy = (H - underlinePad) / 2;
+  // Liseré (stroke)
+  if (strokeColor && strokeWidth > 0) {
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = stroke;
+    ctx.lineJoin = "round";
+    ctx.strokeText(txt, cx, cy);
+  }
+  // Remplissage
+  ctx.fillStyle = color;
+  ctx.fillText(txt, cx, cy);
+  // Soulignement
+  if (underline) {
+    const metrics = ctx.measureText(txt);
+    const lineY = cy + fontSize * 0.58 + underlinePad * 0.5;
+    const lineX = cx - metrics.width / 2;
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(4, fontSize * 0.06);
+    ctx.moveTo(lineX, lineY);
+    ctx.lineTo(lineX + metrics.width, lineY);
+    ctx.stroke();
+  }
   return c.toDataURL("image/png");
 }
 
@@ -846,6 +869,9 @@ export default function AutoCache() {
   const [wallText, setWallText]             = useState("");
   const [wallTextColor, setWallTextColor]   = useState("#ffffff");
   const [wallTextFont, setWallTextFont]     = useState("Rajdhani");
+  const [wallTextStrokeColor, setWallTextStrokeColor] = useState("#000000");
+  const [wallTextStrokeWidth, setWallTextStrokeWidth] = useState(0); // 0 = désactivé
+  const [wallTextUnderline, setWallTextUnderline]     = useState(false);
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
   const [showroomZoom,    setShowroomZoom]    = useState(1.0);
@@ -944,7 +970,7 @@ export default function AutoCache() {
     if (wallLogoMode === "image" && wallLogo) {
       resolvedWallLogo = wallLogo;
     } else if (wallLogoMode === "text" && wallText.trim()) {
-      resolvedWallLogo = makeWallTextDataURL(wallText, wallTextColor, wallTextFont);
+      resolvedWallLogo = makeWallTextDataURL(wallText, wallTextColor, wallTextFont, wallTextStrokeWidth > 0 ? wallTextStrokeColor : null, wallTextStrokeWidth, wallTextUnderline);
     }
     // Pré-calculer le ratio h/w du wall logo pour le positionnement
     let wallLogoRatio = 0.4; // fallback
@@ -1823,6 +1849,8 @@ export default function AutoCache() {
                                 fontFamily: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).family,
                                 fontWeight: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).weight,
                                 fontSize: 22, color: wallTextColor, letterSpacing: 3,
+                                WebkitTextStroke: wallTextStrokeWidth > 0 ? `${wallTextStrokeWidth * 0.4}px ${wallTextStrokeColor}` : undefined,
+                                textDecoration: wallTextUnderline ? "underline" : "none",
                               }}>{wallText.trim()}</span>
                             </div>
                           )}
@@ -1843,7 +1871,7 @@ export default function AutoCache() {
                           </div>
                           {/* Polices */}
                           <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>POLICE</div>
-                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
                             {WALL_FONTS.map(f => (
                               <button key={f.key} onClick={() => setWallTextFont(f.key)}
                                 style={{
@@ -1854,6 +1882,34 @@ export default function AutoCache() {
                                   border: `1px solid ${wallTextFont === f.key ? "#f26522" : "#2a2a2a"}`,
                                 }}>{f.label}</button>
                             ))}
+                          </div>
+                          {/* Liseré */}
+                          <div style={{ marginBottom: 8 }}>
+                            <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>LISERÉ</div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <input type="color" value={wallTextStrokeColor}
+                                onChange={e => { setWallTextStrokeColor(e.target.value); if (wallTextStrokeWidth === 0) setWallTextStrokeWidth(2); }}
+                                style={{ width: 26, height: 26, padding: 0, border: `1px solid ${wallTextStrokeWidth > 0 ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, cursor: "pointer", background: "none" }} />
+                              <input type="range" min="0" max="10" step="1" value={wallTextStrokeWidth}
+                                onChange={e => setWallTextStrokeWidth(parseInt(e.target.value))}
+                                style={{ flex: 1, accentColor: "#f26522", height: 3 }} />
+                              <span style={{ fontSize: 10, color: wallTextStrokeWidth > 0 ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
+                                {wallTextStrokeWidth === 0 ? "Off" : wallTextStrokeWidth}
+                              </span>
+                            </div>
+                          </div>
+                          {/* Soulignement */}
+                          <div>
+                            <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>SOULIGNEMENT</div>
+                            <button onClick={() => setWallTextUnderline(v => !v)}
+                              style={{
+                                padding: "4px 12px", fontSize: 10, cursor: "pointer", borderRadius: 2,
+                                fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase",
+                                textDecoration: "underline",
+                                background: wallTextUnderline ? "#f26522" : "#161616",
+                                color: wallTextUnderline ? "#090909" : "#777",
+                                border: `1px solid ${wallTextUnderline ? "#f26522" : "#2a2a2a"}`,
+                              }}>Souligner</button>
                           </div>
                         </div>
                       )}
