@@ -509,6 +509,13 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     const mp = p => ({ x: carX + p.x * cw, y: carY + p.y * ch });
     const ptl = mp(corners.tl), ptr = mp(corners.tr);
     const pbr = mp(corners.br), pbl = mp(corners.bl);
+    // Fond opaque sous le logo pour masquer la plaque d'origine sur le cutout
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
+    ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
@@ -865,6 +872,11 @@ export default function AutoCache() {
       logoImg = flatCanvas;
     }
     const bgColor = logo.bgColor || "#ffffff";
+    // Pré-calculer le ratio h/w du wall logo pour le positionnement
+    let wallLogoRatio = 0.4; // fallback
+    if (wallLogo) {
+      try { const wli = await loadImg(wallLogo); wallLogoRatio = wli.naturalHeight / wli.naturalWidth; } catch(e) {}
+    }
     const all = [];
     const showroomBgDataUrl = showroomEnabled
       ? (showroomSetupBg === 'custom' && showroomSetupCustomBg
@@ -891,6 +903,7 @@ export default function AutoCache() {
           entry.wallLogoPos       = { x: 0.5, y: 0.25 };
           entry.wallLogoScale     = wallLogoScale;
           entry.wallLogoOpacity   = wallLogoOpacity;
+          entry._wallLogoRatio    = wallLogoRatio;
         } catch(e) {
           console.error('Showroom processing error:', e);
         }
@@ -1146,16 +1159,14 @@ export default function AutoCache() {
       const toPixel = p => ({ x: p.x * W, y: p.y * H });
       const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
       const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
-      // Fond bgColor uniquement en mode non-showroom (couvre l'ancienne plaque)
-      if (!adjustIsShowroomRef.current) {
-        const bgColor = adjustLogoBgRef.current || '#ffffff';
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-        ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-        ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
-        ctx.restore();
-      }
+      // Fond opaque sous le logo (couvre l'ancienne plaque ou la transparence du cutout)
+      const bgColor = adjustLogoBgRef.current || '#ffffff';
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+      ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+      ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
+      ctx.restore();
       drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
     }
   };
@@ -1871,85 +1882,116 @@ export default function AutoCache() {
               />
             )}
 
-            {/* ── Overlay Wall Logo draggable ── */}
-            {!cropMode && !adjustMode && lightbox.wallLogoSrc && lightbox.showroomDataURL && (
-              <div
-                style={{ position: "absolute", inset: 0, cursor: wallLogoDrag ? "grabbing" : "default", zIndex: 5 }}
-                onMouseDown={e => {
-                  // Vérifier si le clic est sur le wall logo
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const mx = (e.clientX - rect.left) / rect.width;
-                  const my = (e.clientY - rect.top) / rect.height;
-                  const pos = lightbox.wallLogoPos || { x: 0.5, y: 0.25 };
-                  const logoW = lightbox.wallLogoScale || 0.18;
-                  // Estimer la hauteur du logo (approximation basée sur ratio 3:1)
-                  const logoH = logoW * 0.4;
-                  if (Math.abs(mx - pos.x) < logoW / 2 + 0.02 && Math.abs(my - pos.y) < logoH / 2 + 0.02) {
-                    e.preventDefault(); e.stopPropagation();
-                    setWallLogoDrag({ startMx: e.clientX, startMy: e.clientY, startPos: { ...pos } });
-                  }
-                }}
-                onMouseMove={e => {
-                  if (!wallLogoDrag) return;
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const dx = (e.clientX - wallLogoDrag.startMx) / rect.width;
-                  const dy = (e.clientY - wallLogoDrag.startMy) / rect.height;
-                  const newPos = {
-                    x: Math.max(0.05, Math.min(0.95, wallLogoDrag.startPos.x + dx)),
-                    y: Math.max(0.05, Math.min(0.95, wallLogoDrag.startPos.y + dy)),
-                  };
-                  const updated = { ...lightbox, wallLogoPos: newPos };
-                  setLightbox(updated);
-                  setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
-                }}
-                onMouseUp={() => {
-                  if (wallLogoDrag && lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
-                    // Recomposite avec la nouvelle position
-                    const prev = lightbox;
-                    const nudge = showroomNudge;
-                    const zoom = showroomZoom;
-                    const wOpts = { src: prev.wallLogoSrc, scale: prev.wallLogoScale, opacity: prev.wallLogoOpacity, x: prev.wallLogoPos?.x ?? 0.5, y: prev.wallLogoPos?.y ?? 0.25 };
-                    (async () => {
-                      try {
-                        const logoImgEl = await loadImg(prev.logoPreview);
-                        const sr = await compositeCarOnBg(
-                          prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
-                          logoImgEl, prev.corners, prev.bgColor,
-                          nudge.x, nudge.y, zoom, true, wOpts
-                        );
-                        const upd = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform };
-                        setLightbox(upd);
-                        setResults(rs => rs.map(r => r.name === prev.name ? upd : r));
-                      } catch(e) { console.error('wall logo recomposite error', e); }
-                    })();
-                  }
-                  setWallLogoDrag(null);
-                }}
-              >
-                {/* Indicateur visuel de la position du logo (rectangle transparent draggable) */}
-                {(() => {
-                  const pos = lightbox.wallLogoPos || { x: 0.5, y: 0.25 };
-                  const s = lightbox.wallLogoScale || 0.18;
-                  return (
-                    <div style={{
+            {/* ── Overlay Wall Logo : déplacer (centre) + redimensionner (coins) ── */}
+            {!cropMode && !adjustMode && lightbox.wallLogoSrc && lightbox.showroomDataURL && (() => {
+              const pos = lightbox.wallLogoPos || { x: 0.5, y: 0.25 };
+              const s = lightbox.wallLogoScale || 0.18;
+              const ratio = lightbox._wallLogoRatio || 0.4; // h/w ratio, sera calculé au chargement
+              const halfW = s / 2;
+              const halfH = (s * ratio) / 2;
+              const left = pos.x - halfW, top = pos.y - halfH;
+              const isDragging = !!wallLogoDrag;
+              return (
+                <div
+                  style={{ position: "absolute", inset: 0, zIndex: 5, cursor: isDragging ? "grabbing" : "default" }}
+                  onMouseMove={e => {
+                    if (!wallLogoDrag) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const dx = (e.clientX - wallLogoDrag.startMx) / rect.width;
+                    const dy = (e.clientY - wallLogoDrag.startMy) / rect.height;
+                    if (wallLogoDrag.type === "move") {
+                      const newPos = {
+                        x: Math.max(0.02, Math.min(0.98, wallLogoDrag.startPos.x + dx)),
+                        y: Math.max(0.02, Math.min(0.98, wallLogoDrag.startPos.y + dy)),
+                      };
+                      setLightbox(prev => ({ ...prev, wallLogoPos: newPos }));
+                    } else {
+                      // Resize depuis un coin — on ajuste le scale proportionnellement
+                      const corner = wallLogoDrag.type; // "tl","tr","br","bl"
+                      const startS = wallLogoDrag.startScale;
+                      const signX = corner.includes("r") ? 1 : -1;
+                      const signY = corner.includes("b") ? 1 : -1;
+                      const delta = (dx * signX + dy * signY) / 2; // moyenne des deux axes
+                      const newScale = Math.max(0.04, Math.min(0.50, startS + delta));
+                      // Recalcule la position pour ancrer le coin opposé
+                      const opp = corner === "tl" ? "br" : corner === "tr" ? "bl" : corner === "br" ? "tl" : "tr";
+                      const startPos = wallLogoDrag.startPos;
+                      const oldHW = startS / 2, oldHH = (startS * ratio) / 2;
+                      const newHW = newScale / 2, newHH = (newScale * ratio) / 2;
+                      // Position du coin opposé fixe
+                      const oppX = startPos.x + (opp.includes("r") ? oldHW : -oldHW);
+                      const oppY = startPos.y + (opp.includes("b") ? oldHH : -oldHH);
+                      const newX = oppX + (opp.includes("r") ? -newHW : newHW);
+                      const newY = oppY + (opp.includes("b") ? -newHH : newHH);
+                      setLightbox(prev => ({ ...prev, wallLogoPos: { x: newX, y: newY }, wallLogoScale: newScale }));
+                    }
+                  }}
+                  onMouseUp={() => {
+                    if (wallLogoDrag && lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
+                      const prev = lightbox;
+                      const nudge = showroomNudge;
+                      const zm = showroomZoom;
+                      const wOpts = { src: prev.wallLogoSrc, scale: prev.wallLogoScale, opacity: prev.wallLogoOpacity, x: prev.wallLogoPos?.x ?? 0.5, y: prev.wallLogoPos?.y ?? 0.25 };
+                      (async () => {
+                        try {
+                          const logoImgEl = await loadImg(prev.logoPreview);
+                          const sr = await compositeCarOnBg(
+                            prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
+                            logoImgEl, prev.corners, prev.bgColor,
+                            nudge.x, nudge.y, zm, true, wOpts
+                          );
+                          const upd = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform };
+                          setLightbox(upd);
+                          setResults(rs => rs.map(r => r.name === prev.name ? upd : r));
+                        } catch(e) { console.error('wall logo recomposite error', e); }
+                      })();
+                    }
+                    setWallLogoDrag(null);
+                  }}
+                >
+                  {/* Zone du logo — déplacer en cliquant au centre */}
+                  <div
+                    onMouseDown={e => {
+                      e.preventDefault(); e.stopPropagation();
+                      setWallLogoDrag({ type: "move", startMx: e.clientX, startMy: e.clientY, startPos: { ...pos } });
+                    }}
+                    style={{
                       position: "absolute",
-                      left: `${(pos.x - s / 2) * 100}%`,
-                      top: `${(pos.y - s * 0.2) * 100}%`,
-                      width: `${s * 100}%`,
-                      height: `${s * 40}%`,
-                      border: wallLogoDrag ? "2px solid #f26522" : "1px dashed rgba(242,101,34,0.4)",
-                      borderRadius: 3,
-                      cursor: "grab",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      background: wallLogoDrag ? "rgba(242,101,34,0.08)" : "transparent",
-                      transition: wallLogoDrag ? "none" : "border-color 0.2s",
-                    }}>
-                      {!wallLogoDrag && <span style={{ fontSize: 8, color: "rgba(242,101,34,0.6)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", pointerEvents: "none" }}>Déplacer</span>}
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
+                      left: `${left * 100}%`, top: `${top * 100}%`,
+                      width: `${s * 100}%`, height: `${s * ratio * 100}%`,
+                      border: isDragging ? "2px solid #f26522" : "1px dashed rgba(242,101,34,0.5)",
+                      borderRadius: 2,
+                      cursor: isDragging && wallLogoDrag?.type === "move" ? "grabbing" : "grab",
+                      background: isDragging ? "rgba(242,101,34,0.06)" : "transparent",
+                    }}
+                  />
+                  {/* 4 poignées de coin pour redimensionner */}
+                  {["tl","tr","br","bl"].map(corner => {
+                    const cx = corner.includes("r") ? pos.x + halfW : pos.x - halfW;
+                    const cy = corner.includes("b") ? pos.y + halfH : pos.y - halfH;
+                    const cursor = corner === "tl" || corner === "br" ? "nwse-resize" : "nesw-resize";
+                    return (
+                      <div
+                        key={corner}
+                        onMouseDown={e => {
+                          e.preventDefault(); e.stopPropagation();
+                          setWallLogoDrag({ type: corner, startMx: e.clientX, startMy: e.clientY, startPos: { ...pos }, startScale: s });
+                        }}
+                        style={{
+                          position: "absolute",
+                          left: `${cx * 100}%`, top: `${cy * 100}%`,
+                          width: 10, height: 10,
+                          background: "#f26522", border: "2px solid #fff",
+                          borderRadius: "50%", transform: "translate(-50%,-50%)",
+                          cursor, zIndex: 10,
+                          boxShadow: "0 0 4px rgba(0,0,0,0.7)",
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })()}
 
             {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
             {adjustMode && adjustCorners && (
