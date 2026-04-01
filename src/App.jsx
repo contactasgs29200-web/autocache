@@ -78,6 +78,41 @@ function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact", borderColor =
   return c.toDataURL("image/png");
 }
 
+// ── Polices murales (texte sur le mur du showroom) ─────────────────────
+const WALL_FONTS = [
+  { key: "rajdhani",    family: "'Rajdhani', sans-serif",              label: "Moderne",    weight: "700" },
+  { key: "bebas",       family: "'Bebas Neue', sans-serif",            label: "Bebas",      weight: "400" },
+  { key: "cormorant",   family: "'Cormorant Garamond', serif",         label: "Élégant",    weight: "600" },
+  { key: "impact",      family: "Impact, Arial Black, sans-serif",     label: "Impact",     weight: "900" },
+  { key: "georgia",     family: "Georgia, serif",                      label: "Georgia",    weight: "700" },
+  { key: "montserrat",  family: "'Montserrat', sans-serif",            label: "Montserrat", weight: "700" },
+  { key: "playfair",    family: "'Playfair Display', serif",           label: "Playfair",   weight: "700" },
+];
+
+// Génère un PNG transparent avec le texte mural (haute résolution)
+function makeWallTextDataURL(text, color, fontKey = "rajdhani") {
+  const f = WALL_FONTS.find(f => f.key === fontKey) ?? WALL_FONTS[0];
+  const txt = text.trim() || "VOTRE ENSEIGNE";
+  // Canvas temporaire pour mesurer le texte
+  const tmp = document.createElement("canvas");
+  const tctx = tmp.getContext("2d");
+  const fontSize = 200;
+  tctx.font = `${f.weight} ${fontSize}px ${f.family}`;
+  const m = tctx.measureText(txt);
+  const W = Math.ceil(m.width) + 80;
+  const H = fontSize + 60;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  // Fond transparent — texte seul
+  ctx.fillStyle = color;
+  ctx.font = `${f.weight} ${fontSize}px ${f.family}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(txt, W / 2, H / 2);
+  return c.toDataURL("image/png");
+}
+
 function toBase64(file, maxPx = 1600, quality = 0.92) {
   return new Promise((res, rej) => {
     const img = new Image();
@@ -784,11 +819,16 @@ export default function AutoCache() {
   const [showroomSetupCustomBg, setShowroomSetupCustomBg] = useState(null);
   const showroomSetupUploadRef = useRef(null);
   // ── Logo mural (affiché sur le mur du showroom) ──────────────────────────
+  const [wallLogoMode, setWallLogoMode]     = useState("none"); // "none" | "image" | "text"
   const [wallLogo, setWallLogo]             = useState(null); // data URL du logo mural
   const [wallLogoScale, setWallLogoScale]   = useState(0.18); // taille relative (0.05–0.40)
   const [wallLogoOpacity, setWallLogoOpacity] = useState(0.85);
   const wallLogoUploadRef = useRef(null);
   const [wallLogoDrag, setWallLogoDrag]     = useState(null); // drag en cours dans la lightbox
+  // ── Texte mural ──
+  const [wallText, setWallText]             = useState("");
+  const [wallTextColor, setWallTextColor]   = useState("#ffffff");
+  const [wallTextFont, setWallTextFont]     = useState("Rajdhani");
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
   const [showroomZoom,    setShowroomZoom]    = useState(1.0);
@@ -872,10 +912,17 @@ export default function AutoCache() {
       logoImg = flatCanvas;
     }
     const bgColor = logo.bgColor || "#ffffff";
+    // Résoudre le wall logo final (image importée OU texte généré)
+    let resolvedWallLogo = null;
+    if (wallLogoMode === "image" && wallLogo) {
+      resolvedWallLogo = wallLogo;
+    } else if (wallLogoMode === "text" && wallText.trim()) {
+      resolvedWallLogo = makeWallTextDataURL(wallText, wallTextColor, wallTextFont);
+    }
     // Pré-calculer le ratio h/w du wall logo pour le positionnement
     let wallLogoRatio = 0.4; // fallback
-    if (wallLogo) {
-      try { const wli = await loadImg(wallLogo); wallLogoRatio = wli.naturalHeight / wli.naturalWidth; } catch(e) {}
+    if (resolvedWallLogo) {
+      try { const wli = await loadImg(resolvedWallLogo); wallLogoRatio = wli.naturalHeight / wli.naturalWidth; } catch(e) {}
     }
     const all = [];
     const showroomBgDataUrl = showroomEnabled
@@ -892,14 +939,14 @@ export default function AutoCache() {
           // On envoie la photo propre (sans cache plaque) à remove.bg → meilleur détourage
           const cutout = await removeBackground(r.baseDataURL);
           // Cache plaque redessiné nativement sur le composite (pas de double compression)
-          const wOpts = wallLogo ? { src: wallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
+          const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
           const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts);
           entry.cutoutDataURL     = cutout;
           entry.showroomDataURL   = sr.dataURL;
           entry.showroomBaseURL   = sr.baseURL;
           entry.showroomTransform = sr.transform;
           entry.showroomBgUrl     = showroomBgDataUrl;
-          entry.wallLogoSrc       = wallLogo;
+          entry.wallLogoSrc       = resolvedWallLogo;
           entry.wallLogoPos       = { x: 0.5, y: 0.25 };
           entry.wallLogoScale     = wallLogoScale;
           entry.wallLogoOpacity   = wallLogoOpacity;
@@ -1628,41 +1675,106 @@ export default function AutoCache() {
                         }} />
                     </div>
 
-                    {/* Logo mural */}
+                    {/* Logo / Texte mural */}
                     <div style={{ marginTop: 14, borderTop: "1px solid #252525", paddingTop: 12 }}>
-                      <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Logo mural (sur le mur)</div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div onClick={() => wallLogoUploadRef.current?.click()}
-                          style={{ width: 70, height: 39, border: `1px dashed ${wallLogo ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#161616", overflow: "hidden", flexShrink: 0 }}>
-                          {wallLogo
-                            ? <img src={wallLogo} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-                            : <span style={{ fontSize: 18, color: "#444" }}>+</span>
-                          }
-                        </div>
-                        <input ref={wallLogoUploadRef} type="file" accept="image/*" style={{ display: "none" }}
-                          onChange={e => {
-                            const f = e.target.files?.[0]; if (!f) return;
-                            const reader = new FileReader();
-                            reader.onload = ev => setWallLogo(ev.target.result);
-                            reader.readAsDataURL(f);
-                            e.target.value = '';
-                          }} />
-                        {wallLogo && (<>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
-                            <input type="range" min="0.05" max="0.40" step="0.01" value={wallLogoScale}
-                              onChange={e => setWallLogoScale(parseFloat(e.target.value))}
-                              style={{ width: "100%", accentColor: "#f26522", height: 3 }} />
-                          </div>
-                          <button onClick={() => setWallLogo(null)}
-                            style={{ background: "transparent", border: "1px solid #2a2a2a", color: "#888", width: 22, height: 22, borderRadius: 3, cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-                        </>)}
+                      <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Enseigne murale</div>
+
+                      {/* Tabs : Aucun / Image / Texte */}
+                      <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
+                        {[["none","Aucune"],["image","Importer logo"],["text","Générer texte"]].map(([k,label]) => (
+                          <button key={k} onClick={() => setWallLogoMode(k)}
+                            style={{ flex: 1, padding: "5px 0", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", borderRadius: 2,
+                              background: wallLogoMode === k ? "#f26522" : "#161616",
+                              color: wallLogoMode === k ? "#090909" : "#777",
+                              border: `1px solid ${wallLogoMode === k ? "#f26522" : "#2a2a2a"}`,
+                            }}>{label}</button>
+                        ))}
                       </div>
-                      {wallLogo && (
-                        <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 6 }}>
-                          Positionnez-le en cliquant sur l'image dans les résultats
+
+                      {/* Mode Image */}
+                      {wallLogoMode === "image" && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div onClick={() => wallLogoUploadRef.current?.click()}
+                            style={{ width: 70, height: 39, border: `1px dashed ${wallLogo ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#161616", overflow: "hidden", flexShrink: 0 }}>
+                            {wallLogo
+                              ? <img src={wallLogo} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                              : <span style={{ fontSize: 18, color: "#444" }}>+</span>
+                            }
+                          </div>
+                          <input ref={wallLogoUploadRef} type="file" accept="image/*" style={{ display: "none" }}
+                            onChange={e => {
+                              const f = e.target.files?.[0]; if (!f) return;
+                              const reader = new FileReader();
+                              reader.onload = ev => setWallLogo(ev.target.result);
+                              reader.readAsDataURL(f);
+                              e.target.value = '';
+                            }} />
+                          {wallLogo && (<>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
+                              <input type="range" min="0.05" max="0.40" step="0.01" value={wallLogoScale}
+                                onChange={e => setWallLogoScale(parseFloat(e.target.value))}
+                                style={{ width: "100%", accentColor: "#f26522", height: 3 }} />
+                            </div>
+                            <button onClick={() => setWallLogo(null)}
+                              style={{ background: "transparent", border: "1px solid #2a2a2a", color: "#888", width: 22, height: 22, borderRadius: 3, cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+                          </>)}
                         </div>
                       )}
+
+                      {/* Mode Texte */}
+                      {wallLogoMode === "text" && (
+                        <div>
+                          <input type="text" value={wallText} onChange={e => setWallText(e.target.value)}
+                            placeholder="Nom de l'enseigne"
+                            style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", background: "#161616", border: "1px solid #2a2a2a", borderRadius: 3, color: "#ddd5c8", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, letterSpacing: 1, marginBottom: 8 }} />
+                          {/* Aperçu */}
+                          {wallText.trim() && (
+                            <div style={{ background: "#111", border: "1px solid #222", borderRadius: 3, padding: "10px 14px", marginBottom: 8, textAlign: "center", overflow: "hidden" }}>
+                              <span style={{
+                                fontFamily: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).family,
+                                fontWeight: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).weight,
+                                fontSize: 22, color: wallTextColor, letterSpacing: 3,
+                              }}>{wallText.trim()}</span>
+                            </div>
+                          )}
+                          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
+                            {/* Couleur */}
+                            <div>
+                              <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>COULEUR</div>
+                              <input type="color" value={wallTextColor} onChange={e => setWallTextColor(e.target.value)}
+                                style={{ width: 34, height: 26, border: "1px solid #2a2a2a", borderRadius: 3, background: "transparent", cursor: "pointer" }} />
+                            </div>
+                            {/* Taille */}
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
+                              <input type="range" min="0.05" max="0.40" step="0.01" value={wallLogoScale}
+                                onChange={e => setWallLogoScale(parseFloat(e.target.value))}
+                                style={{ width: "100%", accentColor: "#f26522", height: 3 }} />
+                            </div>
+                          </div>
+                          {/* Polices */}
+                          <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>POLICE</div>
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                            {WALL_FONTS.map(f => (
+                              <button key={f.key} onClick={() => setWallTextFont(f.key)}
+                                style={{
+                                  padding: "4px 8px", fontSize: 10, cursor: "pointer", borderRadius: 2,
+                                  fontFamily: f.family, fontWeight: f.weight,
+                                  background: wallTextFont === f.key ? "#f26522" : "#161616",
+                                  color: wallTextFont === f.key ? "#090909" : "#999",
+                                  border: `1px solid ${wallTextFont === f.key ? "#f26522" : "#2a2a2a"}`,
+                                }}>{f.label}</button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {(wallLogoMode === "image" && wallLogo) || (wallLogoMode === "text" && wallText.trim()) ? (
+                        <div style={{ fontSize: 8, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 8 }}>
+                          Positionnez l'enseigne en la glissant sur l'image dans les résultats
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 )}
