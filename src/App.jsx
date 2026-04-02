@@ -2659,22 +2659,97 @@ export default function AutoCache() {
 
       {/* ── Modal upgrade (essai épuisé) ── */}
       {showUpgradeModal && (
-        <div onClick={() => setShowUpgradeModal(false)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #c0392b", borderRadius: 6, padding: "36px 40px", maxWidth: 420, width: "90%", textAlign: "center", fontFamily: "'Rajdhani',sans-serif" }}>
-            <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
-            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 8, textTransform: "uppercase" }}>Période d'essai terminée</div>
-            <div style={{ fontSize: 13, color: "#888", lineHeight: 1.6, marginBottom: 24, fontFamily: "'JetBrains Mono',monospace", fontWeight: 400 }}>
-              Vous avez utilisé vos <span style={{ color: "#f26522", fontWeight: 700 }}>30 photos gratuites</span>.<br />
-              Pour continuer à utiliser AutoCache Pro, veuillez mettre votre abonnement à niveau.
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: "36px 40px", maxWidth: 740, width: "100%", fontFamily: "'Rajdhani',sans-serif" }}>
+
+            {/* En-tête */}
+            <div style={{ textAlign: "center", marginBottom: 28 }}>
+              <div style={{ fontSize: 13, color: "#c0392b", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>Essai gratuit terminé</div>
+              <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase", marginBottom: 10 }}>Continuez à sublimer vos photos</div>
+              <div style={{ fontSize: 11, color: "#666", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7 }}>
+                Vous avez utilisé vos <span style={{ color: "#f26522" }}>30 photos d'essai</span>.<br />
+                Choisissez un abonnement pour continuer à traiter vos photos sans limite.
+              </div>
             </div>
-            <button onClick={() => { setShowUpgradeModal(false); window.open("mailto:contact@autocache.fr?subject=Abonnement AutoCache Pro", "_blank"); }}
-              style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
-              Mettre à niveau mon abonnement
-            </button>
+
+            {/* Cartes plans */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+              {[
+                {
+                  key: "essential",
+                  name: "Essentiel",
+                  price: "14,70€",
+                  badge: null,
+                  features: [
+                    { ok: true,  label: "200 photos / mois" },
+                    { ok: true,  label: "Cache plaque personnalisé" },
+                    { ok: true,  label: "Logo importé ou généré" },
+                    { ok: true,  label: "Ajustements couleurs" },
+                    { ok: true,  label: "Lustrage des optiques" },
+                    { ok: false, label: "Showroom Virtuel (fonds IA)" },
+                    { ok: false, label: "Enseigne murale" },
+                  ],
+                },
+                {
+                  key: "pro",
+                  name: "Pro",
+                  price: "22,70€",
+                  badge: "Recommandé",
+                  features: [
+                    { ok: true, label: "250 photos / mois" },
+                    { ok: true, label: "Cache plaque personnalisé" },
+                    { ok: true, label: "Logo importé ou généré" },
+                    { ok: true, label: "Ajustements couleurs" },
+                    { ok: true, label: "Lustrage des optiques" },
+                    { ok: true, label: "Showroom Virtuel (fonds IA)" },
+                    { ok: true, label: "Enseigne murale" },
+                  ],
+                },
+              ].map(plan => {
+                const isPro = plan.key === "pro";
+                return (
+                  <div key={plan.key}
+                    style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "22px 20px", position: "relative" }}>
+                    {plan.badge && (
+                      <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 8, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
+                    )}
+                    <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 2 }}>{plan.name}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: "#e0dbd4", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>{plan.price}<span style={{ fontSize: 10, color: "#555", fontWeight: 400 }}> /mois</span></div>
+                    <div style={{ marginBottom: 18 }}>
+                      {plan.features.map((f, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 11, color: f.ok ? "#27ae60" : "#444", flexShrink: 0 }}>{f.ok ? "✓" : "✕"}</span>
+                          <span style={{ fontSize: 10, color: f.ok ? "#bbb" : "#444", fontFamily: "'JetBrains Mono',monospace" }}>{f.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      disabled={checkoutLoading === plan.key}
+                      onClick={async () => {
+                        setCheckoutLoading(plan.key);
+                        try {
+                          const res = await fetch("/api/create-checkout-session", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ plan: plan.key, userId: user.id, userEmail: user.email }),
+                          });
+                          const data = await res.json();
+                          if (data.url) window.location.href = data.url;
+                          else alert("Erreur lors de la création du paiement.");
+                        } catch { alert("Erreur réseau, réessayez."); }
+                        finally { setCheckoutLoading(null); }
+                      }}
+                      style={{ width: "100%", background: isPro ? "#f26522" : "transparent", color: isPro ? "#090909" : "#888", border: `1px solid ${isPro ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+                      {checkoutLoading === plan.key ? "Redirection..." : `Choisir ${plan.name}`}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
             <button onClick={() => setShowUpgradeModal(false)}
-              style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              style={{ width: "100%", background: "transparent", color: "#444", border: "1px solid #222", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
               Fermer
             </button>
           </div>
