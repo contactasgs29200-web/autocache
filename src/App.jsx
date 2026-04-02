@@ -814,6 +814,7 @@ export default function AutoCache() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [showUpgradeProModal, setShowUpgradeProModal] = useState(false);
+  const [showPlansModal, setShowPlansModal] = useState(false);
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
@@ -1530,7 +1531,7 @@ export default function AutoCache() {
                   {/* Menu items */}
                   {[
                     { icon: "👤", label: "Informations du compte", action: () => { setSettingsOpen(false); alert("Fonctionnalité à venir — gestion du profil"); } },
-                    { icon: "💳", label: "Abonnement", action: () => { setSettingsOpen(false); alert("Fonctionnalité à venir — gestion de l'abonnement"); } },
+                    { icon: "💳", label: "Abonnement", action: () => { setSettingsOpen(false); setShowPlansModal(true); } },
                     { icon: "🎟", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
                     { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); window.open("mailto:contact@autocache.fr", "_blank"); } },
                   ].map((item, i) => (
@@ -2503,6 +2504,93 @@ export default function AutoCache() {
               {promoStatus === "loading" ? "Vérification..." : promoStatus === "success" ? "Code activé ✓" : "Activer"}
             </button>
             <button onClick={() => setShowPromoModal(false)}
+              style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              Fermer
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Plans & Abonnements ── */}
+      {showPlansModal && (
+        <div onClick={() => setShowPlansModal(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: "36px 40px", maxWidth: 740, width: "100%", fontFamily: "'Rajdhani',sans-serif" }}>
+            {/* En-tête */}
+            <div style={{ textAlign: "center", marginBottom: 32 }}>
+              <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Nos Abonnements</div>
+              <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
+                Plan actuel : <span style={{ color: "#f26522" }}>
+                  {userPlan === "pro" ? "Pro" : userPlan === "essential" ? "Essentiel" : "Essai gratuit"}
+                </span>
+              </div>
+            </div>
+
+            {/* Cartes plans */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 28 }}>
+
+              {/* Plan Essentiel */}
+              {[
+                {
+                  key: "essential",
+                  name: "Essentiel",
+                  badge: null,
+                  features: [
+                    { ok: true,  label: "Cache plaque personnalisé" },
+                    { ok: true,  label: "Logo importé ou généré" },
+                    { ok: true,  label: "Ajustements couleurs" },
+                    { ok: true,  label: "Amélioration automatique" },
+                    { ok: true,  label: "Lustrage des optiques" },
+                    { ok: false, label: "Showroom Virtuel (fonds IA)" },
+                    { ok: false, label: "Enseigne murale" },
+                  ],
+                },
+                {
+                  key: "pro",
+                  name: "Pro",
+                  badge: "Recommandé",
+                  features: [
+                    { ok: true, label: "Cache plaque personnalisé" },
+                    { ok: true, label: "Logo importé ou généré" },
+                    { ok: true, label: "Ajustements couleurs" },
+                    { ok: true, label: "Amélioration automatique" },
+                    { ok: true, label: "Lustrage des optiques" },
+                    { ok: true, label: "Showroom Virtuel (fonds IA)" },
+                    { ok: true, label: "Enseigne murale" },
+                  ],
+                },
+              ].map(plan => {
+                const isCurrent = userPlan === plan.key || (plan.key === "essential" && userPlan === "trial");
+                const isPro = plan.key === "pro";
+                return (
+                  <div key={plan.key} style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 22px", position: "relative" }}>
+                    {plan.badge && (
+                      <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 8, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
+                    )}
+                    <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 4 }}>{plan.name}</div>
+                    {isCurrent && (
+                      <div style={{ fontSize: 8, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginBottom: 14, textTransform: "uppercase" }}>— Plan actuel —</div>
+                    )}
+                    <div style={{ marginBottom: 20, marginTop: isCurrent ? 0 : 14 }}>
+                      {plan.features.map((f, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                          <span style={{ fontSize: 11, color: f.ok ? "#27ae60" : "#444", flexShrink: 0 }}>{f.ok ? "✓" : "✕"}</span>
+                          <span style={{ fontSize: 10, color: f.ok ? "#bbb" : "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{f.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => { setShowPlansModal(false); window.open(`mailto:contact@autocache.fr?subject=Abonnement AutoCache ${plan.name}`, "_blank"); }}
+                      style={{ width: "100%", background: isPro ? "#f26522" : "transparent", color: isPro ? "#090909" : "#777", border: `1px solid ${isPro ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+                      {isCurrent ? "Mon abonnement actuel" : `Choisir ${plan.name}`}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <button onClick={() => setShowPlansModal(false)}
               style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
               Fermer
             </button>
