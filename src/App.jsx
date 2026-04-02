@@ -1054,8 +1054,7 @@ export default function AutoCache() {
       const data = await res.json();
       if (!data.valid) { setPromoStatus("error"); setPromoMsg(data.message); return; }
       // Appliquer le bonus : réduire photos_used du nombre accordé (sans passer sous 0)
-      const currentUsed = user?.user_metadata?.photos_used ?? 0;
-      const newUsed = Math.max(0, currentUsed - data.photos);
+      const newUsed = 0;
       const newUsedPromos = [...usedPromos, promoCode.trim().toUpperCase()];
       await supabase.auth.updateUser({ data: { photos_used: newUsed, used_promos: newUsedPromos } });
       setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: newUsed, used_promos: newUsedPromos } } : prev);

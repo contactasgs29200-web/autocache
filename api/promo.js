@@ -1,6 +1,5 @@
-// Codes promo valides — à renseigner par l'administrateur
-// Format : "CODE": { photos: <nombre de photos accordées> }
 const PROMO_CODES = {
+  "AURELE30": { photos: 30 },
 };
 
 export default function handler(req, res) {
