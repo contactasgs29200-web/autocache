@@ -816,6 +816,7 @@ export default function AutoCache() {
   const [showUpgradeProModal, setShowUpgradeProModal] = useState(false);
   const [showPlansModal, setShowPlansModal] = useState(false);
   const [hoveredPlan, setHoveredPlan] = useState(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(null); // "essential" | "pro" | null
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
@@ -894,6 +895,13 @@ export default function AutoCache() {
   const [recoveryLoading, setRecoveryLoading] = useState(false);
 
   useEffect(() => {
+    // Retour depuis Stripe Checkout
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") === "success") {
+      window.history.replaceState({}, "", window.location.pathname);
+      // Recharger la session pour récupérer le plan mis à jour par le webhook
+      setTimeout(() => supabase.auth.refreshSession(), 2000);
+    }
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user || null);
       setAuthLoading(false);
@@ -2585,9 +2593,27 @@ export default function AutoCache() {
                       ))}
                     </div>
                     <button
-                      onClick={() => { setShowPlansModal(false); window.open(`mailto:contact@autocache.fr?subject=Abonnement AutoCache ${plan.name}`, "_blank"); }}
-                      style={{ width: "100%", background: isPro ? "#f26522" : "transparent", color: isPro ? "#090909" : "#777", border: `1px solid ${isPro ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
-                      {isCurrent ? "Mon abonnement actuel" : `Choisir ${plan.name}`}
+                      disabled={isCurrent || checkoutLoading === plan.key}
+                      onClick={async () => {
+                        if (isCurrent) return;
+                        setCheckoutLoading(plan.key);
+                        try {
+                          const res = await fetch("/api/create-checkout-session", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ plan: plan.key, userId: user.id, userEmail: user.email }),
+                          });
+                          const data = await res.json();
+                          if (data.url) window.location.href = data.url;
+                          else alert("Erreur lors de la création du paiement.");
+                        } catch (e) {
+                          alert("Erreur réseau, réessayez.");
+                        } finally {
+                          setCheckoutLoading(null);
+                        }
+                      }}
+                      style={{ width: "100%", background: isCurrent ? "#1a1a1a" : isPro ? "#f26522" : "transparent", color: isCurrent ? "#444" : isPro ? "#090909" : "#777", border: `1px solid ${isCurrent ? "#2a2a2a" : isPro ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: isCurrent ? "default" : "pointer" }}>
+                      {checkoutLoading === plan.key ? "Redirection..." : isCurrent ? "Mon abonnement actuel" : `Choisir ${plan.name}`}
                     </button>
                   </div>
                 );
