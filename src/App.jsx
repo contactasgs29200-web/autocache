@@ -815,6 +815,7 @@ export default function AutoCache() {
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [showUpgradeProModal, setShowUpgradeProModal] = useState(false);
   const [showPlansModal, setShowPlansModal] = useState(false);
+  const [hoveredPlan, setHoveredPlan] = useState(null);
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
@@ -2564,7 +2565,10 @@ export default function AutoCache() {
                 const isCurrent = userPlan === plan.key;
                 const isPro = plan.key === "pro";
                 return (
-                  <div key={plan.key} style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 22px", position: "relative" }}>
+                  <div key={plan.key}
+                    onMouseEnter={() => setHoveredPlan(plan.key)}
+                    onMouseLeave={() => setHoveredPlan(null)}
+                    style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 22px", position: "relative", transform: hoveredPlan === plan.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
                     {plan.badge && (
                       <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 8, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
                     )}
