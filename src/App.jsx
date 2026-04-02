@@ -2490,7 +2490,7 @@ export default function AutoCache() {
             <input
               value={promoCode} onChange={e => { setPromoCode(e.target.value); setPromoStatus(null); setPromoMsg(""); }}
               onKeyDown={e => e.key === "Enter" && promoCode.trim() && promoStatus !== "loading" && submitPromo()}
-              placeholder="EX : AUTOCACHE30"
+              placeholder="Votre code promo"
               style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px", background: "#1a1a1a", border: `1px solid ${promoStatus === "error" ? "#c0392b" : promoStatus === "success" ? "#27ae60" : "#2a2a2a"}`, borderRadius: 3, color: "#ddd5c8", fontFamily: "'JetBrains Mono',monospace", fontSize: 15, letterSpacing: 3, textTransform: "uppercase", outline: "none", marginBottom: 10 }}
             />
             {promoMsg && (
