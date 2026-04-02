@@ -729,7 +729,7 @@ function AuthScreen({ onAuth }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0e0e0e", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: "#1c1c1c", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
       <div style={{ width: 380, padding: 40, background: "#161616", border: "1px solid #252525", borderRadius: 4 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
           <svg width="22" height="22" viewBox="0 0 22 22">
@@ -1377,7 +1377,7 @@ export default function AutoCache() {
   }, [adjustMode, lightbox?.baseDataURL, lightbox?.showroomBaseURL]);
 
   if (authLoading) return (
-    <div style={{ minHeight: "100vh", background: "#0e0e0e", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div style={{ minHeight: "100vh", background: "#1c1c1c", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ color: "#f26522", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 3 }}>CHARGEMENT...</div>
     </div>
   );
@@ -1396,7 +1396,7 @@ export default function AutoCache() {
       setRecoveryLoading(false);
     };
     return (
-      <div style={{ minHeight: "100vh", background: "#0e0e0e", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+      <div style={{ minHeight: "100vh", background: "#1c1c1c", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
         <div style={{ width: 380, padding: 40, background: "#161616", border: "1px solid #252525", borderRadius: 4 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
             <svg width="22" height="22" viewBox="0 0 22 22">
@@ -1443,8 +1443,8 @@ export default function AutoCache() {
         input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#f26522;cursor:pointer;}
         ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:#f26522;border-radius:2px;}
       `}</style>
-      <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#0e0e0e", minHeight: "100vh", color: "#e0dbd4" }}>
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 28px", height: 56, borderBottom: "1px solid #1e1e1e", position: "sticky", top: 0, background: "#0e0e0e", zIndex: 10 }}>
+      <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#1c1c1c", minHeight: "100vh", color: "#e0dbd4" }}>
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 28px", height: 56, borderBottom: "1px solid #1e1e1e", position: "sticky", top: 0, background: "#1c1c1c", zIndex: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <svg width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
             <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase" }}>AutoCache</span>
