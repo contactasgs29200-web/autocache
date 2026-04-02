@@ -813,6 +813,7 @@ export default function AutoCache() {
   const [progress, setProgress] = useState({ n: 0, total: 0 });
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showPromoModal, setShowPromoModal] = useState(false);
+  const [showUpgradeProModal, setShowUpgradeProModal] = useState(false);
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
@@ -1034,6 +1035,8 @@ export default function AutoCache() {
   const downloadOne = r => { const a = document.createElement("a"); a.href = r.showroomDataURL || r.processed; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click(); };
   const downloadAll = () => results.forEach(downloadOne);
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
+  const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "essential" | "pro"
+  const canUseShowroom = userPlan === "pro" || userPlan === "trial";
   const canStart = logo && photos.length > 0 && !processing;
 
   const logout = async () => {
@@ -1792,14 +1795,18 @@ export default function AutoCache() {
               {/* ── 03 — Showroom Virtuel ── */}
               <section>
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Showroom Virtuel</div>
-                <div onClick={() => setShowroomEnabled(p => !p)}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${showroomEnabled ? "#f26522" : "#1c1c1c"}`, borderRadius: showroomEnabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
-                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled ? "#f26522" : "#444"}`, background: showroomEnabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {showroomEnabled && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                <div onClick={() => canUseShowroom ? setShowroomEnabled(p => !p) : setShowUpgradeProModal(true)}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#1c1c1c"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#444"}`, background: showroomEnabled && canUseShowroom ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "#555", fontSize: 10 }}>🔒</span>}
                   </div>
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>⬡ Showroom Virtuel</div>
-                    <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Détourage IA · Fond de showroom · Inclus au traitement</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled && canUseShowroom ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>
+                      ⬡ Showroom Virtuel {!canUseShowroom && <span style={{ fontSize: 8, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>ABONNEMENT PRO</span>}
+                    </div>
+                    <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>
+                      {canUseShowroom ? "Détourage IA · Fond de showroom · Inclus au traitement" : "Disponible avec l'abonnement Pro — cliquez pour en savoir plus"}
+                    </div>
                   </div>
                 </div>
                 {showroomEnabled && (
@@ -2503,7 +2510,32 @@ export default function AutoCache() {
         </div>
       )}
 
-      {/* ── Modal upgrade ── */}
+      {/* ── Modal upgrade Pro (showroom) ── */}
+      {showUpgradeProModal && (
+        <div onClick={() => setShowUpgradeProModal(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#141414", border: "1px solid #f26522", borderRadius: 6, padding: "36px 40px", maxWidth: 420, width: "90%", textAlign: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>⬡</div>
+            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 4, textTransform: "uppercase" }}>Showroom Virtuel</div>
+            <div style={{ fontSize: 11, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 16, textTransform: "uppercase" }}>Abonnement Pro requis</div>
+            <div style={{ fontSize: 13, color: "#888", lineHeight: 1.7, marginBottom: 28, fontFamily: "'JetBrains Mono',monospace" }}>
+              Le mode Showroom Virtuel — détourage IA et fonds de showroom — est inclus dans l'abonnement <span style={{ color: "#f26522", fontWeight: 700 }}>Pro</span>.<br /><br />
+              Contactez-nous pour mettre votre compte à niveau.
+            </div>
+            <button onClick={() => { setShowUpgradeProModal(false); window.open("mailto:contact@autocache.fr?subject=Abonnement Pro AutoCache", "_blank"); }}
+              style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
+              Passer à l'abonnement Pro
+            </button>
+            <button onClick={() => setShowUpgradeProModal(false)}
+              style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              Fermer
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal upgrade (essai épuisé) ── */}
       {showUpgradeModal && (
         <div onClick={() => setShowUpgradeModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
