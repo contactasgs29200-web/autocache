@@ -821,6 +821,8 @@ export default function AutoCache() {
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
   const TRIAL_LIMIT = 30;
+  const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
+  const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [enhance, setEnhance] = useState(false);         // amélioration auto des couleurs
@@ -964,8 +966,8 @@ export default function AutoCache() {
   const start = async () => {
     if (!logo || !photos.length) return;
     const photosUsed = user?.user_metadata?.photos_used ?? 0;
-    if (photosUsed >= TRIAL_LIMIT) { setShowUpgradeModal(true); return; }
-    const remaining = TRIAL_LIMIT - photosUsed;
+    if (photosUsed >= PLAN_LIMIT) { setShowUpgradeModal(true); return; }
+    const remaining = PLAN_LIMIT - photosUsed;
     const photosToProcess = photos.slice(0, remaining);
     setProcessing(true);
     setProgress({ n: 0, total: photosToProcess.length });
@@ -1039,7 +1041,7 @@ export default function AutoCache() {
     setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: newCount } } : prev);
     setProcessing(false);
     setTab("results");
-    if (newCount >= TRIAL_LIMIT) setShowUpgradeModal(true);
+    if (newCount >= PLAN_LIMIT) setShowUpgradeModal(true);
   };
 
   const downloadOne = r => { const a = document.createElement("a"); a.href = r.showroomDataURL || r.processed; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click(); };
@@ -1064,7 +1066,7 @@ export default function AutoCache() {
       await supabase.auth.updateUser({ data: { photos_used: 0 } });
       setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: 0 } } : prev);
       setPromoStatus("success");
-      setPromoMsg("Compteur réinitialisé — 30 photos disponibles.");
+      setPromoMsg(`Compteur réinitialisé — ${PLAN_LIMIT} photos disponibles.`);
     } catch (e) {
       setPromoStatus("error"); setPromoMsg("Erreur réseau, réessayez.");
     }
@@ -1499,17 +1501,19 @@ export default function AutoCache() {
               <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>{label}</button>
             ))}
             <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />
-            {/* ── Compteur essai gratuit ── */}
+            {/* ── Compteur crédits ── */}
             {(() => {
               const used = user?.user_metadata?.photos_used ?? 0;
-              const left = Math.max(0, 30 - used);
+              const left = Math.max(0, PLAN_LIMIT - used);
+              const isExpired = left === 0;
+              const isLow = left <= (PLAN_LIMIT <= 30 ? 5 : 20);
               return (
-                <div onClick={() => left === 0 && setShowUpgradeModal(true)}
-                  style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 2, border: `1px solid ${left === 0 ? "#c0392b" : "#2a2a2a"}`, cursor: left === 0 ? "pointer" : "default", background: left === 0 ? "rgba(192,57,43,0.08)" : "transparent" }}
-                  title={left === 0 ? "Période d'essai terminée — cliquez pour mettre à niveau" : `${left} photo${left > 1 ? "s" : ""} restante${left > 1 ? "s" : ""} sur votre essai gratuit`}
+                <div onClick={() => isExpired && setShowUpgradeModal(true)}
+                  style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 2, border: `1px solid ${isExpired ? "#c0392b" : "#2a2a2a"}`, cursor: isExpired ? "pointer" : "default", background: isExpired ? "rgba(192,57,43,0.08)" : "transparent" }}
+                  title={isExpired ? "Crédits épuisés — cliquez pour mettre à niveau" : `${left} photo${left > 1 ? "s" : ""} restante${left > 1 ? "s" : ""}`}
                 >
-                  <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: left === 0 ? "#c0392b" : left <= 5 ? "#f26522" : "#666", letterSpacing: 1 }}>
-                    {left === 0 ? "ESSAI TERMINÉ" : `ESSAI · ${left}/30`}
+                  <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: isExpired ? "#c0392b" : isLow ? "#f26522" : "#666", letterSpacing: 1 }}>
+                    {isExpired ? `${PLAN_LABEL} ÉPUISÉ` : `${PLAN_LABEL} · ${left}/${PLAN_LIMIT}`}
                   </span>
                 </div>
               );
