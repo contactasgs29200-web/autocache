@@ -812,6 +812,10 @@ export default function AutoCache() {
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState({ n: 0, total: 0 });
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showPromoModal, setShowPromoModal] = useState(false);
+  const [promoCode, setPromoCode] = useState("");
+  const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
+  const [promoMsg, setPromoMsg] = useState("");
   const TRIAL_LIMIT = 30;
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
@@ -1035,6 +1039,31 @@ export default function AutoCache() {
   const logout = async () => {
     await supabase.auth.signOut();
     setLogo(null); setPhotos([]); setResults([]); setTab("setup");
+  };
+
+  const submitPromo = async () => {
+    if (!promoCode.trim() || promoStatus === "loading") return;
+    // Vérifier que le code n'a pas déjà été utilisé par cet utilisateur
+    const usedPromos = user?.user_metadata?.used_promos ?? [];
+    if (usedPromos.includes(promoCode.trim().toUpperCase())) {
+      setPromoStatus("error"); setPromoMsg("Ce code a déjà été utilisé sur votre compte."); return;
+    }
+    setPromoStatus("loading");
+    try {
+      const res = await fetch("/api/promo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: promoCode.trim() }) });
+      const data = await res.json();
+      if (!data.valid) { setPromoStatus("error"); setPromoMsg(data.message); return; }
+      // Appliquer le bonus : réduire photos_used du nombre accordé (sans passer sous 0)
+      const currentUsed = user?.user_metadata?.photos_used ?? 0;
+      const newUsed = Math.max(0, currentUsed - data.photos);
+      const newUsedPromos = [...usedPromos, promoCode.trim().toUpperCase()];
+      await supabase.auth.updateUser({ data: { photos_used: newUsed, used_promos: newUsedPromos } });
+      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: newUsed, used_promos: newUsedPromos } } : prev);
+      setPromoStatus("success");
+      setPromoMsg(`${data.photos} photos débloquées — ${30 - newUsed} photos disponibles.`);
+    } catch (e) {
+      setPromoStatus("error"); setPromoMsg("Erreur réseau, réessayez.");
+    }
   };
 
   const openLightbox  = (r) => {
@@ -1508,6 +1537,7 @@ export default function AutoCache() {
                   {[
                     { icon: "👤", label: "Informations du compte", action: () => { setSettingsOpen(false); alert("Fonctionnalité à venir — gestion du profil"); } },
                     { icon: "💳", label: "Abonnement", action: () => { setSettingsOpen(false); alert("Fonctionnalité à venir — gestion de l'abonnement"); } },
+                    { icon: "🎟", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
                     { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); window.open("mailto:contact@autocache.fr", "_blank"); } },
                   ].map((item, i) => (
                     <button key={i} onClick={item.action}
@@ -2445,6 +2475,39 @@ export default function AutoCache() {
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Code Promo ── */}
+      {showPromoModal && (
+        <div onClick={() => setShowPromoModal(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 6, padding: "36px 40px", maxWidth: 400, width: "90%", fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 6, textTransform: "uppercase" }}>Code Promo</div>
+            <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 20 }}>Entrez votre code pour débloquer des photos supplémentaires.</div>
+            <input
+              value={promoCode} onChange={e => { setPromoCode(e.target.value); setPromoStatus(null); setPromoMsg(""); }}
+              onKeyDown={e => e.key === "Enter" && promoCode.trim() && promoStatus !== "loading" && submitPromo()}
+              placeholder="EX : AUTOCACHE30"
+              style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px", background: "#1a1a1a", border: `1px solid ${promoStatus === "error" ? "#c0392b" : promoStatus === "success" ? "#27ae60" : "#2a2a2a"}`, borderRadius: 3, color: "#ddd5c8", fontFamily: "'JetBrains Mono',monospace", fontSize: 15, letterSpacing: 3, textTransform: "uppercase", outline: "none", marginBottom: 10 }}
+            />
+            {promoMsg && (
+              <div style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: promoStatus === "success" ? "#27ae60" : "#c0392b", marginBottom: 14, letterSpacing: 1 }}>
+                {promoMsg}
+              </div>
+            )}
+            <button
+              onClick={submitPromo}
+              disabled={!promoCode.trim() || promoStatus === "loading" || promoStatus === "success"}
+              style={{ width: "100%", background: promoStatus === "success" ? "#27ae60" : (!promoCode.trim() || promoStatus === "loading") ? "#1a1a1a" : "#f26522", color: promoStatus === "success" ? "#fff" : (!promoCode.trim() || promoStatus === "loading") ? "#444" : "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: promoStatus === "loading" || promoStatus === "success" ? "default" : "pointer", marginBottom: 10 }}>
+              {promoStatus === "loading" ? "Vérification..." : promoStatus === "success" ? "Code activé ✓" : "Activer"}
+            </button>
+            <button onClick={() => setShowPromoModal(false)}
+              style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              Fermer
+            </button>
           </div>
         </div>
       )}
