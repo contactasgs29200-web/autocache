@@ -1,9 +1,6 @@
-// Codes promo valides — à modifier selon vos besoins
-// Chaque code accorde un nombre de photos supplémentaires
+// Codes promo valides — à renseigner par l'administrateur
+// Format : "CODE": { photos: <nombre de photos accordées> }
 const PROMO_CODES = {
-  "AUTOCACHE30":  { photos: 30,  label: "Essai prolongé" },
-  "BIENVENUE":    { photos: 30,  label: "Offre de bienvenue" },
-  "PARTNER50":    { photos: 50,  label: "Partenaire" },
 };
 
 export default function handler(req, res) {
