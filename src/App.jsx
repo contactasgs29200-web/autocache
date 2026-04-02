@@ -821,8 +821,6 @@ export default function AutoCache() {
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
   const TRIAL_LIMIT = 30;
-  const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
-  const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [enhance, setEnhance] = useState(false);         // amélioration auto des couleurs
@@ -1048,6 +1046,8 @@ export default function AutoCache() {
   const downloadAll = () => results.forEach(downloadOne);
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "essential" | "pro"
+  const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
+  const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
   const canUseShowroom = userPlan === "pro" || userPlan === "trial";
   const canStart = logo && photos.length > 0 && !processing;
 
