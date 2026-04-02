@@ -2685,7 +2685,7 @@ export default function AutoCache() {
                 {
                   key: "essential",
                   name: "Essentiel",
-                  price: "14,70€",
+                  price: "14,90€",
                   badge: null,
                   features: [
                     { ok: true,  label: "200 photos / mois" },
@@ -2700,7 +2700,7 @@ export default function AutoCache() {
                 {
                   key: "pro",
                   name: "Pro",
-                  price: "22,70€",
+                  price: "24,90€",
                   badge: "Recommandé",
                   features: [
                     { ok: true, label: "250 photos / mois" },
@@ -2716,7 +2716,9 @@ export default function AutoCache() {
                 const isPro = plan.key === "pro";
                 return (
                   <div key={plan.key}
-                    style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "22px 20px", position: "relative" }}>
+                    onMouseEnter={() => setHoveredPlan(`trial-${plan.key}`)}
+                    onMouseLeave={() => setHoveredPlan(null)}
+                    style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "22px 20px", position: "relative", transform: hoveredPlan === `trial-${plan.key}` ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
                     {plan.badge && (
                       <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 8, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
                     )}
