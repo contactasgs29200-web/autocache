@@ -2561,7 +2561,7 @@ export default function AutoCache() {
                   ],
                 },
               ].map(plan => {
-                const isCurrent = userPlan === plan.key || (plan.key === "essential" && userPlan === "trial");
+                const isCurrent = userPlan === plan.key;
                 const isPro = plan.key === "pro";
                 return (
                   <div key={plan.key} style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 22px", position: "relative" }}>
