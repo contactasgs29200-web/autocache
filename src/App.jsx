@@ -293,22 +293,22 @@ function autoEnhance(ctx, W, H) {
   const id = ctx.getImageData(0, 0, W, H);
   const d  = id.data;
 
-  // LUT par canal : gamma 0.93 (relève les tons moyens) + correction WB renforcée
-  // R : −10 %  (retire plus de rouge chaud)
-  // G : −3 %   (quasi-neutre)
-  // B : +15 %  (bleu froid plus prononcé → blanc très pur)
+  // LUT par canal : gamma 0.96 (relève les tons moyens) + correction WB légère
+  // R : −5 %  (retire un peu de rouge chaud)
+  // G : −1 %  (quasi-neutre)
+  // B : +8 %  (bleu froid léger → blanc naturel)
   const rLUT = new Uint8Array(256);
   const gLUT = new Uint8Array(256);
   const bLUT = new Uint8Array(256);
   for (let v = 0; v < 256; v++) {
-    const g = Math.pow(v / 255, 0.93); // gamma plus marqué (tons moyens plus lumineux)
-    rLUT[v] = Math.min(255, Math.round(g * 255 * 0.90));
-    gLUT[v] = Math.min(255, Math.round(g * 255 * 0.97));
-    bLUT[v] = Math.min(255, Math.round(g * 255 * 1.15));
+    const g = Math.pow(v / 255, 0.96); // gamma doux (tons moyens légèrement relevés)
+    rLUT[v] = Math.min(255, Math.round(g * 255 * 0.95));
+    gLUT[v] = Math.min(255, Math.round(g * 255 * 0.99));
+    bLUT[v] = Math.min(255, Math.round(g * 255 * 1.08));
   }
 
   // Saturation boost : pousse chaque canal loin de la luminance moyenne
-  const SAT = 1.22; // +22 % de saturation
+  const SAT = 1.12; // +12 % de saturation
   for (let i = 0; i < d.length; i += 4) {
     const r = rLUT[d[i]];
     const g = gLUT[d[i + 1]];
