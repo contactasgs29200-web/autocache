@@ -1063,10 +1063,16 @@ export default function AutoCache() {
       const res = await fetch("/api/promo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: promoCode.trim() }) });
       const data = await res.json();
       if (!data.valid) { setPromoStatus("error"); setPromoMsg(data.message); return; }
-      await supabase.auth.updateUser({ data: { photos_used: 0 } });
-      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: 0 } } : prev);
+      const currentUsed = user?.user_metadata?.photos_used ?? 0;
+      const newUsed = data.reset ? 0 : Math.max(0, currentUsed - data.photos);
+      await supabase.auth.updateUser({ data: { photos_used: newUsed } });
+      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: newUsed } } : prev);
       setPromoStatus("success");
-      setPromoMsg(`Compteur réinitialisé — ${PLAN_LIMIT} photos disponibles.`);
+      const available = PLAN_LIMIT - newUsed;
+      setPromoMsg(data.reset
+        ? `Compteur réinitialisé — ${available} photo${available > 1 ? "s" : ""} disponible${available > 1 ? "s" : ""}.`
+        : `+${data.photos} crédits ajoutés — ${available} photo${available > 1 ? "s" : ""} disponible${available > 1 ? "s" : ""}.`
+      );
     } catch (e) {
       setPromoStatus("error"); setPromoMsg("Erreur réseau, réessayez.");
     }
