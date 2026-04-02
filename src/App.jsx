@@ -1043,23 +1043,15 @@ export default function AutoCache() {
 
   const submitPromo = async () => {
     if (!promoCode.trim() || promoStatus === "loading") return;
-    // Vérifier que le code n'a pas déjà été utilisé par cet utilisateur
-    const usedPromos = user?.user_metadata?.used_promos ?? [];
-    if (usedPromos.includes(promoCode.trim().toUpperCase())) {
-      setPromoStatus("error"); setPromoMsg("Ce code a déjà été utilisé sur votre compte."); return;
-    }
     setPromoStatus("loading");
     try {
       const res = await fetch("/api/promo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: promoCode.trim() }) });
       const data = await res.json();
       if (!data.valid) { setPromoStatus("error"); setPromoMsg(data.message); return; }
-      // Appliquer le bonus : réduire photos_used du nombre accordé (sans passer sous 0)
-      const newUsed = 0;
-      const newUsedPromos = [...usedPromos, promoCode.trim().toUpperCase()];
-      await supabase.auth.updateUser({ data: { photos_used: newUsed, used_promos: newUsedPromos } });
-      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: newUsed, used_promos: newUsedPromos } } : prev);
+      await supabase.auth.updateUser({ data: { photos_used: 0 } });
+      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: 0 } } : prev);
       setPromoStatus("success");
-      setPromoMsg(`${data.photos} photos débloquées — ${30 - newUsed} photos disponibles.`);
+      setPromoMsg("Compteur réinitialisé — 30 photos disponibles.");
     } catch (e) {
       setPromoStatus("error"); setPromoMsg("Erreur réseau, réessayez.");
     }
