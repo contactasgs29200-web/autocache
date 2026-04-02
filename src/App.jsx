@@ -811,6 +811,8 @@ export default function AutoCache() {
   const [results, setResults] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState({ n: 0, total: 0 });
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const TRIAL_LIMIT = 30;
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [enhance, setEnhance] = useState(false);         // amélioration auto des couleurs
@@ -946,8 +948,12 @@ export default function AutoCache() {
 
   const start = async () => {
     if (!logo || !photos.length) return;
+    const photosUsed = user?.user_metadata?.photos_used ?? 0;
+    if (photosUsed >= TRIAL_LIMIT) { setShowUpgradeModal(true); return; }
+    const remaining = TRIAL_LIMIT - photosUsed;
+    const photosToProcess = photos.slice(0, remaining);
     setProcessing(true);
-    setProgress({ n: 0, total: photos.length });
+    setProgress({ n: 0, total: photosToProcess.length });
     setResults([]);
     const rawLogo = await loadImg(logo.preview);
     let logoImg;
@@ -984,8 +990,8 @@ export default function AutoCache() {
           : (SHOWROOM_IMAGES[showroomSetupBg] ?? makeShowroomBackground(showroomSetupBg, 2400, 1350)))
       : null;
 
-    for (let i = 0; i < photos.length; i++) {
-      const r = await processPhoto(photos[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled);
+    for (let i = 0; i < photosToProcess.length; i++) {
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
@@ -1012,8 +1018,13 @@ export default function AutoCache() {
       setResults([...all]);
       setProgress({ n: i + 1, total: photos.length });
     }
+    // Mettre à jour le compteur de photos utilisées
+    const newCount = photosUsed + photosToProcess.length;
+    await supabase.auth.updateUser({ data: { photos_used: newCount } });
+    setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: newCount } } : prev);
     setProcessing(false);
     setTab("results");
+    if (newCount >= TRIAL_LIMIT) setShowUpgradeModal(true);
   };
 
   const downloadOne = r => { const a = document.createElement("a"); a.href = r.showroomDataURL || r.processed; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click(); };
@@ -1455,6 +1466,21 @@ export default function AutoCache() {
               <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>{label}</button>
             ))}
             <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />
+            {/* ── Compteur essai gratuit ── */}
+            {(() => {
+              const used = user?.user_metadata?.photos_used ?? 0;
+              const left = Math.max(0, 30 - used);
+              return (
+                <div onClick={() => left === 0 && setShowUpgradeModal(true)}
+                  style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 2, border: `1px solid ${left === 0 ? "#c0392b" : "#2a2a2a"}`, cursor: left === 0 ? "pointer" : "default", background: left === 0 ? "rgba(192,57,43,0.08)" : "transparent" }}
+                  title={left === 0 ? "Période d'essai terminée — cliquez pour mettre à niveau" : `${left} photo${left > 1 ? "s" : ""} restante${left > 1 ? "s" : ""} sur votre essai gratuit`}
+                >
+                  <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: left === 0 ? "#c0392b" : left <= 5 ? "#f26522" : "#666", letterSpacing: 1 }}>
+                    {left === 0 ? "ESSAI TERMINÉ" : `ESSAI · ${left}/30`}
+                  </span>
+                </div>
+              );
+            })()}
             {/* ── Bouton Settings + Menu déroulant ── */}
             <div ref={settingsRef} style={{ position: "relative" }}>
               <button onClick={() => setSettingsOpen(o => !o)}
@@ -2419,6 +2445,30 @@ export default function AutoCache() {
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal upgrade ── */}
+      {showUpgradeModal && (
+        <div onClick={() => setShowUpgradeModal(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#141414", border: "1px solid #c0392b", borderRadius: 6, padding: "36px 40px", maxWidth: 420, width: "90%", textAlign: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
+            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 8, textTransform: "uppercase" }}>Période d'essai terminée</div>
+            <div style={{ fontSize: 13, color: "#888", lineHeight: 1.6, marginBottom: 24, fontFamily: "'JetBrains Mono',monospace", fontWeight: 400 }}>
+              Vous avez utilisé vos <span style={{ color: "#f26522", fontWeight: 700 }}>30 photos gratuites</span>.<br />
+              Pour continuer à utiliser AutoCache Pro, veuillez mettre votre abonnement à niveau.
+            </div>
+            <button onClick={() => { setShowUpgradeModal(false); window.open("mailto:contact@autocache.fr?subject=Abonnement AutoCache Pro", "_blank"); }}
+              style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
+              Mettre à niveau mon abonnement
+            </button>
+            <button onClick={() => setShowUpgradeModal(false)}
+              style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              Fermer
+            </button>
           </div>
         </div>
       )}
