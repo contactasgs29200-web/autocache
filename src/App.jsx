@@ -552,12 +552,27 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const ch = carImg.height * scale;
   const carX = (W - cw) / 2 + offsetX;
   const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
+  // Ombre de contact au sol (ellipse dégradée sous les roues)
+  const shadowCX = carX + cw / 2;
+  const shadowCY = carY + ch;
+  const shadowRX = cw * 0.44;
+  const shadowRY = ch * 0.042;
+  const scaleY = shadowRY / shadowRX;
+  const groundGrad = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, shadowRX);
+  groundGrad.addColorStop(0,   'rgba(0,0,0,0.32)');
+  groundGrad.addColorStop(0.55,'rgba(0,0,0,0.14)');
+  groundGrad.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.save();
+  ctx.transform(1, 0, 0, scaleY, 0, shadowCY * (1 - scaleY));
+  ctx.fillStyle = groundGrad;
+  ctx.beginPath();
+  ctx.arc(shadowCX, shadowCY, shadowRX, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // Voiture (sans drop shadow générique)
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.shadowColor = 'rgba(0,0,0,0.55)';
-  ctx.shadowBlur  = Math.round(W * 0.025);
-  ctx.shadowOffsetY = Math.round(H * 0.012);
   ctx.drawImage(carImg, carX, carY, cw, ch);
   ctx.restore();
   // Snapshot avant plaque (pour Ajuster en mode showroom)
