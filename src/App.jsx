@@ -731,11 +731,19 @@ function AuthScreen({ onAuth }) {
       } else {
         if (!fullName.trim()) throw new Error("Veuillez entrer votre nom ou nom d'entreprise.");
         if (!phone.trim()) throw new Error("Veuillez entrer votre numéro de téléphone.");
-        const { error } = await supabase.auth.signUp({
+        const { data: signUpData, error } = await supabase.auth.signUp({
           email, password,
           options: { data: { full_name: fullName.trim(), phone: phone.trim() } }
         });
         if (error) throw error;
+        // Stocker le téléphone dans la colonne phone de Supabase (sans vérification)
+        if (signUpData?.user?.id) {
+          await fetch('/api/set-user-phone', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: signUpData.user.id, phone: phone.trim() })
+          }).catch(() => {}); // non-bloquant si ça échoue
+        }
         setSuccess("Compte créé ! Vérifiez votre email puis connectez-vous.");
         setMode("login");
       }
