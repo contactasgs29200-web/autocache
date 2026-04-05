@@ -501,16 +501,26 @@ function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
 // Suppression de fond — moteur IA local @imgly/background-removal
 // Modèle ONNX (~40 MB) téléchargé une seule fois par le navigateur puis mis en cache.
 // Traite à 2000 px → netteté réelle vs 500 px max du plan gratuit remove.bg.
+// Précharge le modèle ONNX en arrière-plan (appelé dès que le mode showroom est activé)
+async function preloadRemoveBg() {
+  if (!removeBgImgly) {
+    const mod = await import("@imgly/background-removal");
+    removeBgImgly = mod.removeBackground;
+  }
+}
+
 async function removeBackground(dataUrl) {
   // Import dynamique — le modèle ONNX (~40 MB) n'est téléchargé qu'au premier appel
   if (!removeBgImgly) {
     const mod = await import("@imgly/background-removal");
     removeBgImgly = mod.removeBackground;
   }
-  // Réduit à 2000 px pour équilibrer qualité / temps de traitement (~5-15 s)
+  // Réduit à 2000 px pour équilibrer qualité / temps de traitement
   const small  = await shrinkDataUrl(dataUrl, 2000, 0.96);
   const blob   = await fetch(small).then(r => r.blob());
+  // Modèle "medium" : ~2× plus rapide que "large", qualité identique sur silhouettes de voitures
   const result = await removeBgImgly(blob, {
+    model: 'medium',
     output: { format: 'image/png', quality: 1.0 },
   });
   // Convertit le Blob PNG résultant en data URL persistable
@@ -1838,7 +1848,7 @@ export default function AutoCache() {
               {/* ── 03 — Showroom Virtuel ── */}
               <section>
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Showroom Virtuel</div>
-                <div onClick={() => canUseShowroom ? setShowroomEnabled(p => !p) : setShowUpgradeProModal(true)}
+                <div onClick={() => { if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); if (next) preloadRemoveBg(); }}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#1c1c1c"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
                   <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#444"}`, background: showroomEnabled && canUseShowroom ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "#555", fontSize: 10 }}>🔒</span>}
