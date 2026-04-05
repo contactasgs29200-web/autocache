@@ -193,43 +193,40 @@ function estimateAngleFromPosition(plate) {
 }
 
 // Build trapezoid corners from PR bounding box.
-// Stratégie : utilise directement les 4 coins détectés par PlateRecognizer
-// (qui incluent déjà la perspective réelle) puis applique le ratio 520×110mm
-// pour corriger la hauteur tout en conservant la déformation horizontale.
+// Stratégie : conserve les X réels de PR (perspective déjà encodée) et le centre Y
+// par côté (capture l'inclinaison verticale sur les voitures de 3/4).
+// Seule la hauteur est recalculée via le ratio 520×110mm pour corriger PR.
 function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
-  // Centre de la plaque détectée (PR)
-  const cx = (plate.tl.x + plate.tr.x + plate.br.x + plate.bl.x) / 4;
-  const cy = plateCenter ? plateCenter.cy : (plate.tl.y + plate.tr.y + plate.br.y + plate.bl.y) / 4;
+  // Positions X réelles de chaque coin — PR les a déjà en perspective, on les garde
+  const tlx = plate.tl.x, trx = plate.tr.x;
+  const brx = plate.br.x, blx = plate.bl.x;
 
-  // Largeur apparente (haut et bas séparément pour la perspective)
-  const topW  = plate.tr.x - plate.tl.x;
-  const botW  = plate.br.x - plate.bl.x;
+  // Centre Y par côté : capture l'inclinaison verticale de la plaque (voiture de 3/4)
+  const leftCY  = (plate.tl.y + plate.bl.y) / 2;
+  const rightCY = (plate.tr.y + plate.br.y) / 2;
+  // Override si GPT-4o a fourni un centre précis
+  const leftCYf  = plateCenter ? plateCenter.cy : leftCY;
+  const rightCYf = plateCenter ? plateCenter.cy : rightCY;
 
-  // Hauteur théorique basée sur le ratio 520×110mm (4.73:1)
-  // Utilise la largeur moyenne pour le calcul
+  // Hauteur théorique via ratio 520×110mm (4.73:1)
+  const topW = trx - tlx;
+  const botW = brx - blx;
   const avgW = (topW + botW) / 2;
   const ph   = avgW / 4.73;
 
-  // Décalage horizontal en perspective : le côté proche est décalé vers l'extérieur
-  // On reprend le décalage X réel de PR entre haut et bas
-  const topCx = (plate.tl.x + plate.tr.x) / 2;
-  const botCx = (plate.bl.x + plate.br.x) / 2;
-  const xShift = (topCx - botCx) * 0.5; // décalage en perspective (convergence vers point de fuite)
-
   // Hauteur gauche/droite différente en perspective
-  const theta = angle_deg * Math.PI / 180;
-  const PERSP = 0.32;
+  const theta  = angle_deg * Math.PI / 180;
+  const PERSP  = 0.32;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
   const farH   = ph * (1 - Math.sin(theta) * PERSP);
   const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
   const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
 
-  console.log(`%c[AutoCache] near_side=${near_side} angle=${angle_deg}° cy=${cy.toFixed(4)} topW=${topW.toFixed(4)} botW=${botW.toFixed(4)} ph=${ph.toFixed(4)}`, "color:orange;font-weight:bold");
   return {
-    tl: { x: Math.max(0, cx - topW * 0.5), y: Math.max(0, cy - leftH  * 0.5) },
-    tr: { x: Math.min(1, cx + topW * 0.5), y: Math.max(0, cy - rightH * 0.5) },
-    br: { x: Math.min(1, cx + botW * 0.5), y: Math.min(1, cy + rightH * 0.5) },
-    bl: { x: Math.max(0, cx - botW * 0.5), y: Math.min(1, cy + leftH  * 0.5) },
+    tl: { x: Math.max(0, tlx), y: Math.max(0, leftCYf  - leftH  * 0.5) },
+    tr: { x: Math.min(1, trx), y: Math.max(0, rightCYf - rightH * 0.5) },
+    br: { x: Math.min(1, brx), y: Math.min(1, rightCYf + rightH * 0.5) },
+    bl: { x: Math.max(0, blx), y: Math.min(1, leftCYf  + leftH  * 0.5) },
   };
 }
 
