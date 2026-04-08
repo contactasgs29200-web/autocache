@@ -282,35 +282,41 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   ctx.restore();
 }
 
-// ── Correction de balance des blancs ─────────────────────────────────────────
-// Simule un éclairage plus blanc/neutre en supprimant la dominante jaune/chaude
-// typique des showrooms (LED 3000–4000 K → rendu 5500 K neutre).
-// Pas d'auto-niveaux : aucun risque de saturer les hautes lumières.
+// ── Amélioration photo style "pro" ────────────────────────────────────────────
+// Reproduit le traitement appliqué par les outils IA haut de gamme :
+//   1. Refroidissement WB marqué (supprime la dominante jaune/chaude LED)
+//   2. Courbe S (ombres plus profondes, hautes lumières préservées)
+//   3. Boost de saturation (bleus plus vifs, couleurs carrosserie plus engageantes)
 function autoEnhance(ctx, W, H) {
   const id = ctx.getImageData(0, 0, W, H);
   const d  = id.data;
 
-  // LUT par canal : gamma 0.96 (relève les tons moyens) + correction WB légère
-  // R : −5 %  (retire un peu de rouge chaud)
-  // G : −1 %  (quasi-neutre)
-  // B : +8 %  (bleu froid léger → blanc naturel)
+  // Courbe S légère : creuse les ombres, préserve les hautes lumières
+  const sCurve = v => v < 0.5
+    ? 0.5 * Math.pow(v * 2, 1.20)          // ombres assombries
+    : 1 - 0.5 * Math.pow((1 - v) * 2, 0.85); // hautes lumières légèrement relevées
+
+  // LUT par canal : refroidissement WB + courbe S
+  // R : −12 %  (retire la dominante rouge/chaude)
+  // G : −4  %  (neutre-froid)
+  // B : +13 %  (bleu acier → lumière neutre 6000 K)
   const rLUT = new Uint8Array(256);
   const gLUT = new Uint8Array(256);
   const bLUT = new Uint8Array(256);
   for (let v = 0; v < 256; v++) {
-    const g = Math.pow(v / 255, 0.96); // gamma doux (tons moyens légèrement relevés)
-    rLUT[v] = Math.min(255, Math.round(g * 255 * 0.95));
-    gLUT[v] = Math.min(255, Math.round(g * 255 * 0.99));
-    bLUT[v] = Math.min(255, Math.round(g * 255 * 1.08));
+    const t = v / 255;
+    rLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * 0.88) * 255)));
+    gLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * 0.96) * 255)));
+    bLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(Math.min(1, t * 1.13)) * 255)));
   }
 
-  // Saturation boost : pousse chaque canal loin de la luminance moyenne
-  const SAT = 1.12; // +12 % de saturation
+  // Application LUT + boost saturation (+20 %)
+  const SAT = 1.20;
   for (let i = 0; i < d.length; i += 4) {
-    const r = rLUT[d[i]];
-    const g = gLUT[d[i + 1]];
-    const b = bLUT[d[i + 2]];
-    const lum = r * 0.299 + g * 0.587 + b * 0.114; // luminance perceptive
+    let r = rLUT[d[i]];
+    let g = gLUT[d[i + 1]];
+    let b = bLUT[d[i + 2]];
+    const lum = r * 0.299 + g * 0.587 + b * 0.114;
     d[i]     = Math.max(0, Math.min(255, Math.round(lum + (r - lum) * SAT)));
     d[i + 1] = Math.max(0, Math.min(255, Math.round(lum + (g - lum) * SAT)));
     d[i + 2] = Math.max(0, Math.min(255, Math.round(lum + (b - lum) * SAT)));
