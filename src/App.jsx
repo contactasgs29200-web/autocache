@@ -282,43 +282,27 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   ctx.restore();
 }
 
-// ── Nettoyage IA — génère un masque PNG du sol (bas de l'image) ───────────────
-// Zones blanches = à nettoyer, zones noires = à conserver.
-// Gradient de 52 % à 72 % de hauteur pour une transition naturelle.
-function generateFloorMask(W, H) {
-  const c = document.createElement("canvas");
-  c.width = W; c.height = H;
-  const ctx = c.getContext("2d");
-  ctx.fillStyle = "black";
-  ctx.fillRect(0, 0, W, H);
-  const gradStart = H * 0.52;
-  const gradEnd   = H * 0.72;
-  const grad = ctx.createLinearGradient(0, gradStart, 0, gradEnd);
-  grad.addColorStop(0, "rgba(255,255,255,0)");
-  grad.addColorStop(1, "rgba(255,255,255,255)");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, gradStart, W, gradEnd - gradStart);
-  ctx.fillStyle = "white";
-  ctx.fillRect(0, gradEnd, W, H - gradEnd);
-  return c.toDataURL("image/png").split(",")[1];
-}
 
-async function applyCleanup(dataUrl, W, H) {
+// ── Amélioration IA — appel gpt-image-1 image edit ───────────────────────────
+// Génère un masque entièrement transparent (tout peut être retouché) et envoie
+// l'image + masque à /api/enhance. Le résultat remplace l'image dans le canvas.
+async function callEnhanceAI(dataUrl, W, H) {
+  // Masque transparent : alpha=0 partout = tout est éditable par l'IA
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = W; maskCanvas.height = H;
+  // Canvas vierge = transparent par défaut, pas besoin de drawImage
+  const maskBase64 = maskCanvas.toDataURL("image/png").split(",")[1];
   const imageBase64 = dataUrl.split(",")[1];
-  const maskBase64  = generateFloorMask(W, H);
-  const res = await fetch("/api/cleanup", {
+
+  const res = await fetch("/api/enhance", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ imageBase64, maskBase64 }),
   });
-  if (!res.ok) throw new Error("Cleanup API error " + res.status);
-  const blob = await res.blob();
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+  if (!res.ok) { console.error("Enhance API error", res.status); return null; }
+  const json = await res.json();
+  if (!json.imageBase64) return null;
+  return `data:image/png;base64,${json.imageBase64}`;
 }
 
 // ── Amélioration photo style "pro" ────────────────────────────────────────────
@@ -709,12 +693,14 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (enhance) autoEnhance(ctx, c.width, c.height);
   // Lustrage des optiques : correction chromatique localisée sur les phares/feux
   if (lights.length > 0) polishHeadlights(ctx, lights, c.width, c.height);
-  // Nettoyage IA : supprime les traces au sol via Clipdrop Cleanup
-  if (cleanupEnabled) {
-    const cleaned = await applyCleanup(c.toDataURL("image/jpeg", 0.97), c.width, c.height);
-    const cleanedImg = await loadImg(cleaned);
-    ctx.clearRect(0, 0, c.width, c.height);
-    ctx.drawImage(cleanedImg, 0, 0);
+  // Amélioration IA complète : gpt-image-1 (sol propre + carrosserie + couleurs)
+  if (enhanceAI) {
+    const aiResult = await callEnhanceAI(c.toDataURL("image/jpeg", 0.95), c.width, c.height);
+    if (aiResult) {
+      const aiImg = await loadImg(aiResult);
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.drawImage(aiImg, 0, 0, c.width, c.height);
+    }
   }
   // Save photo without plate for later re-rendering in "Ajuster" mode
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
@@ -907,7 +893,7 @@ export default function AutoCache() {
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [enhance, setEnhance] = useState(false);         // amélioration auto des couleurs
   const [headlightPolish, setHeadlightPolish] = useState(false); // lustrage des optiques
-  const [cleanupEnabled, setCleanupEnabled] = useState(false);   // nettoyage IA sol
+  const [enhanceAI, setEnhanceAI] = useState(false);             // amélioration IA (gpt-image-1)
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
@@ -1834,11 +1820,11 @@ export default function AutoCache() {
                     sub: "Réduit le jaunissement des phares et feux · IA GPT-4o",
                   },
                   {
-                    active: cleanupEnabled,
-                    toggle: () => setCleanupEnabled(p => !p),
-                    icon: "🧹",
-                    label: "Nettoyage IA",
-                    sub: "Supprime les traces au sol · Clipdrop",
+                    active: enhanceAI,
+                    toggle: () => setEnhanceAI(p => !p),
+                    icon: "🪄",
+                    label: "Amélioration IA",
+                    sub: "Sol propre · Carrosserie sans rayures · Couleurs pro · GPT-Image",
                   },
                 ].map(({ active, toggle, icon, label, sub }) => (
                   <div key={label}
