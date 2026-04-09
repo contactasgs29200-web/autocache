@@ -13,14 +13,26 @@ function getRawBody(req) {
   });
 }
 
-async function setUserPlan(userId, plan) {
-  const supabase = createClient(
+function supabaseAdmin() {
+  return createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY,
     { auth: { autoRefreshToken: false, persistSession: false } }
   );
-  const { error } = await supabase.auth.admin.updateUserById(userId, {
+}
+
+async function setUserPlan(userId, plan) {
+  const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
     user_metadata: { plan },
+  });
+  if (error) throw new Error(`Supabase update failed: ${error.message}`);
+}
+
+async function setUserPlanAndCustomer(userId, plan, stripeCustomerId) {
+  const meta = { plan };
+  if (stripeCustomerId) meta.stripe_customer_id = stripeCustomerId;
+  const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
+    user_metadata: meta,
   });
   if (error) throw new Error(`Supabase update failed: ${error.message}`);
 }
@@ -43,11 +55,12 @@ export default async function handler(req, res) {
   try {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-      const userId = session.client_reference_id || session.metadata?.userId;
-      const plan   = session.metadata?.plan;
+      const userId     = session.client_reference_id || session.metadata?.userId;
+      const plan       = session.metadata?.plan;
+      const customerId = typeof session.customer === "string" ? session.customer : null;
       if (userId && plan) {
-        await setUserPlan(userId, plan);
-        console.log(`Plan "${plan}" activé pour user ${userId}`);
+        await setUserPlanAndCustomer(userId, plan, customerId);
+        console.log(`Plan "${plan}" activé pour user ${userId} (customer: ${customerId})`);
       }
     }
 

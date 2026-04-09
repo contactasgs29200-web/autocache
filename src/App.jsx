@@ -911,6 +911,7 @@ export default function AutoCache() {
   const [showContactModal, setShowContactModal] = useState(false);
   const [hoveredPlan, setHoveredPlan] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(null); // "essential" | "pro" | null
+  const [portalLoading, setPortalLoading] = useState(null); // null | "invoices" | "cancel" | "upgrade"
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
@@ -2708,105 +2709,207 @@ export default function AutoCache() {
         <div onClick={() => setShowPlansModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: "36px 40px", maxWidth: 740, width: "100%", fontFamily: "'Rajdhani',sans-serif" }}>
-            {/* En-tête */}
-            <div style={{ textAlign: "center", marginBottom: 32 }}>
-              <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Nos Abonnements</div>
-              <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
-                Plan actuel : <span style={{ color: "#f26522" }}>
-                  {userPlan === "pro" ? "Pro" : userPlan === "essential" ? "Essentiel" : "Essai gratuit"}
-                </span>
-              </div>
-            </div>
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: "36px 40px", maxWidth: userPlan === "trial" ? 740 : 480, width: "100%", fontFamily: "'Rajdhani',sans-serif" }}>
 
-            {/* Cartes plans */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 28 }}>
-
-              {/* Plan Essentiel */}
-              {[
-                {
-                  key: "essential",
-                  name: "Essentiel",
-                  badge: null,
-                  features: [
-                    { ok: true,  label: "Cache plaque personnalisé" },
-                    { ok: true,  label: "Logo importé ou généré" },
-                    { ok: true,  label: "Ajustements couleurs" },
-                    { ok: true,  label: "Amélioration Pro" },
-                    { ok: true,  label: "Lustrage des optiques" },
-                    { ok: false, label: "Showroom Virtuel (fonds IA)" },
-                    { ok: false, label: "Enseigne murale" },
-                  ],
-                },
-                {
-                  key: "pro",
-                  name: "Pro",
-                  badge: "Recommandé",
-                  features: [
-                    { ok: true, label: "Cache plaque personnalisé" },
-                    { ok: true, label: "Logo importé ou généré" },
-                    { ok: true, label: "Ajustements couleurs" },
-                    { ok: true, label: "Amélioration Pro" },
-                    { ok: true, label: "Lustrage des optiques" },
-                    { ok: true, label: "Showroom Virtuel (fonds IA)" },
-                    { ok: true, label: "Enseigne murale" },
-                  ],
-                },
-              ].map(plan => {
-                const isCurrent = userPlan === plan.key;
-                const isPro = plan.key === "pro";
-                return (
-                  <div key={plan.key}
-                    onMouseEnter={() => setHoveredPlan(plan.key)}
-                    onMouseLeave={() => setHoveredPlan(null)}
-                    style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 22px", position: "relative", transform: hoveredPlan === plan.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
-                    {plan.badge && (
-                      <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 8, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
-                    )}
-                    <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 4 }}>{plan.name}</div>
-                    {isCurrent && (
-                      <div style={{ fontSize: 8, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginBottom: 14, textTransform: "uppercase" }}>— Plan actuel —</div>
-                    )}
-                    <div style={{ marginBottom: 20, marginTop: isCurrent ? 0 : 14 }}>
-                      {plan.features.map((f, i) => (
-                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-                          <span style={{ fontSize: 11, color: f.ok ? "#27ae60" : "#444", flexShrink: 0 }}>{f.ok ? "✓" : "✕"}</span>
-                          <span style={{ fontSize: 10, color: f.ok ? "#bbb" : "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{f.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <button
-                      disabled={isCurrent || checkoutLoading === plan.key}
-                      onClick={async () => {
-                        if (isCurrent) return;
-                        setCheckoutLoading(plan.key);
-                        try {
-                          const res = await fetch("/api/create-checkout-session", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ plan: plan.key, userId: user.id, userEmail: user.email }),
-                          });
-                          const data = await res.json();
-                          if (data.url) window.location.href = data.url;
-                          else alert("Erreur lors de la création du paiement.");
-                        } catch (e) {
-                          alert("Erreur réseau, réessayez.");
-                        } finally {
-                          setCheckoutLoading(null);
-                        }
-                      }}
-                      style={{ width: "100%", background: isCurrent ? "#1a1a1a" : isPro ? "#f26522" : "transparent", color: isCurrent ? "#444" : isPro ? "#090909" : "#777", border: `1px solid ${isCurrent ? "#2a2a2a" : isPro ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: isCurrent ? "default" : "pointer" }}>
-                      {checkoutLoading === plan.key ? "Redirection..." : isCurrent ? "Mon abonnement actuel" : `Choisir ${plan.name}`}
-                    </button>
+            {userPlan === "trial" ? (
+              /* ── Vue comparaison des plans (utilisateurs en essai) ── */
+              <>
+                <div style={{ textAlign: "center", marginBottom: 32 }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Nos Abonnements</div>
+                  <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
+                    Plan actuel : <span style={{ color: "#f26522" }}>Essai gratuit</span>
                   </div>
-                );
-              })}
-            </div>
+                </div>
 
-            <button onClick={() => setShowPlansModal(false)}
-              style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
-              Fermer
-            </button>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 28 }}>
+                  {[
+                    {
+                      key: "essential",
+                      name: "Essentiel",
+                      badge: null,
+                      features: [
+                        { ok: true,  label: "Cache plaque personnalisé" },
+                        { ok: true,  label: "Logo importé ou généré" },
+                        { ok: true,  label: "Ajustements couleurs" },
+                        { ok: true,  label: "Amélioration Pro" },
+                        { ok: true,  label: "Lustrage des optiques" },
+                        { ok: false, label: "Showroom Virtuel (fonds IA)" },
+                        { ok: false, label: "Enseigne murale" },
+                      ],
+                    },
+                    {
+                      key: "pro",
+                      name: "Pro",
+                      badge: "Recommandé",
+                      features: [
+                        { ok: true, label: "Cache plaque personnalisé" },
+                        { ok: true, label: "Logo importé ou généré" },
+                        { ok: true, label: "Ajustements couleurs" },
+                        { ok: true, label: "Amélioration Pro" },
+                        { ok: true, label: "Lustrage des optiques" },
+                        { ok: true, label: "Showroom Virtuel (fonds IA)" },
+                        { ok: true, label: "Enseigne murale" },
+                      ],
+                    },
+                  ].map(plan => {
+                    const isPro = plan.key === "pro";
+                    return (
+                      <div key={plan.key}
+                        onMouseEnter={() => setHoveredPlan(plan.key)}
+                        onMouseLeave={() => setHoveredPlan(null)}
+                        style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 22px", position: "relative", transform: hoveredPlan === plan.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
+                        {plan.badge && (
+                          <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 8, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
+                        )}
+                        <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 4 }}>{plan.name}</div>
+                        <div style={{ marginBottom: 20, marginTop: 14 }}>
+                          {plan.features.map((f, i) => (
+                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                              <span style={{ fontSize: 11, color: f.ok ? "#27ae60" : "#444", flexShrink: 0 }}>{f.ok ? "✓" : "✕"}</span>
+                              <span style={{ fontSize: 10, color: f.ok ? "#bbb" : "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{f.label}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <button
+                          disabled={checkoutLoading === plan.key}
+                          onClick={async () => {
+                            setCheckoutLoading(plan.key);
+                            try {
+                              const res = await fetch("/api/create-checkout-session", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ plan: plan.key, userId: user.id, userEmail: user.email }),
+                              });
+                              const data = await res.json();
+                              if (data.url) window.location.href = data.url;
+                              else alert("Erreur lors de la création du paiement.");
+                            } catch (e) {
+                              alert("Erreur réseau, réessayez.");
+                            } finally {
+                              setCheckoutLoading(null);
+                            }
+                          }}
+                          style={{ width: "100%", background: isPro ? "#f26522" : "transparent", color: isPro ? "#090909" : "#777", border: `1px solid ${isPro ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+                          {checkoutLoading === plan.key ? "Redirection..." : `Choisir ${plan.name}`}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <button onClick={() => setShowPlansModal(false)}
+                  style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+                  Fermer
+                </button>
+              </>
+            ) : (
+              /* ── Vue gestion abonnement (utilisateurs abonnés) ── */
+              <>
+                {/* En-tête */}
+                <div style={{ textAlign: "center", marginBottom: 32 }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Mon Abonnement</div>
+                  <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
+                    Plan actif : <span style={{ color: "#f26522", fontWeight: 700 }}>
+                      {userPlan === "pro" ? "Pro" : "Essentiel"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Badge plan */}
+                <div style={{ background: userPlan === "pro" ? "rgba(242,101,34,0.08)" : "#0e0e0e", border: `1px solid ${userPlan === "pro" ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "20px 24px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 2, color: userPlan === "pro" ? "#f26522" : "#ccc", textTransform: "uppercase" }}>
+                      {userPlan === "pro" ? "Pro" : "Essentiel"}
+                    </div>
+                    <div style={{ fontSize: 9, color: "#555", fontFamily: "'JetBrains Mono',monospace", marginTop: 4, letterSpacing: 1 }}>
+                      {userPlan === "pro" ? "Toutes les fonctionnalités incluses" : "Fonctionnalités de base"}
+                    </div>
+                  </div>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
+                </div>
+
+                {/* Bouton upgrade (Essentiel → Pro) */}
+                {userPlan === "essential" && (
+                  <button
+                    disabled={portalLoading === "upgrade"}
+                    onClick={async () => {
+                      setPortalLoading("upgrade");
+                      try {
+                        const res = await fetch("/api/create-checkout-session", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ plan: "pro", userId: user.id, userEmail: user.email }),
+                        });
+                        const data = await res.json();
+                        if (data.url) window.location.href = data.url;
+                        else alert("Erreur lors de la création du paiement.");
+                      } catch (e) {
+                        alert("Erreur réseau, réessayez.");
+                      } finally {
+                        setPortalLoading(null);
+                      }
+                    }}
+                    style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
+                    {portalLoading === "upgrade" ? "Redirection..." : "Améliorer vers Pro"}
+                  </button>
+                )}
+
+                {/* Bouton Factures */}
+                <button
+                  disabled={!!portalLoading}
+                  onClick={async () => {
+                    setPortalLoading("invoices");
+                    try {
+                      const res = await fetch("/api/customer-portal", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ userId: user.id }),
+                      });
+                      const data = await res.json();
+                      if (data.url) window.location.href = data.url;
+                      else alert("Impossible d'accéder au portail. Réessayez.");
+                    } catch (e) {
+                      alert("Erreur réseau, réessayez.");
+                    } finally {
+                      setPortalLoading(null);
+                    }
+                  }}
+                  style={{ width: "100%", background: "transparent", color: "#ccc", border: "1px solid #333", padding: "12px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
+                  {portalLoading === "invoices" ? "Ouverture..." : "Factures & Historique"}
+                </button>
+
+                <button onClick={() => setShowPlansModal(false)}
+                  style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #1e1e1e", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 24 }}>
+                  Fermer
+                </button>
+
+                {/* Bouton Résilier */}
+                <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 18, textAlign: "center" }}>
+                  <button
+                    disabled={!!portalLoading}
+                    onClick={async () => {
+                      setPortalLoading("cancel");
+                      try {
+                        const res = await fetch("/api/customer-portal", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ userId: user.id }),
+                        });
+                        const data = await res.json();
+                        if (data.url) window.location.href = data.url;
+                        else alert("Impossible d'accéder au portail. Réessayez.");
+                      } catch (e) {
+                        alert("Erreur réseau, réessayez.");
+                      } finally {
+                        setPortalLoading(null);
+                      }
+                    }}
+                    style={{ background: "transparent", color: "#444", border: "none", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", textDecoration: "underline" }}>
+                    {portalLoading === "cancel" ? "Ouverture..." : "Résilier l'abonnement"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
