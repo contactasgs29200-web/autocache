@@ -288,9 +288,9 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
 // du sol par flou CSS appliqué uniquement sur la zone basse via masque canvas.
 // Aucun appel API, aucune déformation, transitions douces.
 function applyFloorBlur(ctx, canvasEl, W, H) {
-  const transStart = Math.round(H * 0.56);
-  const floorFull  = Math.round(H * 0.74);
-  const blurPx     = Math.max(6, Math.round(W * 0.007)); // ~11px à 1600px
+  const transStart = Math.round(H * 0.76);
+  const floorFull  = Math.round(H * 0.88);
+  const blurPx     = Math.max(3, Math.round(W * 0.003)); // ~5px à 1600px
 
   // Copie floutée de l'image déjà traitée (couleurs appliquées)
   const off = document.createElement('canvas');
