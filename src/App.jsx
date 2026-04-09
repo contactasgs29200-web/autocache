@@ -1831,11 +1831,11 @@ export default function AutoCache() {
                 {/* ── Cases à cocher : améliorations photo ── */}
                 {[
                   {
-                    active: enhance,
-                    toggle: () => setEnhance(p => !p),
+                    active: enhancePro,
+                    toggle: () => setEnhancePro(p => !p),
                     icon: "✨",
-                    label: "Amélioration automatique",
-                    sub: "Supprime la dominante jaune · Éclairage plus blanc et neutre",
+                    label: "Amélioration Pro",
+                    sub: "Couleurs froides & naturelles + sol uniforme · 100 % local",
                   },
                   {
                     active: headlightPolish,
@@ -2660,7 +2660,7 @@ export default function AutoCache() {
                     { ok: true,  label: "Cache plaque personnalisé" },
                     { ok: true,  label: "Logo importé ou généré" },
                     { ok: true,  label: "Ajustements couleurs" },
-                    { ok: true,  label: "Amélioration automatique" },
+                    { ok: true,  label: "Amélioration Pro" },
                     { ok: true,  label: "Lustrage des optiques" },
                     { ok: false, label: "Showroom Virtuel (fonds IA)" },
                     { ok: false, label: "Enseigne murale" },
@@ -2674,7 +2674,7 @@ export default function AutoCache() {
                     { ok: true, label: "Cache plaque personnalisé" },
                     { ok: true, label: "Logo importé ou généré" },
                     { ok: true, label: "Ajustements couleurs" },
-                    { ok: true, label: "Amélioration automatique" },
+                    { ok: true, label: "Amélioration Pro" },
                     { ok: true, label: "Lustrage des optiques" },
                     { ok: true, label: "Showroom Virtuel (fonds IA)" },
                     { ok: true, label: "Enseigne murale" },
