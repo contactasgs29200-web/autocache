@@ -283,39 +283,45 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
 }
 
 
-// ── Légèreté du sol — adoucit les traces sans IA (canvas uniquement) ─────────
-// Applique un léger éclaircissement + désaturation sur la zone basse de l'image
-// pour atténuer les traces de pneus sans toucher la voiture ni déformer quoi que ce soit.
-function softFloor(ctx, W, H) {
-  const floorTop = Math.round(H * 0.68);
-  const transTop = Math.round(H * 0.58);
-  const id = ctx.getImageData(0, transTop, W, H - transTop);
-  const d  = id.data;
-  const zoneH = H - transTop;
-  for (let row = 0; row < zoneH; row++) {
-    // 0 au niveau de la transition, 1 en bas de l'image
-    const t = row < (floorTop - transTop)
-      ? row / (floorTop - transTop)
-      : 1;
-    const strength = t * 0.55; // max 55 % d'effet en bas
-    for (let col = 0; col < W; col++) {
-      const i = (row * W + col) * 4;
-      let r = d[i], g = d[i+1], b = d[i+2];
-      // Désaturation partielle
-      const lum = r * 0.299 + g * 0.587 + b * 0.114;
-      r = r + (lum - r) * strength * 0.5;
-      g = g + (lum - g) * strength * 0.5;
-      b = b + (lum - b) * strength * 0.5;
-      // Légère clarification
-      r = r + (255 - r) * strength * 0.18;
-      g = g + (255 - g) * strength * 0.18;
-      b = b + (255 - b) * strength * 0.18;
-      d[i]   = Math.min(255, r);
-      d[i+1] = Math.min(255, g);
-      d[i+2] = Math.min(255, b);
-    }
-  }
-  ctx.putImageData(id, 0, transTop);
+// ── Amélioration Pro — couleurs froides + flou sol adaptatif ─────────────────
+// Combine la correction colorimétrique (autoEnhance) et un adoucissement
+// du sol par flou CSS appliqué uniquement sur la zone basse via masque canvas.
+// Aucun appel API, aucune déformation, transitions douces.
+function applyFloorBlur(ctx, canvasEl, W, H) {
+  const transStart = Math.round(H * 0.56);
+  const floorFull  = Math.round(H * 0.74);
+  const blurPx     = Math.max(6, Math.round(W * 0.007)); // ~11px à 1600px
+
+  // Copie floutée de l'image déjà traitée (couleurs appliquées)
+  const off = document.createElement('canvas');
+  off.width = W; off.height = H;
+  const octx = off.getContext('2d');
+  octx.filter = `blur(${blurPx}px)`;
+  octx.drawImage(canvasEl, 0, 0);
+  octx.filter = 'none';
+  // Très léger éclaircissement pour "nettoyer" visuellement le sol
+  octx.fillStyle = 'rgba(255,255,255,0.06)';
+  octx.fillRect(0, 0, W, H);
+
+  // Masque dégradé : transparent en haut (garde l'original), opaque en bas (flou)
+  const mask = document.createElement('canvas');
+  mask.width = W; mask.height = H;
+  const mctx = mask.getContext('2d');
+  const grad = mctx.createLinearGradient(0, transStart, 0, floorFull);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,1)');
+  mctx.fillStyle = grad;
+  mctx.fillRect(0, transStart, W, floorFull - transStart);
+  mctx.fillStyle = 'black';
+  mctx.fillRect(0, floorFull, W, H - floorFull);
+
+  // Applique le masque à la copie floutée (destination-in = garde seulement les zones opaques du masque)
+  octx.globalCompositeOperation = 'destination-in';
+  octx.drawImage(mask, 0, 0);
+  octx.globalCompositeOperation = 'source-over';
+
+  // Superpose le sol flouté sur l'image principale
+  ctx.drawImage(off, 0, 0);
 }
 
 // ── Amélioration photo style "pro" ────────────────────────────────────────────
@@ -684,7 +690,7 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
   // Détection plaque + (angle GPT-4o seulement si showroom activé) + optiques en parallèle
   const [plate, angleData, lights] = await Promise.all([
@@ -702,12 +708,24 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = `brightness(${adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation})`;
   ctx.drawImage(photoImg, 0, 0);
   ctx.filter = "none";
-  // Correction de balance des blancs globale
-  if (enhance) autoEnhance(ctx, c.width, c.height);
-  // Lustrage des optiques : correction chromatique localisée sur les phares/feux
+  // Amélioration couleurs (canvas)
+  if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
+  // Lustrage des optiques
   if (lights.length > 0) polishHeadlights(ctx, lights, c.width, c.height);
-  // Adoucissement sol : atténue les traces de pneus (canvas, sans déformation)
-  if (floorClean) softFloor(ctx, c.width, c.height);
+  // Sol : flou adaptatif pro (après couleurs) ou adoucissement simple
+  if (enhancePro) applyFloorBlur(ctx, c, c.width, c.height);
+  else if (floorClean) {
+    // softFloor conservé pour compatibilité
+    const id = ctx.getImageData(0, Math.round(c.height * 0.58), c.width, Math.round(c.height * 0.42));
+    const d = id.data; const zH = Math.round(c.height * 0.42); const fT = Math.round(c.height * 0.10);
+    for (let row = 0; row < zH; row++) { const t = Math.min(1, row / fT) * 0.55;
+      for (let col = 0; col < c.width; col++) { const i = (row * c.width + col) * 4;
+        const lum = d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114;
+        d[i]=Math.min(255,d[i]+(lum-d[i])*t*0.5+(255-d[i])*t*0.18);
+        d[i+1]=Math.min(255,d[i+1]+(lum-d[i+1])*t*0.5+(255-d[i+1])*t*0.18);
+        d[i+2]=Math.min(255,d[i+2]+(lum-d[i+2])*t*0.5+(255-d[i+2])*t*0.18); } }
+    ctx.putImageData(id, 0, Math.round(c.height * 0.58));
+  }
   // Save photo without plate for later re-rendering in "Ajuster" mode
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
   const baseDataURL = c.toDataURL("image/jpeg", 0.97);
@@ -897,9 +915,10 @@ export default function AutoCache() {
   const TRIAL_LIMIT = 30;
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
-  const [enhance, setEnhance] = useState(false);         // amélioration auto des couleurs
-  const [headlightPolish, setHeadlightPolish] = useState(false); // lustrage des optiques
-  const [floorClean, setFloorClean] = useState(false);            // adoucissement sol (canvas)
+  const [enhance, setEnhance] = useState(false);
+  const [headlightPolish, setHeadlightPolish] = useState(false);
+  const [floorClean, setFloorClean] = useState(false);
+  const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
@@ -1081,7 +1100,7 @@ export default function AutoCache() {
       : null;
 
     for (let i = 0; i < photosToProcess.length; i++) {
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, floorClean);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, floorClean, enhancePro);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
@@ -1826,11 +1845,11 @@ export default function AutoCache() {
                     sub: "Réduit le jaunissement des phares et feux · IA GPT-4o",
                   },
                   {
-                    active: floorClean,
-                    toggle: () => setFloorClean(p => !p),
-                    icon: "🧹",
-                    label: "Sol uniforme",
-                    sub: "Atténue les traces de pneus et marques au sol",
+                    active: enhancePro,
+                    toggle: () => setEnhancePro(p => !p),
+                    icon: "🪄",
+                    label: "Amélioration Pro",
+                    sub: "Couleurs froides & naturelles + sol uniforme · 100 % local",
                   },
                 ].map(({ active, toggle, icon, label, sub }) => (
                   <div key={label}
