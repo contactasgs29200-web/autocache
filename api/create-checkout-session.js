@@ -19,6 +19,20 @@ export default async function handler(req, res) {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   const origin = req.headers.origin || "https://autocache.fr";
 
+  // Crée le coupon "premier mois -5€" s'il n'existe pas encore
+  const COUPON_ID = "PREMIER_MOIS_5EUR";
+  try {
+    await stripe.coupons.retrieve(COUPON_ID);
+  } catch {
+    await stripe.coupons.create({
+      id: COUPON_ID,
+      amount_off: 500,
+      currency: "eur",
+      duration: "once",
+      name: "Premier mois -5€",
+    });
+  }
+
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
@@ -26,6 +40,7 @@ export default async function handler(req, res) {
       customer_email: userEmail,
       client_reference_id: userId,
       line_items: [{ price: priceId, quantity: 1 }],
+      discounts: [{ coupon: COUPON_ID }],
       metadata: { userId, plan },
       success_url: `${origin}?payment=success&plan=${plan}`,
       cancel_url: `${origin}?payment=cancelled`,
