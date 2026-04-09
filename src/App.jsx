@@ -1164,7 +1164,8 @@ export default function AutoCache() {
         await supabase.auth.updateUser({ data: { plan: data.plan } });
         setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, plan: data.plan } } : prev);
         setPromoStatus("success");
-        setPromoMsg(`Plan ${data.plan === "pro" ? "Pro" : "Essentiel"} activé — bienvenue !`);
+        const planLabel = data.plan === "pro" ? "Pro" : data.plan === "essential" ? "Essentiel" : "Essai gratuit";
+        setPromoMsg(`Plan ${planLabel} activé.`);
         return;
       }
       const currentUsed = user?.user_metadata?.photos_used ?? 0;

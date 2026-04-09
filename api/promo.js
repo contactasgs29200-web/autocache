@@ -3,6 +3,7 @@ const PROMO_CODES = {
   "AURELE5":   { photos: 5,  reset: false },
   "AURELEPRO":       { plan: "pro" },
   "AURELEESSENTIEL": { plan: "essential" },
+  "AURELEESSAI":     { plan: "trial" },
 };
 
 export default function handler(req, res) {
