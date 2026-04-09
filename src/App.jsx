@@ -908,6 +908,7 @@ export default function AutoCache() {
   const [showUpgradeProModal, setShowUpgradeProModal] = useState(false);
   const [showPlansModal, setShowPlansModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
   const [hoveredPlan, setHoveredPlan] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(null); // "essential" | "pro" | null
   const [promoCode, setPromoCode] = useState("");
@@ -1647,7 +1648,7 @@ export default function AutoCache() {
                     { icon: "👤", label: "Mes informations", action: () => { setSettingsOpen(false); setShowProfileModal(true); } },
                     { icon: "💳", label: "Abonnement", action: () => { setSettingsOpen(false); setShowPlansModal(true); } },
                     { icon: "🎟", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
-                    { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); window.open("mailto:contact@autocache.fr", "_blank"); } },
+                    { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); setShowContactModal(true); } },
                   ].map((item, i) => (
                     <button key={i} onClick={item.action}
                       style={{
@@ -2588,6 +2589,35 @@ export default function AutoCache() {
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Nous Contacter ── */}
+      {showContactModal && (
+        <div onClick={() => setShowContactModal(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "100%", maxWidth: 420, fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontSize: 11, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Nous contacter</div>
+              <button onClick={() => setShowContactModal(false)} style={{ background: "none", border: "none", color: "#555", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
+              {[
+                { icon: "✉", label: "E-mail", value: "contact.asgs29200@gmail.com", href: "mailto:contact.asgs29200@gmail.com" },
+                { icon: "📞", label: "Téléphone", value: "07 83 57 88 70", href: "tel:+33783578870" },
+              ].map(({ icon, label, value, href }) => (
+                <a key={label} href={href}
+                  style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: "#0a0a0a", border: "1px solid #1c1c1c", borderRadius: 4, textDecoration: "none", cursor: "pointer" }}>
+                  <span style={{ fontSize: 20 }}>{icon}</span>
+                  <div>
+                    <div style={{ fontSize: 10, color: "#555", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 3 }}>{label}</div>
+                    <div style={{ fontSize: 15, color: "#ddd5c8", fontWeight: 700, letterSpacing: 0.5 }}>{value}</div>
+                  </div>
+                </a>
+              ))}
+            </div>
           </div>
         </div>
       )}
