@@ -1835,7 +1835,7 @@ export default function AutoCache() {
                     toggle: () => setEnhancePro(p => !p),
                     icon: "✨",
                     label: "Amélioration Pro",
-                    sub: "Couleurs froides & naturelles + sol uniforme · 100 % local",
+                    sub: "Couleurs froides & naturelles",
                   },
                   {
                     active: headlightPolish,
@@ -1843,13 +1843,6 @@ export default function AutoCache() {
                     icon: "💡",
                     label: "Lustrage des optiques",
                     sub: "Réduit le jaunissement des phares et feux · IA GPT-4o",
-                  },
-                  {
-                    active: enhancePro,
-                    toggle: () => setEnhancePro(p => !p),
-                    icon: "🪄",
-                    label: "Amélioration Pro",
-                    sub: "Couleurs froides & naturelles + sol uniforme · 100 % local",
                   },
                 ].map(({ active, toggle, icon, label, sub }) => (
                   <div key={label}
