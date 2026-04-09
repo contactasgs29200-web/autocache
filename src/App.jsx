@@ -782,6 +782,7 @@ function AuthScreen({ onAuth }) {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
+  const [cgvAccepted, setCgvAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -800,6 +801,7 @@ function AuthScreen({ onAuth }) {
       } else {
         if (!fullName.trim()) throw new Error("Veuillez entrer votre nom ou nom d'entreprise.");
         if (!phone.trim()) throw new Error("Veuillez entrer votre numéro de téléphone.");
+        if (!cgvAccepted) throw new Error("Veuillez accepter les CGV et la politique de confidentialité.");
         const { data: signUpData, error } = await supabase.auth.signUp({
           email, password,
           options: { data: { full_name: fullName.trim(), phone: phone.trim() } }
@@ -858,6 +860,22 @@ function AuthScreen({ onAuth }) {
               style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, outline: "none", boxSizing: "border-box" }} />
           </div>
         ))}
+        {mode === "signup" && (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 18, marginTop: 4 }}>
+            <div
+              onClick={() => setCgvAccepted(p => !p)}
+              style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${cgvAccepted ? "#f26522" : "#444"}`, background: cgvAccepted ? "#f26522" : "transparent", flexShrink: 0, marginTop: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {cgvAccepted && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+            </div>
+            <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
+              J'ai lu et j'accepte les{" "}
+              <a href="/cgv.html" target="_blank" style={{ color: "#f26522", textDecoration: "none" }}>CGV</a>
+              {" "}et la{" "}
+              <a href="/politique-confidentialite.html" target="_blank" style={{ color: "#f26522", textDecoration: "none" }}>politique de confidentialité</a>
+              {" "}d'AutoCache Pro.
+            </div>
+          </div>
+        )}
         {mode === "login" && (
           <div style={{ textAlign: "right", marginBottom: 14, marginTop: -8 }}>
             <span onClick={() => { setMode("reset"); setError(""); setSuccess(""); }}
@@ -890,6 +908,10 @@ function AuthScreen({ onAuth }) {
             </span>
           </div>
         )}
+        <div style={{ marginTop: 28, paddingTop: 18, borderTop: "1px solid #1a1a1a", textAlign: "center", fontSize: 9, color: "#3a3a3a", fontFamily: "'JetBrains Mono',monospace", lineHeight: 2, letterSpacing: 1 }}>
+          <a href="/cgv.html" target="_blank" style={{ color: "#3a3a3a", textDecoration: "none", marginRight: 16 }}>CGV & Mentions légales</a>
+          <a href="/politique-confidentialite.html" target="_blank" style={{ color: "#3a3a3a", textDecoration: "none" }}>Politique de confidentialité</a>
+        </div>
       </div>
     </div>
   );
