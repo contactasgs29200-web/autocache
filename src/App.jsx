@@ -907,6 +907,7 @@ export default function AutoCache() {
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [showUpgradeProModal, setShowUpgradeProModal] = useState(false);
   const [showPlansModal, setShowPlansModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
   const [hoveredPlan, setHoveredPlan] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(null); // "essential" | "pro" | null
   const [promoCode, setPromoCode] = useState("");
@@ -1643,7 +1644,7 @@ export default function AutoCache() {
                   </div>
                   {/* Menu items */}
                   {[
-                    { icon: "👤", label: "Informations du compte", action: () => { setSettingsOpen(false); alert("Fonctionnalité à venir — gestion du profil"); } },
+                    { icon: "👤", label: "Mes informations", action: () => { setSettingsOpen(false); setShowProfileModal(true); } },
                     { icon: "💳", label: "Abonnement", action: () => { setSettingsOpen(false); setShowPlansModal(true); } },
                     { icon: "🎟", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
                     { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); window.open("mailto:contact@autocache.fr", "_blank"); } },
@@ -2590,6 +2591,54 @@ export default function AutoCache() {
           </div>
         </div>
       )}
+
+      {/* ── Modal Mes Informations ── */}
+      {showProfileModal && (() => {
+        const meta = user?.user_metadata ?? {};
+        const planLabel = { trial: "Essai gratuit", essential: "Essentiel", pro: "Pro" }[meta.plan ?? "trial"] ?? "Essai gratuit";
+        const photosUsed = meta.photos_used ?? 0;
+        const joined = user?.created_at ? new Date(user.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" }) : "—";
+        const rows = [
+          { label: "Nom / Entreprise",      value: meta.full_name ?? "—" },
+          { label: "Adresse e-mail",         value: user?.email ?? "—" },
+          { label: "Téléphone",              value: meta.phone ?? "—" },
+          { label: "Adresse de facturation", value: meta.billing_address ?? "—" },
+          { label: "Plan actuel",            value: planLabel },
+          { label: "Photos utilisées",       value: `${photosUsed} / ${PLAN_LIMIT}` },
+          { label: "Membre depuis",          value: joined },
+        ];
+        return (
+          <div onClick={() => setShowProfileModal(false)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "100%", maxWidth: 480, fontFamily: "'Rajdhani',sans-serif" }}>
+              {/* Header */}
+              <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontSize: 11, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>Mes informations</div>
+                  <div style={{ fontSize: 13, color: "#555" }}>Données personnelles associées à votre compte</div>
+                </div>
+                <button onClick={() => setShowProfileModal(false)} style={{ background: "none", border: "none", color: "#555", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
+              </div>
+              {/* Rows */}
+              <div style={{ padding: "8px 0 16px" }}>
+                {rows.map(({ label, value }) => (
+                  <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 24px", borderBottom: "1px solid #161616" }}>
+                    <span style={{ fontSize: 12, color: "#666", letterSpacing: 1, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>{label}</span>
+                    <span style={{ fontSize: 14, color: value === "—" ? "#333" : "#ddd5c8", fontWeight: 600, maxWidth: 260, textAlign: "right", wordBreak: "break-all" }}>{value}</span>
+                  </div>
+                ))}
+              </div>
+              {/* Footer note */}
+              <div style={{ padding: "12px 24px", borderTop: "1px solid #1c1c1c" }}>
+                <div style={{ fontSize: 11, color: "#444", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
+                  Pour modifier vos informations, contactez-nous à <span style={{ color: "#f26522" }}>contact@autocache.fr</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Modal Code Promo ── */}
       {showPromoModal && (
