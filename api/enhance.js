@@ -44,7 +44,7 @@ export default async function handler(req, res) {
     "Result must look like a high-end car listing photo.";
 
   const body = Buffer.concat([
-    part("image", "image.png", "image/png", imageBuffer),
+    part("image", "image.jpg", "image/jpeg", imageBuffer),
     part("mask",  "mask.png",  "image/png", maskBuffer),
     field("model",  "gpt-image-1"),
     field("prompt", prompt),
