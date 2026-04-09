@@ -62,7 +62,30 @@ export default async function handler(req, res) {
     }
 
     if (event.type === "invoice.payment_failed") {
-      console.warn("Paiement échoué pour subscription:", event.data.object.subscription);
+      // Échec de paiement → accès coupé immédiatement (retour en trial)
+      const invoice = event.data.object;
+      if (invoice.subscription) {
+        const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+        const userId = subscription.metadata?.userId;
+        if (userId) {
+          await setUserPlan(userId, "trial");
+          console.warn(`Paiement échoué — user ${userId} repassé en trial (tentative ${invoice.attempt_count})`);
+        }
+      }
+    }
+
+    if (event.type === "invoice.paid") {
+      // Paiement réussi (renouvellement ou rattrapage d'impayé) → réactive le plan
+      const invoice = event.data.object;
+      if (invoice.subscription && invoice.billing_reason === "subscription_cycle") {
+        const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+        const userId = subscription.metadata?.userId;
+        const plan   = subscription.metadata?.plan;
+        if (userId && plan) {
+          await setUserPlan(userId, plan);
+          console.log(`Renouvellement réussi — user ${userId} plan "${plan}" réactivé`);
+        }
+      }
     }
 
   } catch (e) {
