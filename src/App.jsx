@@ -1145,7 +1145,8 @@ export default function AutoCache() {
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "essential" | "pro"
   const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
   const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
-  const canUseShowroom = userPlan === "pro" || userPlan === "trial";
+  const canUseShowroom  = userPlan === "pro" || userPlan === "trial";
+  const canUseHeadlight = userPlan === "pro";
   const canStart = logo && photos.length > 0 && !processing;
 
   const logout = async () => {
@@ -1850,21 +1851,24 @@ export default function AutoCache() {
                   },
                   {
                     active: headlightPolish,
-                    toggle: () => setHeadlightPolish(p => !p),
+                    toggle: () => { if (!canUseHeadlight) { setShowPlansModal(true); return; } setHeadlightPolish(p => !p); },
                     icon: "💡",
                     label: "Lustrage des optiques",
-                    sub: "Réduit le jaunissement des phares et feux · IA GPT-4o",
+                    sub: canUseHeadlight ? "Réduit le jaunissement des phares et feux · IA GPT-4o" : "Disponible avec l'abonnement Pro",
+                    locked: !canUseHeadlight,
                   },
-                ].map(({ active, toggle, icon, label, sub }) => (
+                ].map(({ active, toggle, icon, label, sub, locked }) => (
                   <div key={label}
                     onClick={toggle}
-                    style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${active ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none" }}
+                    style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active && !locked ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${active && !locked ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none", opacity: locked ? 0.55 : 1 }}
                   >
-                    <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${active ? "#f26522" : "#444"}`, background: active ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      {active && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                    <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${locked ? "#555" : active ? "#f26522" : "#444"}`, background: active && !locked ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {locked ? <span style={{ color: "#555", fontSize: 10 }}>🔒</span> : active && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                     </div>
                     <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: active ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>{icon} {label}</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: locked ? "#555" : active ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>
+                        {icon} {label}{locked && <span style={{ fontSize: 8, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>PRO</span>}
+                      </div>
                       <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
                     </div>
                   </div>
@@ -2740,7 +2744,7 @@ export default function AutoCache() {
                         { ok: true,  label: "Logo importé ou généré" },
                         { ok: true,  label: "Ajustements couleurs" },
                         { ok: true,  label: "Amélioration Pro" },
-                        { ok: true,  label: "Lustrage des optiques" },
+                        { ok: false, label: "Lustrage des optiques" },
                         { ok: false, label: "Showroom Virtuel (fonds IA)" },
                         { ok: false, label: "Enseigne murale" },
                       ],
@@ -2976,7 +2980,7 @@ export default function AutoCache() {
                     { ok: true,  label: "Cache plaque personnalisé" },
                     { ok: true,  label: "Logo importé ou généré" },
                     { ok: true,  label: "Ajustements couleurs" },
-                    { ok: true,  label: "Lustrage des optiques" },
+                    { ok: false, label: "Lustrage des optiques" },
                     { ok: false, label: "Showroom Virtuel (fonds IA)" },
                     { ok: false, label: "Enseigne murale" },
                   ],
