@@ -1,6 +1,7 @@
 const PROMO_CODES = {
-  "AURELE30": { photos: 30, reset: true },
-  "AURELE5":  { photos: 5,  reset: false },
+  "AURELE30":  { photos: 30, reset: true },
+  "AURELE5":   { photos: 5,  reset: false },
+  "AURELEPRO": { plan: "pro" },
 };
 
 export default function handler(req, res) {
@@ -16,5 +17,6 @@ export default function handler(req, res) {
   const promo = PROMO_CODES[code.trim().toUpperCase()];
   if (!promo) return res.status(200).json({ valid: false, message: "Code promo invalide." });
 
-  return res.status(200).json({ valid: true, photos: promo.photos, label: promo.label });
+  if (promo.plan) return res.status(200).json({ valid: true, plan: promo.plan });
+  return res.status(200).json({ valid: true, photos: promo.photos, reset: promo.reset });
 }

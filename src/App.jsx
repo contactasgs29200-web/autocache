@@ -1160,6 +1160,13 @@ export default function AutoCache() {
       const res = await fetch("/api/promo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: promoCode.trim() }) });
       const data = await res.json();
       if (!data.valid) { setPromoStatus("error"); setPromoMsg(data.message); return; }
+      if (data.plan) {
+        await supabase.auth.updateUser({ data: { plan: data.plan } });
+        setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, plan: data.plan } } : prev);
+        setPromoStatus("success");
+        setPromoMsg("Plan Pro activé — bienvenue !");
+        return;
+      }
       const currentUsed = user?.user_metadata?.photos_used ?? 0;
       const newUsed = data.reset ? 0 : Math.max(0, currentUsed - data.photos);
       await supabase.auth.updateUser({ data: { photos_used: newUsed } });
