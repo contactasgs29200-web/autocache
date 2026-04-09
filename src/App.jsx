@@ -283,39 +283,39 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
 }
 
 
-// ── Amélioration IA — appel gpt-image-1 image edit ───────────────────────────
-// Masque : opaque sur la voiture (preservée), transparent sur le sol (édité).
-// Seule la zone inférieure (traces au sol) est retouchée par l'IA.
-async function callEnhanceAI(dataUrl, W, H) {
-  // Masque : opaque en haut (voiture préservée), transparent en bas (sol nettoyé)
-  const maskCanvas = document.createElement("canvas");
-  maskCanvas.width = W; maskCanvas.height = H;
-  const mctx = maskCanvas.getContext("2d");
-  // Zone voiture + fond = opaque blanche (l'IA ne touche pas)
-  const floorStart = H * 0.60;
-  mctx.fillStyle = "rgba(255,255,255,1)";
-  mctx.fillRect(0, 0, W, floorStart);
-  // Transition douce
-  const grad = mctx.createLinearGradient(0, floorStart - H * 0.08, 0, floorStart);
-  grad.addColorStop(0, "rgba(255,255,255,1)");
-  grad.addColorStop(1, "rgba(255,255,255,0)");
-  mctx.fillStyle = grad;
-  mctx.fillRect(0, floorStart - H * 0.08, W, H * 0.08);
-  // Zone sol = transparent (l'IA nettoie ici)
-  // Le bas du canvas reste transparent par défaut
-
-  const maskBase64  = maskCanvas.toDataURL("image/png").split(",")[1];
-  const imageBase64 = dataUrl.split(",")[1];
-
-  const res = await fetch("/api/enhance", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageBase64, maskBase64 }),
-  });
-  if (!res.ok) { console.error("Enhance API error", res.status); return null; }
-  const json = await res.json();
-  if (!json.imageBase64) return null;
-  return `data:image/png;base64,${json.imageBase64}`;
+// ── Légèreté du sol — adoucit les traces sans IA (canvas uniquement) ─────────
+// Applique un léger éclaircissement + désaturation sur la zone basse de l'image
+// pour atténuer les traces de pneus sans toucher la voiture ni déformer quoi que ce soit.
+function softFloor(ctx, W, H) {
+  const floorTop = Math.round(H * 0.68);
+  const transTop = Math.round(H * 0.58);
+  const id = ctx.getImageData(0, transTop, W, H - transTop);
+  const d  = id.data;
+  const zoneH = H - transTop;
+  for (let row = 0; row < zoneH; row++) {
+    // 0 au niveau de la transition, 1 en bas de l'image
+    const t = row < (floorTop - transTop)
+      ? row / (floorTop - transTop)
+      : 1;
+    const strength = t * 0.55; // max 55 % d'effet en bas
+    for (let col = 0; col < W; col++) {
+      const i = (row * W + col) * 4;
+      let r = d[i], g = d[i+1], b = d[i+2];
+      // Désaturation partielle
+      const lum = r * 0.299 + g * 0.587 + b * 0.114;
+      r = r + (lum - r) * strength * 0.5;
+      g = g + (lum - g) * strength * 0.5;
+      b = b + (lum - b) * strength * 0.5;
+      // Légère clarification
+      r = r + (255 - r) * strength * 0.18;
+      g = g + (255 - g) * strength * 0.18;
+      b = b + (255 - b) * strength * 0.18;
+      d[i]   = Math.min(255, r);
+      d[i+1] = Math.min(255, g);
+      d[i+2] = Math.min(255, b);
+    }
+  }
+  ctx.putImageData(id, 0, transTop);
 }
 
 // ── Amélioration photo style "pro" ────────────────────────────────────────────
@@ -684,7 +684,7 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, enhanceAI = false) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
   // Détection plaque + (angle GPT-4o seulement si showroom activé) + optiques en parallèle
   const [plate, angleData, lights] = await Promise.all([
@@ -706,15 +706,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (enhance) autoEnhance(ctx, c.width, c.height);
   // Lustrage des optiques : correction chromatique localisée sur les phares/feux
   if (lights.length > 0) polishHeadlights(ctx, lights, c.width, c.height);
-  // Amélioration IA complète : gpt-image-1 (sol propre + carrosserie + couleurs)
-  if (enhanceAI) {
-    const aiResult = await callEnhanceAI(c.toDataURL("image/jpeg", 0.95), c.width, c.height);
-    if (aiResult) {
-      const aiImg = await loadImg(aiResult);
-      ctx.clearRect(0, 0, c.width, c.height);
-      ctx.drawImage(aiImg, 0, 0, c.width, c.height);
-    }
-  }
+  // Adoucissement sol : atténue les traces de pneus (canvas, sans déformation)
+  if (floorClean) softFloor(ctx, c.width, c.height);
   // Save photo without plate for later re-rendering in "Ajuster" mode
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
   const baseDataURL = c.toDataURL("image/jpeg", 0.97);
@@ -906,7 +899,7 @@ export default function AutoCache() {
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [enhance, setEnhance] = useState(false);         // amélioration auto des couleurs
   const [headlightPolish, setHeadlightPolish] = useState(false); // lustrage des optiques
-  const [enhanceAI, setEnhanceAI] = useState(false);             // amélioration IA (gpt-image-1)
+  const [floorClean, setFloorClean] = useState(false);            // adoucissement sol (canvas)
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
@@ -1088,7 +1081,7 @@ export default function AutoCache() {
       : null;
 
     for (let i = 0; i < photosToProcess.length; i++) {
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, enhanceAI);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, floorClean);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
@@ -1833,11 +1826,11 @@ export default function AutoCache() {
                     sub: "Réduit le jaunissement des phares et feux · IA GPT-4o",
                   },
                   {
-                    active: enhanceAI,
-                    toggle: () => setEnhanceAI(p => !p),
-                    icon: "🪄",
-                    label: "Amélioration IA",
-                    sub: "Sol propre · Carrosserie sans rayures · Couleurs pro · GPT-Image",
+                    active: floorClean,
+                    toggle: () => setFloorClean(p => !p),
+                    icon: "🧹",
+                    label: "Sol uniforme",
+                    sub: "Atténue les traces de pneus et marques au sol",
                   },
                 ].map(({ active, toggle, icon, label, sub }) => (
                   <div key={label}
