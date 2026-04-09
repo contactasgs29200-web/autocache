@@ -36,12 +36,9 @@ export default async function handler(req, res) {
   }
 
   const prompt =
-    "Professional automotive dealership photograph. " +
-    "Preserve exactly: the car make, model, body color, trim, wheels and overall composition. " +
-    "Improve: remove all scratches, scuffs and paint imperfections from the bodywork. " +
-    "Make the showroom floor completely spotless — no tire marks, dirt or stains. " +
-    "Correct the lighting to be cool, neutral and professional (around 6000K). " +
-    "Result must look like a high-end car listing photo.";
+    "Car dealership showroom floor. " +
+    "Clean, spotless floor with no tire marks, no dirt, no stains, no scuff marks. " +
+    "Same floor material and color as the original. Seamless, professional result.";
 
   const body = Buffer.concat([
     part("image", "image.jpg", "image/jpeg", imageBuffer),

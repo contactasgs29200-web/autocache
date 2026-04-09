@@ -284,14 +284,27 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
 
 
 // ── Amélioration IA — appel gpt-image-1 image edit ───────────────────────────
-// Génère un masque entièrement transparent (tout peut être retouché) et envoie
-// l'image + masque à /api/enhance. Le résultat remplace l'image dans le canvas.
+// Masque : opaque sur la voiture (preservée), transparent sur le sol (édité).
+// Seule la zone inférieure (traces au sol) est retouchée par l'IA.
 async function callEnhanceAI(dataUrl, W, H) {
-  // Masque transparent : alpha=0 partout = tout est éditable par l'IA
+  // Masque : opaque en haut (voiture préservée), transparent en bas (sol nettoyé)
   const maskCanvas = document.createElement("canvas");
   maskCanvas.width = W; maskCanvas.height = H;
-  // Canvas vierge = transparent par défaut, pas besoin de drawImage
-  const maskBase64 = maskCanvas.toDataURL("image/png").split(",")[1];
+  const mctx = maskCanvas.getContext("2d");
+  // Zone voiture + fond = opaque blanche (l'IA ne touche pas)
+  const floorStart = H * 0.60;
+  mctx.fillStyle = "rgba(255,255,255,1)";
+  mctx.fillRect(0, 0, W, floorStart);
+  // Transition douce
+  const grad = mctx.createLinearGradient(0, floorStart - H * 0.08, 0, floorStart);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  mctx.fillStyle = grad;
+  mctx.fillRect(0, floorStart - H * 0.08, W, H * 0.08);
+  // Zone sol = transparent (l'IA nettoie ici)
+  // Le bas du canvas reste transparent par défaut
+
+  const maskBase64  = maskCanvas.toDataURL("image/png").split(",")[1];
   const imageBase64 = dataUrl.split(",")[1];
 
   const res = await fetch("/api/enhance", {
