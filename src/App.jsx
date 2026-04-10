@@ -383,7 +383,70 @@ async function detectHeadlights(b64) {
   }
 }
 
-// ── Lustrage des optiques : dépigmentation du voile jaune/ambré ──────────────
+// ── Lustrage IA des optiques : envoie les zones détectées à gpt-image-1 ──────
+// Redimensionne à 1536×1024 pour l'API, masque tout sauf les optiques,
+// recolle uniquement les zones régénérées sur le canvas d'origine.
+async function aiPolishHeadlights(ctx, lights, W, H) {
+  if (!lights.length) return;
+
+  const API_W = 1536, API_H = 1024;
+
+  // ── Image : état courant du canvas redimensionné en PNG ──────────────────
+  const sendCanvas = document.createElement("canvas");
+  sendCanvas.width = API_W; sendCanvas.height = API_H;
+  const sctx = sendCanvas.getContext("2d");
+  sctx.drawImage(ctx.canvas, 0, 0, API_W, API_H);
+  const imageB64 = sendCanvas.toDataURL("image/png").split(",")[1];
+
+  // ── Masque : opaque partout, transparent sur les optiques ────────────────
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = API_W; maskCanvas.height = API_H;
+  const mctx = maskCanvas.getContext("2d");
+  mctx.fillStyle = "black";
+  mctx.fillRect(0, 0, API_W, API_H);
+  mctx.globalCompositeOperation = "destination-out";
+  const pad = 0.025;
+  for (const light of lights) {
+    const lx = Math.max(0, light.x - pad) * API_W;
+    const ly = Math.max(0, light.y - pad) * API_H;
+    const lw = Math.min(API_W - lx, (light.w + pad * 2) * API_W);
+    const lh = Math.min(API_H - ly, (light.h + pad * 2) * API_H);
+    mctx.fillRect(lx, ly, lw, lh);
+  }
+  const maskB64 = maskCanvas.toDataURL("image/png").split(",")[1];
+
+  // ── Appel API ─────────────────────────────────────────────────────────────
+  const resp = await fetch("/api/polish-headlights-ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
+  });
+  if (!resp.ok) { console.error("AI headlight polish failed:", resp.status); return; }
+  const data = await resp.json();
+  if (!data.imageBase64) { console.error("No result from AI headlight API"); return; }
+
+  // ── Résultat : coller seulement les zones optiques sur le canvas original ─
+  const resultImg = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = "data:image/png;base64," + data.imageBase64;
+  });
+  const rW = resultImg.width, rH = resultImg.height;
+
+  for (const light of lights) {
+    const p = 0.015;
+    const sx = Math.max(0, light.x - p) * rW;
+    const sy = Math.max(0, light.y - p) * rH;
+    const sw = Math.min(rW - sx, (light.w + p * 2) * rW);
+    const sh = Math.min(rH - sy, (light.h + p * 2) * rH);
+    const dx = Math.max(0, light.x - p) * W;
+    const dy = Math.max(0, light.y - p) * H;
+    const dw = Math.min(W - dx, (light.w + p * 2) * W);
+    const dh = Math.min(H - dy, (light.h + p * 2) * H);
+    ctx.drawImage(resultImg, sx, sy, sw, sh, dx, dy, dw, dh);
+  }
+}
 // Analyse d'abord la chaleur moyenne de chaque zone détectée, puis applique
 // une correction WB agressive + boost de clarté + contraste local.
 // Fonctionne sur phares, feux arrière, antibrouillards — tout ce que GPT-4o détecte.
@@ -706,8 +769,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = "none";
   // Amélioration couleurs (canvas)
   if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
-  // Lustrage des optiques
-  if (lights.length > 0) polishHeadlights(ctx, lights, c.width, c.height);
+  // Lustrage des optiques IA (gpt-image-1 — régénère les zones détectées)
+  if (lights.length > 0) await aiPolishHeadlights(ctx, lights, c.width, c.height);
   // Sol : flou adaptatif pro (après couleurs) ou adoucissement simple
   if (enhancePro) applyFloorBlur(ctx, c, c.width, c.height);
   else if (floorClean) {
