@@ -934,6 +934,7 @@ export default function AutoCache() {
   const [hoveredPlan, setHoveredPlan] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(null); // "essential" | "pro" | null
   const [portalLoading, setPortalLoading] = useState(null); // null | "invoices" | "cancel" | "upgrade"
+  const [portalError, setPortalError] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
@@ -2889,10 +2890,10 @@ export default function AutoCache() {
                 )}
 
                 {/* Bouton Factures */}
-                <button
-                  disabled={!!portalLoading}
-                  onClick={async () => {
-                    setPortalLoading("invoices");
+                {(() => {
+                  const openPortal = async (action) => {
+                    setPortalError("");
+                    setPortalLoading(action);
                     try {
                       const res = await fetch("/api/customer-portal", {
                         method: "POST",
@@ -2900,48 +2901,48 @@ export default function AutoCache() {
                         body: JSON.stringify({ userId: user.id }),
                       });
                       const data = await res.json();
-                      if (data.url) window.location.href = data.url;
-                      else alert("Impossible d'accéder au portail. Réessayez.");
+                      if (data.url) {
+                        window.location.href = data.url;
+                      } else {
+                        setPortalError(data.error || "Impossible d'accéder au portail.");
+                      }
                     } catch (e) {
-                      alert("Erreur réseau, réessayez.");
+                      setPortalError("Erreur réseau, réessayez.");
                     } finally {
                       setPortalLoading(null);
                     }
-                  }}
-                  style={{ width: "100%", background: "transparent", color: "#ccc", border: "1px solid #333", padding: "12px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
-                  {portalLoading === "invoices" ? "Ouverture..." : "Factures & Historique"}
-                </button>
+                  };
+                  return (
+                    <>
+                      <button
+                        disabled={!!portalLoading}
+                        onClick={() => openPortal("invoices")}
+                        style={{ width: "100%", background: "transparent", color: "#ccc", border: "1px solid #333", padding: "12px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: !!portalLoading ? "wait" : "pointer", marginBottom: 10 }}>
+                        {portalLoading === "invoices" ? "Ouverture..." : "Factures & Historique"}
+                      </button>
 
-                <button onClick={() => setShowPlansModal(false)}
-                  style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #1e1e1e", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 24 }}>
-                  Fermer
-                </button>
+                      {portalError && (
+                        <div style={{ fontSize: 10, color: "#c0392b", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10, padding: "8px 12px", background: "rgba(192,57,43,0.08)", border: "1px solid rgba(192,57,43,0.2)", borderRadius: 3 }}>
+                          ⚠ {portalError}
+                        </div>
+                      )}
 
-                {/* Bouton Résilier */}
-                <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 18, textAlign: "center" }}>
-                  <button
-                    disabled={!!portalLoading}
-                    onClick={async () => {
-                      setPortalLoading("cancel");
-                      try {
-                        const res = await fetch("/api/customer-portal", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ userId: user.id }),
-                        });
-                        const data = await res.json();
-                        if (data.url) window.location.href = data.url;
-                        else alert("Impossible d'accéder au portail. Réessayez.");
-                      } catch (e) {
-                        alert("Erreur réseau, réessayez.");
-                      } finally {
-                        setPortalLoading(null);
-                      }
-                    }}
-                    style={{ background: "transparent", color: "#444", border: "none", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", textDecoration: "underline" }}>
-                    {portalLoading === "cancel" ? "Ouverture..." : "Résilier l'abonnement"}
-                  </button>
-                </div>
+                      <button onClick={() => { setShowPlansModal(false); setPortalError(""); }}
+                        style={{ width: "100%", background: "transparent", color: "#555", border: "1px solid #1e1e1e", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 24 }}>
+                        Fermer
+                      </button>
+
+                      <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 18, textAlign: "center" }}>
+                        <button
+                          disabled={!!portalLoading}
+                          onClick={() => openPortal("cancel")}
+                          style={{ background: "transparent", color: "#444", border: "none", fontFamily: "'JetBrains Mono',monospace", fontSize: 9, letterSpacing: 1, textTransform: "uppercase", cursor: !!portalLoading ? "wait" : "pointer", textDecoration: "underline" }}>
+                          {portalLoading === "cancel" ? "Ouverture..." : "Résilier l'abonnement"}
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
               </>
             )}
           </div>
