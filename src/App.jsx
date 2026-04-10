@@ -383,77 +383,73 @@ async function detectHeadlights(b64) {
   }
 }
 
-// ── Lustrage des optiques avant : correction chromatique localisée ────────────
-// Réduit le voile jaune/blanc sur les phares avant en neutralisant la dominante
-// chaude et en augmentant la clarté + le contraste local.
-// Travaille uniquement sur les pixels à dominante chaude (jaune/ambré) ;
-// les pixels déjà neutres ou froids ne sont pas touchés.
+// ── Lustrage des optiques : dépigmentation du voile jaune/ambré ──────────────
+// Analyse d'abord la chaleur moyenne de chaque zone détectée, puis applique
+// une correction WB agressive + boost de clarté + contraste local.
+// Fonctionne sur phares, feux arrière, antibrouillards — tout ce que GPT-4o détecte.
 function polishHeadlights(ctx, lights, W, H) {
   for (const light of lights) {
-    const pad = 0.015;
+    const pad = 0.018;
     const px = Math.max(0, Math.round((light.x - pad) * W));
     const py = Math.max(0, Math.round((light.y - pad) * H));
     const pw = Math.min(W - px, Math.round((light.w + pad * 2) * W));
     const ph = Math.min(H - py, Math.round((light.h + pad * 2) * H));
     if (pw < 4 || ph < 4) continue;
 
-    const id = ctx.getImageData(px, py, pw, ph);
-    const d  = id.data;
+    const id  = ctx.getImageData(px, py, pw, ph);
+    const d   = id.data;
 
-    // Passe 1 : luminance moyenne de la zone (pour contraste local)
-    let sumLum = 0, count = 0;
+    // ── Passe 1 : statistiques de zone ──────────────────────────────────────
+    let sumLum = 0, sumWarmth = 0, count = 0;
     for (let k = 0; k < d.length; k += 4) {
-      sumLum += d[k] * 0.299 + d[k+1] * 0.587 + d[k+2] * 0.114;
-      count++;
+      const lk = d[k] * 0.299 + d[k+1] * 0.587 + d[k+2] * 0.114;
+      // Warmth = excès de rouge + vert (pondéré) sur le bleu
+      const wk = Math.max(0, d[k] * 0.65 + d[k+1] * 0.35 - d[k+2]) / 255;
+      sumLum += lk; sumWarmth += wk; count++;
     }
-    const avgLum = sumLum / count;
+    const avgLum    = sumLum    / count;
+    const avgWarmth = sumWarmth / count;
 
-    // Passe 2 : correction pixel par pixel
+    // Facteur zonal : plus la zone est jaune, plus on corrige fort (0.25–1.0)
+    const zoneFactor = Math.min(1.0, Math.max(0.25, avgWarmth * 4.5 + 0.15));
+
+    // ── Passe 2 : correction pixel par pixel ────────────────────────────────
     for (let j = 0; j < ph; j++) {
       for (let i = 0; i < pw; i++) {
         const idx = (j * pw + i) * 4;
-        const r = d[idx], g = d[idx + 1], b = d[idx + 2];
+        const r = d[idx], g = d[idx+1], b = d[idx+2];
         const lum = r * 0.299 + g * 0.587 + b * 0.114;
 
-        // Jaunissement = excès de (R+G)/2 par rapport à B, normalisé
-        const warmth = ((r + g) / 2 - b) / 255;
-        if (warmth < 0.04) continue; // pixel neutre ou froid → ne pas toucher
+        // Warmth pixel
+        const warmth = Math.max(0, r * 0.65 + g * 0.35 - b) / 255;
 
-        // Fonte aux bords (elliptique pour un rendu plus naturel)
-        const nx = (i / pw - 0.5) * 2;  // -1..1
+        // Vignette elliptique (fondu naturel sur les bords de la boîte)
+        const nx = (i / pw - 0.5) * 2;
         const ny = (j / ph - 0.5) * 2;
         const dist = Math.sqrt(nx * nx + ny * ny);
-        const edge = Math.max(0, Math.min(1, (1.2 - dist) / 0.5));
-        if (edge <= 0) continue;
+        const vignette = Math.max(0, Math.min(1, (1.3 - dist) / 0.5));
+        if (vignette <= 0) continue;
 
-        // Force de correction proportionnelle à la chaleur du pixel
-        const strength = edge * Math.min(1, warmth * 5) * 0.7;
+        // Force totale : zone × pixel × vignette
+        const blend = vignette * zoneFactor * Math.min(1, 0.35 + warmth * 4.0);
+        if (blend < 0.02) continue;
 
-        // Balance des blancs : ramène R et G vers une teinte neutre
-        // R descend légèrement, G reste ~stable, B monte légèrement
-        const targetR = lum * 0.97;
-        const targetG = lum * 1.00;
-        const targetB = lum * 1.05;
+        // Cible neutre légèrement froide + légèrement plus lumineuse (verre propre)
+        const brightLum  = Math.min(255, lum * 1.06 + 6);
+        const targetR    = brightLum * 0.91; // réduction rouge forte
+        const targetG    = brightLum * 0.97; // réduction verte douce
+        const targetB    = brightLum * 1.13; // boost bleu fort → teinte froide/neutre
 
-        let newR = r + (targetR - r) * strength;
-        let newG = g + (targetG - g) * strength * 0.4; // G touché très peu
-        let newB = b + (targetB - b) * strength;
+        // Contraste local (micro-clarté)
+        const contrast = (lum - avgLum) * 0.20 * vignette;
 
-        // Micro-contraste local : éclaircir les zones sombres, assombrir les claires
-        const contrastBoost = (lum - avgLum) * 0.08 * edge;
-        newR += contrastBoost;
-        newG += contrastBoost;
-        newB += contrastBoost;
+        const newR = r + (targetR - r) * blend + contrast;
+        const newG = g + (targetG - g) * blend * 0.55 + contrast;
+        const newB = b + (targetB - b) * blend + contrast;
 
-        // Légère clarté pour simuler la transparence du verre
-        const clarityBoost = strength * 12;
-        newR += clarityBoost;
-        newG += clarityBoost;
-        newB += clarityBoost;
-
-        d[idx]     = Math.max(0, Math.min(255, Math.round(newR)));
-        d[idx + 1] = Math.max(0, Math.min(255, Math.round(newG)));
-        d[idx + 2] = Math.max(0, Math.min(255, Math.round(newB)));
+        d[idx]   = Math.max(0, Math.min(255, Math.round(newR)));
+        d[idx+1] = Math.max(0, Math.min(255, Math.round(newG)));
+        d[idx+2] = Math.max(0, Math.min(255, Math.round(newB)));
       }
     }
     ctx.putImageData(id, px, py);
