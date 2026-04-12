@@ -404,16 +404,32 @@ function polishHeadlights(ctx, W, H) {
     const blend = Math.min(0.70, warmth * 3.0 * Math.min(1.0, sat * 2.0));
     if (blend < 0.03) continue;
 
-    // ── Correction : désaturation partielle vers gris neutre ────────────
-    // On ramène vers la luminosité du pixel (= gris neutre), pas vers bleu
-    // Résultat = plastique clair/transparent, pas bleuté
+    // ── Correction couleur : désaturation vers gris neutre ───────────────
     const targetR = lum * 0.96;
     const targetG = lum * 1.00;
     const targetB = lum * 1.05;
 
-    d[k]   = Math.max(0, Math.min(255, Math.round(r + (targetR - r) * blend)));
-    d[k+1] = Math.max(0, Math.min(255, Math.round(g + (targetG - g) * blend)));
-    d[k+2] = Math.max(0, Math.min(255, Math.round(b + (targetB - b) * blend)));
+    let newR = r + (targetR - r) * blend;
+    let newG = g + (targetG - g) * blend;
+    let newB = b + (targetB - b) * blend;
+
+    // ── Clarté : boost luminosité + contraste local ────────────────────
+    // Plastique neuf = plus clair et plus net que plastique oxydé
+    const clarity = blend * 0.35;
+    // Eclaircir (simuler transparence vs opacité du voile)
+    newR = newR + (255 - newR) * clarity * 0.25;
+    newG = newG + (255 - newG) * clarity * 0.25;
+    newB = newB + (255 - newB) * clarity * 0.25;
+    // Contraste local : amplifier les écarts par rapport à la luminosité moyenne (128)
+    const contrastBoost = clarity * 0.4;
+    const newLum = newR * 0.299 + newG * 0.587 + newB * 0.114;
+    newR = newR + (newR - newLum) * contrastBoost;
+    newG = newG + (newG - newLum) * contrastBoost;
+    newB = newB + (newB - newLum) * contrastBoost;
+
+    d[k]   = Math.max(0, Math.min(255, Math.round(newR)));
+    d[k+1] = Math.max(0, Math.min(255, Math.round(newG)));
+    d[k+2] = Math.max(0, Math.min(255, Math.round(newB)));
   }
   ctx.putImageData(id, 0, 0);
 }
