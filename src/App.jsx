@@ -366,118 +366,59 @@ function autoEnhance(ctx, W, H) {
   ctx.putImageData(id, 0, 0);
 }
 
-// ── Détection des optiques via GPT-4o ────────────────────────────────────────
-async function detectHeadlights(b64) {
-  try {
-    const r = await fetch("/api/headlights", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ b64 }),
-    });
-    const data = await r.json();
-    console.log("Headlights API response:", data);
-    return Array.isArray(data.lights) ? data.lights : [];
-  } catch(e) {
-    console.error("detectHeadlights error:", e);
-    return [];
-  }
-}
+// ── Lustrage des optiques — correction sélective sur toute l'image ────────────
+// Cible uniquement les pixels ayant la signature colorimétrique du plastique
+// jauni (ambre chaud, luminosité moyenne). Aucune détection de position nécessaire.
+function polishHeadlights(ctx, W, H) {
+  const id = ctx.getImageData(0, 0, W, H);
+  const d  = id.data;
 
-// ── Lustrage des optiques — correction couleur pure (canvas) ─────────────────
-// Supprime le jaunissement des phares sans régénération IA.
-// Préserve 100 % la forme d'origine : seule la teinte est corrigée.
-function polishHeadlights(ctx, lights, W, H) {
-  for (const light of lights) {
-    const pad = 0.025;
-    const px = Math.max(0, Math.round((light.x - pad) * W));
-    const py = Math.max(0, Math.round((light.y - pad) * H));
-    const pw = Math.min(W - px, Math.round((light.w + pad * 2) * W));
-    const ph = Math.min(H - py, Math.round((light.h + pad * 2) * H));
-    if (pw < 4 || ph < 4) continue;
+  for (let k = 0; k < d.length; k += 4) {
+    const r = d[k], g = d[k+1], b = d[k+2];
+    const lum = r * 0.299 + g * 0.587 + b * 0.114;
 
-    const id = ctx.getImageData(px, py, pw, ph);
-    const d  = id.data;
+    // ── Détection du jaunissement par pixel ─────────────────────────────
+    // Warmth = excès de (R+G pondéré) sur B — signature du plastique oxydé
+    const warmth = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
+    if (warmth < 0.08) continue; // pixel pas jaune → on skip
 
-    // ── Passe 1 : statistiques de zone ──────────────────────────────────────
-    let sumR = 0, sumG = 0, sumB = 0, sumLum = 0, count = 0;
-    for (let k = 0; k < d.length; k += 4) {
-      sumR += d[k]; sumG += d[k+1]; sumB += d[k+2];
-      sumLum += d[k] * 0.299 + d[k+1] * 0.587 + d[k+2] * 0.114;
-      count++;
+    // Saturation HSL approximée
+    const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
+    const delta = cMax - cMin;
+    const sat = cMax > 0 ? delta / cMax : 0;
+
+    // Hue approximée (0-360) pour cibler jaune/ambre (20°-65°)
+    let hue = 0;
+    if (delta > 5) {
+      if (cMax === r)      hue = 60 * (((g - b) / delta) % 6);
+      else if (cMax === g) hue = 60 * ((b - r) / delta + 2);
+      else                 hue = 60 * ((r - g) / delta + 4);
+      if (hue < 0) hue += 360;
     }
-    const avgR = sumR / count, avgG = sumG / count, avgB = sumB / count;
-    const avgLum = sumLum / count;
 
-    // Mesure du jaunissement : excès R+G par rapport à B
-    const yellowness = Math.max(0, (avgR * 0.55 + avgG * 0.45 - avgB)) / 255;
-    // Force de correction adaptée au niveau de jaunissement (0.4 – 1.0)
-    const strength = Math.min(1.0, Math.max(0.4, yellowness * 5.0 + 0.2));
+    // Le plastique jauni a une teinte ambre/jaune (hue ~20-65°),
+    // une saturation modérée (0.15-0.85), et une luminosité moyenne (30-220)
+    const isYellowHue = hue >= 15 && hue <= 70;
+    const isModerateSat = sat >= 0.12 && sat <= 0.90;
+    const isModerateLum = lum >= 25 && lum <= 225;
 
-    // Gains de correction white-balance : ramener vers gris neutre
-    // On calcule le ratio pour neutraliser la dominante chaude
-    const maxAvg = Math.max(avgR, avgG, avgB, 1);
-    const gainR = maxAvg / Math.max(avgR, 1);
-    const gainG = maxAvg / Math.max(avgG, 1);
-    const gainB = maxAvg / Math.max(avgB, 1);
-    // Normaliser les gains pour ne pas changer la luminosité globale
-    const gAvg = (gainR + gainG + gainB) / 3;
-    const nGainR = gainR / gAvg;
-    const nGainG = gainG / gAvg;
-    const nGainB = gainB / gAvg;
+    if (!isYellowHue || !isModerateSat || !isModerateLum) continue;
 
-    // ── Passe 2 : correction pixel par pixel ────────────────────────────────
-    for (let j = 0; j < ph; j++) {
-      for (let i = 0; i < pw; i++) {
-        const idx = (j * pw + i) * 4;
-        const r = d[idx], g = d[idx+1], b = d[idx+2];
-        const lum = r * 0.299 + g * 0.587 + b * 0.114;
+    // Force de correction : plus c'est jaune et saturé, plus on corrige
+    const blend = Math.min(1.0, warmth * 2.8) * Math.min(1.0, sat * 2.5);
+    if (blend < 0.03) continue;
 
-        // Jaunissement pixel : combien ce pixel est jaune vs bleu
-        const pxYellow = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
-        // Sélectivité : ne corriger que les pixels effectivement jaunis
-        const selectivity = Math.min(1.0, pxYellow * 3.5);
+    // ── Correction : désaturer le jaune + shift vers neutre/froid ───────
+    // Cible = même luminosité mais gris neutre légèrement froid
+    const targetR = lum * 0.95;
+    const targetG = lum * 0.98;
+    const targetB = lum * 1.08;
 
-        // Vignette elliptique douce (fondu aux bords de la bbox)
-        const nx = (i / pw - 0.5) * 2;
-        const ny = (j / ph - 0.5) * 2;
-        const dist = Math.sqrt(nx * nx + ny * ny);
-        const vignette = Math.max(0, Math.min(1, (1.2 - dist) / 0.45));
-        if (vignette <= 0) continue;
-
-        // Blend final
-        const blend = vignette * strength * selectivity;
-        if (blend < 0.01) continue;
-
-        // ── Correction WB : neutraliser la dominante jaune ──────────────
-        const wbR = r * nGainR;
-        const wbG = g * nGainG;
-        const wbB = b * nGainB;
-
-        // ── Désaturation sélective : réduire la saturation des jaunes ───
-        const desat = blend * 0.6;
-        const dsR = wbR + (lum - wbR) * desat;
-        const dsG = wbG + (lum - wbG) * desat * 0.4; // moins sur vert
-        const dsB = wbB + (lum - wbB) * desat * 0.0; // pas sur bleu
-
-        // ── Léger boost bleu pour compenser le plastique jauni ──────────
-        const blueBoost = blend * Math.min(30, yellowness * 45);
-        const redReduce = blend * Math.min(20, yellowness * 30);
-
-        // ── Contraste local (micro-clarté) ──────────────────────────────
-        const contrast = (lum - avgLum) * 0.15 * vignette;
-
-        const finalR = dsR - redReduce + contrast;
-        const finalG = dsG + contrast;
-        const finalB = dsB + blueBoost + contrast;
-
-        // Appliquer avec le blend
-        d[idx]   = Math.max(0, Math.min(255, Math.round(r + (finalR - r) * blend)));
-        d[idx+1] = Math.max(0, Math.min(255, Math.round(g + (finalG - g) * blend)));
-        d[idx+2] = Math.max(0, Math.min(255, Math.round(b + (finalB - b) * blend)));
-      }
-    }
-    ctx.putImageData(id, px, py);
+    d[k]   = Math.max(0, Math.min(255, Math.round(r + (targetR - r) * blend)));
+    d[k+1] = Math.max(0, Math.min(255, Math.round(g + (targetG - g) * blend)));
+    d[k+2] = Math.max(0, Math.min(255, Math.round(b + (targetB - b) * blend)));
   }
+  ctx.putImageData(id, 0, 0);
 }
 
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
@@ -712,11 +653,10 @@ async function detectPlate(b64, imgW, imgH) {
 
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
-  // Détection plaque + (angle GPT-4o seulement si showroom activé) + optiques en parallèle
-  const [plate, angleData, lights] = await Promise.all([
+  // Détection plaque + (angle GPT-4o seulement si showroom activé) en parallèle
+  const [plate, angleData] = await Promise.all([
     detectPlate(b64, imgW, imgH),
     useGptAngle ? detectCarAngle(b64) : Promise.resolve(null),
-    headlightPolish ? detectHeadlights(b64) : Promise.resolve([]),
   ]);
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
@@ -730,8 +670,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = "none";
   // Amélioration couleurs (canvas)
   if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
-  // Lustrage des optiques (correction couleur canvas — préserve la forme)
-  if (lights.length > 0) polishHeadlights(ctx, lights, c.width, c.height);
+  // Lustrage des optiques (correction couleur sélective sur toute l'image)
+  if (headlightPolish) polishHeadlights(ctx, c.width, c.height);
   // Sol : flou adaptatif pro (après couleurs) ou adoucissement simple
   if (enhancePro) applyFloorBlur(ctx, c, c.width, c.height);
   else if (floorClean) {
