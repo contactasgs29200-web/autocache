@@ -383,68 +383,97 @@ async function detectHeadlights(b64) {
   }
 }
 
-// ── Lustrage IA des optiques : envoie les zones détectées à gpt-image-1 ──────
-// Redimensionne à 1536×1024 pour l'API, masque tout sauf les optiques,
-// recolle uniquement les zones régénérées sur le canvas d'origine.
+// ── Lustrage IA des optiques — approche crop-par-optique ─────────────────────
+// Pour chaque phare détecté :
+//   1. Crop du canvas original autour du phare (avec marge)
+//   2. Mise au carré + resize 1024×1024 (évite toute distorsion d'aspect ratio)
+//   3. Masque : bord opaque (préserve la carrosserie), centre transparent (éditable)
+//   4. Appel gpt-image-1 → restauration du verre uniquement
+//   5. Recollage avec fondu radial pour bords invisibles
 async function aiPolishHeadlights(ctx, lights, W, H) {
   if (!lights.length) return;
-
-  const API_W = 1536, API_H = 1024;
-
-  // ── Image : état courant du canvas redimensionné en PNG ──────────────────
-  const sendCanvas = document.createElement("canvas");
-  sendCanvas.width = API_W; sendCanvas.height = API_H;
-  const sctx = sendCanvas.getContext("2d");
-  sctx.drawImage(ctx.canvas, 0, 0, API_W, API_H);
-  const imageB64 = sendCanvas.toDataURL("image/png").split(",")[1];
-
-  // ── Masque : opaque partout, transparent sur les optiques ────────────────
-  const maskCanvas = document.createElement("canvas");
-  maskCanvas.width = API_W; maskCanvas.height = API_H;
-  const mctx = maskCanvas.getContext("2d");
-  mctx.fillStyle = "black";
-  mctx.fillRect(0, 0, API_W, API_H);
-  mctx.globalCompositeOperation = "destination-out";
-  const pad = 0.025;
-  for (const light of lights) {
-    const lx = Math.max(0, light.x - pad) * API_W;
-    const ly = Math.max(0, light.y - pad) * API_H;
-    const lw = Math.min(API_W - lx, (light.w + pad * 2) * API_W);
-    const lh = Math.min(API_H - ly, (light.h + pad * 2) * API_H);
-    mctx.fillRect(lx, ly, lw, lh);
-  }
-  const maskB64 = maskCanvas.toDataURL("image/png").split(",")[1];
-
-  // ── Appel API ─────────────────────────────────────────────────────────────
-  const resp = await fetch("/api/polish-headlights-ai", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
-  });
-  if (!resp.ok) { console.error("AI headlight polish failed:", resp.status); return; }
-  const data = await resp.json();
-  if (!data.imageBase64) { console.error("No result from AI headlight API"); return; }
-
-  // ── Résultat : coller seulement les zones optiques sur le canvas original ─
-  const resultImg = await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = "data:image/png;base64," + data.imageBase64;
-  });
-  const rW = resultImg.width, rH = resultImg.height;
+  const API_SIZE = 1024;
 
   for (const light of lights) {
-    const p = 0.015;
-    const sx = Math.max(0, light.x - p) * rW;
-    const sy = Math.max(0, light.y - p) * rH;
-    const sw = Math.min(rW - sx, (light.w + p * 2) * rW);
-    const sh = Math.min(rH - sy, (light.h + p * 2) * rH);
-    const dx = Math.max(0, light.x - p) * W;
-    const dy = Math.max(0, light.y - p) * H;
-    const dw = Math.min(W - dx, (light.w + p * 2) * W);
-    const dh = Math.min(H - dy, (light.h + p * 2) * H);
-    ctx.drawImage(resultImg, sx, sy, sw, sh, dx, dy, dw, dh);
+    // ── 1. Crop avec marge généreuse ──────────────────────────────────────
+    const pad = 0.05;
+    const cx = Math.max(0, Math.round((light.x - pad) * W));
+    const cy = Math.max(0, Math.round((light.y - pad) * H));
+    const cw = Math.min(W - cx, Math.round((light.w + pad * 2) * W));
+    const ch = Math.min(H - cy, Math.round((light.h + pad * 2) * H));
+    if (cw < 10 || ch < 10) continue;
+
+    // ── 2. Carré + scale 1024×1024 ───────────────────────────────────────
+    const sq    = Math.max(cw, ch);
+    const oX    = Math.round((sq - cw) / 2);
+    const oY    = Math.round((sq - ch) / 2);
+    const scale = API_SIZE / sq;
+
+    const imgC = document.createElement("canvas");
+    imgC.width = API_SIZE; imgC.height = API_SIZE;
+    const iCtx = imgC.getContext("2d");
+    iCtx.drawImage(ctx.canvas, cx, cy, cw, ch,
+      oX * scale, oY * scale, cw * scale, ch * scale);
+    const imageB64 = imgC.toDataURL("image/png").split(",")[1];
+
+    // ── 3. Masque : bord opaque (carrosserie) / centre transparent (verre) ─
+    const maskC = document.createElement("canvas");
+    maskC.width = API_SIZE; maskC.height = API_SIZE;
+    const mCtx = maskC.getContext("2d");
+    mCtx.fillStyle = "black";
+    mCtx.fillRect(0, 0, API_SIZE, API_SIZE);
+    mCtx.globalCompositeOperation = "destination-out";
+    const border = Math.round(API_SIZE * 0.14);
+    const r = Math.round(border * 0.6);
+    const x1 = border, y1 = border, x2 = API_SIZE - border, y2 = API_SIZE - border;
+    mCtx.beginPath();
+    mCtx.moveTo(x1 + r, y1);
+    mCtx.lineTo(x2 - r, y1); mCtx.arcTo(x2, y1, x2, y1 + r, r);
+    mCtx.lineTo(x2, y2 - r); mCtx.arcTo(x2, y2, x2 - r, y2, r);
+    mCtx.lineTo(x1 + r, y2); mCtx.arcTo(x1, y2, x1, y2 - r, r);
+    mCtx.lineTo(x1, y1 + r); mCtx.arcTo(x1, y1, x1 + r, y1, r);
+    mCtx.closePath();
+    mCtx.fill();
+    const maskB64 = maskC.toDataURL("image/png").split(",")[1];
+
+    // ── 4. Appel API ──────────────────────────────────────────────────────
+    const resp = await fetch("/api/polish-headlights-ai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
+    });
+    if (!resp.ok) { console.error("AI headlight API error:", resp.status); continue; }
+    const data = await resp.json();
+    if (!data.imageBase64) { console.error("No result from AI headlight API"); continue; }
+
+    // ── 5. Recollage avec fondu aux bords ─────────────────────────────────
+    const resImg = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = "data:image/png;base64," + data.imageBase64;
+    });
+
+    // Extraire la zone crop depuis le résultat (défaire la mise au carré)
+    const pasteC = document.createElement("canvas");
+    pasteC.width = cw; pasteC.height = ch;
+    const pCtx = pasteC.getContext("2d");
+    pCtx.drawImage(resImg,
+      oX * scale, oY * scale, cw * scale, ch * scale,
+      0, 0, cw, ch);
+
+    // Fondu radial — alpha 0 aux bords → invisible sur la carrosserie
+    pCtx.globalCompositeOperation = "destination-in";
+    const rGrd = pCtx.createRadialGradient(
+      cw / 2, ch / 2, Math.min(cw, ch) * 0.20,
+      cw / 2, ch / 2, Math.max(cw, ch) * 0.60
+    );
+    rGrd.addColorStop(0, "rgba(0,0,0,1)");
+    rGrd.addColorStop(1, "rgba(0,0,0,0)");
+    pCtx.fillStyle = rGrd;
+    pCtx.fillRect(0, 0, cw, ch);
+
+    ctx.drawImage(pasteC, cx, cy);
   }
 }
 // Analyse d'abord la chaleur moyenne de chaque zone détectée, puis applique

@@ -37,10 +37,11 @@ export default async function handler(req, res) {
   }
 
   const prompt =
-    "Polish the car front headlight lenses in the marked areas to make them look brand new. " +
-    "Remove all yellowing, oxidation and cloudiness from the plastic lens covers. " +
-    "Make them perfectly clear, bright and transparent like on a new car. " +
-    "Do not modify anything else in the photo.";
+    "Restore the car headlight plastic lens covers in the marked areas. " +
+    "Remove all yellowing, UV oxidation and cloudiness from the plastic. " +
+    "The headlights are OFF — do not add any light, glow or illumination. " +
+    "The result must look like new, clean, transparent plastic, not lit up. " +
+    "Keep the headlight housing, reflectors, chrome and surrounding body exactly unchanged.";
 
   const body = Buffer.concat([
     part("image", "image.png", "image/png", imageBuffer),
@@ -48,7 +49,7 @@ export default async function handler(req, res) {
     field("model",  "gpt-image-1"),
     field("prompt", prompt),
     field("n",      "1"),
-    field("size",   "1536x1024"),
+    field("size",   "1024x1024"),
     Buffer.from(`--${boundary}--${CRLF}`),
   ]);
 
