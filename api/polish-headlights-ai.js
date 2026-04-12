@@ -37,14 +37,10 @@ export default async function handler(req, res) {
   }
 
   const prompt =
-    "Professional automotive headlight restoration. " +
-    "The transparent areas of the mask are car headlights or tail lights. " +
-    "Restore every marked light lens to perfect, brand-new clarity: " +
-    "remove all yellowing, oxidation, UV haze and cloudiness from the plastic. " +
-    "The lenses must look crystal clear and pristine, like on a new vehicle. " +
-    "Preserve the exact internal structure — LED strips, chrome reflectors, " +
-    "light signatures — only remove the yellow discolouration. " +
-    "Keep the rest of the car identical. Ultra-realistic result.";
+    "Polish the car front headlight lenses in the marked areas to make them look brand new. " +
+    "Remove all yellowing, oxidation and cloudiness from the plastic lens covers. " +
+    "Make them perfectly clear, bright and transparent like on a new car. " +
+    "Do not modify anything else in the photo.";
 
   const body = Buffer.concat([
     part("image", "image.png", "image/png", imageBuffer),

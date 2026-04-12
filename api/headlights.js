@@ -25,18 +25,18 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set in environment' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64 image' });
 
-  const prompt = `Analyze this car photo. Locate ALL vehicle lights/optics that are visible: front headlights, rear taillights, fog lights, turn signals — any lens or light housing you can see.
+  const prompt = `Look at this car photo. Locate ONLY the two FRONT headlights (phares avant) — the light units at the front of the vehicle near the hood/bonnet.
 
-For each light unit, return a bounding box in normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom edge of the image).
+For each front headlight, return a bounding box in normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom edge of the image).
 
 Rules:
 - x, y = top-left corner of the bounding box
 - w, h = width and height
-- Be generous with the box: include the FULL plastic lens housing, not just the bulb center
-- Include all distinct light units visible, both front and rear
-- If no lights are visible at all, return {"lights": []}
+- Include the FULL plastic lens housing in the box, with a little margin
+- ONLY front headlights. Completely ignore rear taillights, brake lights, fog lights, turn signals.
+- If no front headlights are visible (car seen from behind or side), return {"lights": []}
 
-Return ONLY this JSON (no explanation, no markdown):
+Return ONLY this JSON, no explanation, no markdown:
 {"lights": [{"x": 0.12, "y": 0.40, "w": 0.14, "h": 0.09}]}`;
 
   try {
