@@ -383,127 +383,47 @@ async function detectHeadlights(b64) {
   }
 }
 
-// ── Lustrage IA des optiques — approche crop-par-optique ─────────────────────
-// Pour chaque phare détecté :
-//   1. Crop du canvas original autour du phare (avec marge)
-//   2. Mise au carré + resize 1024×1024 (évite toute distorsion d'aspect ratio)
-//   3. Masque : bord opaque (préserve la carrosserie), centre transparent (éditable)
-//   4. Appel gpt-image-1 → restauration du verre uniquement
-//   5. Recollage avec fondu radial pour bords invisibles
-async function aiPolishHeadlights(ctx, lights, W, H) {
-  if (!lights.length) return;
-  const API_SIZE = 1024;
-
-  for (const light of lights) {
-    // ── 1. Crop avec marge généreuse ──────────────────────────────────────
-    const pad = 0.05;
-    const cx = Math.max(0, Math.round((light.x - pad) * W));
-    const cy = Math.max(0, Math.round((light.y - pad) * H));
-    const cw = Math.min(W - cx, Math.round((light.w + pad * 2) * W));
-    const ch = Math.min(H - cy, Math.round((light.h + pad * 2) * H));
-    if (cw < 10 || ch < 10) continue;
-
-    // ── 2. Carré + scale 1024×1024 ───────────────────────────────────────
-    const sq    = Math.max(cw, ch);
-    const oX    = Math.round((sq - cw) / 2);
-    const oY    = Math.round((sq - ch) / 2);
-    const scale = API_SIZE / sq;
-
-    const imgC = document.createElement("canvas");
-    imgC.width = API_SIZE; imgC.height = API_SIZE;
-    const iCtx = imgC.getContext("2d");
-    iCtx.drawImage(ctx.canvas, cx, cy, cw, ch,
-      oX * scale, oY * scale, cw * scale, ch * scale);
-    const imageB64 = imgC.toDataURL("image/png").split(",")[1];
-
-    // ── 3. Masque : bord opaque (carrosserie) / centre transparent (verre) ─
-    const maskC = document.createElement("canvas");
-    maskC.width = API_SIZE; maskC.height = API_SIZE;
-    const mCtx = maskC.getContext("2d");
-    mCtx.fillStyle = "black";
-    mCtx.fillRect(0, 0, API_SIZE, API_SIZE);
-    mCtx.globalCompositeOperation = "destination-out";
-    const border = Math.round(API_SIZE * 0.14);
-    const r = Math.round(border * 0.6);
-    const x1 = border, y1 = border, x2 = API_SIZE - border, y2 = API_SIZE - border;
-    mCtx.beginPath();
-    mCtx.moveTo(x1 + r, y1);
-    mCtx.lineTo(x2 - r, y1); mCtx.arcTo(x2, y1, x2, y1 + r, r);
-    mCtx.lineTo(x2, y2 - r); mCtx.arcTo(x2, y2, x2 - r, y2, r);
-    mCtx.lineTo(x1 + r, y2); mCtx.arcTo(x1, y2, x1, y2 - r, r);
-    mCtx.lineTo(x1, y1 + r); mCtx.arcTo(x1, y1, x1 + r, y1, r);
-    mCtx.closePath();
-    mCtx.fill();
-    const maskB64 = maskC.toDataURL("image/png").split(",")[1];
-
-    // ── 4. Appel API ──────────────────────────────────────────────────────
-    const resp = await fetch("/api/polish-headlights-ai", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
-    });
-    if (!resp.ok) { console.error("AI headlight API error:", resp.status); continue; }
-    const data = await resp.json();
-    if (!data.imageBase64) { console.error("No result from AI headlight API"); continue; }
-
-    // ── 5. Recollage avec fondu aux bords ─────────────────────────────────
-    const resImg = await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = "data:image/png;base64," + data.imageBase64;
-    });
-
-    // Extraire la zone crop depuis le résultat (défaire la mise au carré)
-    const pasteC = document.createElement("canvas");
-    pasteC.width = cw; pasteC.height = ch;
-    const pCtx = pasteC.getContext("2d");
-    pCtx.drawImage(resImg,
-      oX * scale, oY * scale, cw * scale, ch * scale,
-      0, 0, cw, ch);
-
-    // Fondu radial — alpha 0 aux bords → invisible sur la carrosserie
-    pCtx.globalCompositeOperation = "destination-in";
-    const rGrd = pCtx.createRadialGradient(
-      cw / 2, ch / 2, Math.min(cw, ch) * 0.20,
-      cw / 2, ch / 2, Math.max(cw, ch) * 0.60
-    );
-    rGrd.addColorStop(0, "rgba(0,0,0,1)");
-    rGrd.addColorStop(1, "rgba(0,0,0,0)");
-    pCtx.fillStyle = rGrd;
-    pCtx.fillRect(0, 0, cw, ch);
-
-    ctx.drawImage(pasteC, cx, cy);
-  }
-}
-// Analyse d'abord la chaleur moyenne de chaque zone détectée, puis applique
-// une correction WB agressive + boost de clarté + contraste local.
-// Fonctionne sur phares, feux arrière, antibrouillards — tout ce que GPT-4o détecte.
+// ── Lustrage des optiques — correction couleur pure (canvas) ─────────────────
+// Supprime le jaunissement des phares sans régénération IA.
+// Préserve 100 % la forme d'origine : seule la teinte est corrigée.
 function polishHeadlights(ctx, lights, W, H) {
   for (const light of lights) {
-    const pad = 0.018;
+    const pad = 0.025;
     const px = Math.max(0, Math.round((light.x - pad) * W));
     const py = Math.max(0, Math.round((light.y - pad) * H));
     const pw = Math.min(W - px, Math.round((light.w + pad * 2) * W));
     const ph = Math.min(H - py, Math.round((light.h + pad * 2) * H));
     if (pw < 4 || ph < 4) continue;
 
-    const id  = ctx.getImageData(px, py, pw, ph);
-    const d   = id.data;
+    const id = ctx.getImageData(px, py, pw, ph);
+    const d  = id.data;
 
     // ── Passe 1 : statistiques de zone ──────────────────────────────────────
-    let sumLum = 0, sumWarmth = 0, count = 0;
+    let sumR = 0, sumG = 0, sumB = 0, sumLum = 0, count = 0;
     for (let k = 0; k < d.length; k += 4) {
-      const lk = d[k] * 0.299 + d[k+1] * 0.587 + d[k+2] * 0.114;
-      // Warmth = excès de rouge + vert (pondéré) sur le bleu
-      const wk = Math.max(0, d[k] * 0.65 + d[k+1] * 0.35 - d[k+2]) / 255;
-      sumLum += lk; sumWarmth += wk; count++;
+      sumR += d[k]; sumG += d[k+1]; sumB += d[k+2];
+      sumLum += d[k] * 0.299 + d[k+1] * 0.587 + d[k+2] * 0.114;
+      count++;
     }
-    const avgLum    = sumLum    / count;
-    const avgWarmth = sumWarmth / count;
+    const avgR = sumR / count, avgG = sumG / count, avgB = sumB / count;
+    const avgLum = sumLum / count;
 
-    // Facteur zonal : plus la zone est jaune, plus on corrige fort (0.25–1.0)
-    const zoneFactor = Math.min(1.0, Math.max(0.25, avgWarmth * 4.5 + 0.15));
+    // Mesure du jaunissement : excès R+G par rapport à B
+    const yellowness = Math.max(0, (avgR * 0.55 + avgG * 0.45 - avgB)) / 255;
+    // Force de correction adaptée au niveau de jaunissement (0.4 – 1.0)
+    const strength = Math.min(1.0, Math.max(0.4, yellowness * 5.0 + 0.2));
+
+    // Gains de correction white-balance : ramener vers gris neutre
+    // On calcule le ratio pour neutraliser la dominante chaude
+    const maxAvg = Math.max(avgR, avgG, avgB, 1);
+    const gainR = maxAvg / Math.max(avgR, 1);
+    const gainG = maxAvg / Math.max(avgG, 1);
+    const gainB = maxAvg / Math.max(avgB, 1);
+    // Normaliser les gains pour ne pas changer la luminosité globale
+    const gAvg = (gainR + gainG + gainB) / 3;
+    const nGainR = gainR / gAvg;
+    const nGainG = gainG / gAvg;
+    const nGainB = gainB / gAvg;
 
     // ── Passe 2 : correction pixel par pixel ────────────────────────────────
     for (let j = 0; j < ph; j++) {
@@ -512,36 +432,48 @@ function polishHeadlights(ctx, lights, W, H) {
         const r = d[idx], g = d[idx+1], b = d[idx+2];
         const lum = r * 0.299 + g * 0.587 + b * 0.114;
 
-        // Warmth pixel
-        const warmth = Math.max(0, r * 0.65 + g * 0.35 - b) / 255;
+        // Jaunissement pixel : combien ce pixel est jaune vs bleu
+        const pxYellow = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
+        // Sélectivité : ne corriger que les pixels effectivement jaunis
+        const selectivity = Math.min(1.0, pxYellow * 3.5);
 
-        // Vignette elliptique (fondu naturel sur les bords de la boîte)
+        // Vignette elliptique douce (fondu aux bords de la bbox)
         const nx = (i / pw - 0.5) * 2;
         const ny = (j / ph - 0.5) * 2;
         const dist = Math.sqrt(nx * nx + ny * ny);
-        const vignette = Math.max(0, Math.min(1, (1.3 - dist) / 0.5));
+        const vignette = Math.max(0, Math.min(1, (1.2 - dist) / 0.45));
         if (vignette <= 0) continue;
 
-        // Force totale : zone × pixel × vignette
-        const blend = vignette * zoneFactor * Math.min(1, 0.35 + warmth * 4.0);
-        if (blend < 0.02) continue;
+        // Blend final
+        const blend = vignette * strength * selectivity;
+        if (blend < 0.01) continue;
 
-        // Cible neutre légèrement froide + légèrement plus lumineuse (verre propre)
-        const brightLum  = Math.min(255, lum * 1.06 + 6);
-        const targetR    = brightLum * 0.91; // réduction rouge forte
-        const targetG    = brightLum * 0.97; // réduction verte douce
-        const targetB    = brightLum * 1.13; // boost bleu fort → teinte froide/neutre
+        // ── Correction WB : neutraliser la dominante jaune ──────────────
+        const wbR = r * nGainR;
+        const wbG = g * nGainG;
+        const wbB = b * nGainB;
 
-        // Contraste local (micro-clarté)
-        const contrast = (lum - avgLum) * 0.20 * vignette;
+        // ── Désaturation sélective : réduire la saturation des jaunes ───
+        const desat = blend * 0.6;
+        const dsR = wbR + (lum - wbR) * desat;
+        const dsG = wbG + (lum - wbG) * desat * 0.4; // moins sur vert
+        const dsB = wbB + (lum - wbB) * desat * 0.0; // pas sur bleu
 
-        const newR = r + (targetR - r) * blend + contrast;
-        const newG = g + (targetG - g) * blend * 0.55 + contrast;
-        const newB = b + (targetB - b) * blend + contrast;
+        // ── Léger boost bleu pour compenser le plastique jauni ──────────
+        const blueBoost = blend * Math.min(30, yellowness * 45);
+        const redReduce = blend * Math.min(20, yellowness * 30);
 
-        d[idx]   = Math.max(0, Math.min(255, Math.round(newR)));
-        d[idx+1] = Math.max(0, Math.min(255, Math.round(newG)));
-        d[idx+2] = Math.max(0, Math.min(255, Math.round(newB)));
+        // ── Contraste local (micro-clarté) ──────────────────────────────
+        const contrast = (lum - avgLum) * 0.15 * vignette;
+
+        const finalR = dsR - redReduce + contrast;
+        const finalG = dsG + contrast;
+        const finalB = dsB + blueBoost + contrast;
+
+        // Appliquer avec le blend
+        d[idx]   = Math.max(0, Math.min(255, Math.round(r + (finalR - r) * blend)));
+        d[idx+1] = Math.max(0, Math.min(255, Math.round(g + (finalG - g) * blend)));
+        d[idx+2] = Math.max(0, Math.min(255, Math.round(b + (finalB - b) * blend)));
       }
     }
     ctx.putImageData(id, px, py);
@@ -798,8 +730,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = "none";
   // Amélioration couleurs (canvas)
   if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
-  // Lustrage des optiques IA (gpt-image-1 — régénère les zones détectées)
-  if (lights.length > 0) await aiPolishHeadlights(ctx, lights, c.width, c.height);
+  // Lustrage des optiques (correction couleur canvas — préserve la forme)
+  if (lights.length > 0) polishHeadlights(ctx, lights, c.width, c.height);
   // Sol : flou adaptatif pro (après couleurs) ou adoucissement simple
   if (enhancePro) applyFloorBlur(ctx, c, c.width, c.height);
   else if (floorClean) {
@@ -1965,7 +1897,7 @@ export default function AutoCache() {
                     toggle: () => { if (!canUseHeadlight) { setShowPlansModal(true); return; } setHeadlightPolish(p => !p); },
                     icon: "💡",
                     label: "Lustrage des optiques",
-                    sub: canUseHeadlight ? "Réduit le jaunissement des phares et feux · IA GPT-4o" : "Disponible avec l'abonnement Pro",
+                    sub: canUseHeadlight ? "Réduit le jaunissement des phares et feux" : "Disponible avec l'abonnement Pro",
                     locked: !canUseHeadlight,
                   },
                 ].map(({ active, toggle, icon, label, sub, locked }) => (
