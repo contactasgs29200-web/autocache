@@ -247,14 +247,21 @@ function cornersFromShowroom(sc, t) {
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
 function drawPerspective(ctx, img, tl, tr, br, bl) {
-  const STEPS = 200;
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
+  // Nombre de bandes adaptatif : au moins 1 bande par pixel de hauteur (min 120, max 400)
+  const outH = Math.max(
+    Math.abs(bl.y - tl.y), Math.abs(br.y - tr.y),
+    Math.hypot(bl.x - tl.x, bl.y - tl.y), Math.hypot(br.x - tr.x, br.y - tr.y)
+  );
+  const STEPS = Math.max(120, Math.min(400, Math.ceil(outH)));
   ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   for (let i = 0; i < STEPS; i++) {
-    // Léger chevauchement (0.3px equiv) pour éliminer les gaps entre bandes
-    const overlap = 0.3 / STEPS;
-    const t1 = Math.max(0, i / STEPS - overlap), t2 = Math.min(1, (i + 1) / STEPS + overlap), tm = (t1 + t2) / 2;
+    // Chevauchement de 1.5px entre bandes pour éliminer tout gap visible
+    const overlap = 1.5 / outH;
+    const t1 = Math.max(0, i / STEPS - overlap), t2 = Math.min(1, (i + 1) / STEPS + overlap), tm = (i + 0.5) / STEPS;
     const x00 = lerp(tl.x, bl.x, t1), y00 = lerp(tl.y, bl.y, t1);
     const x10 = lerp(tr.x, br.x, t1), y10 = lerp(tr.y, br.y, t1);
     const x01 = lerp(tl.x, bl.x, t2), y01 = lerp(tl.y, bl.y, t2);
