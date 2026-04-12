@@ -621,14 +621,18 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
+    const tmp = document.createElement('canvas');
+    tmp.width = c.width; tmp.height = c.height;
+    const tCtx = tmp.getContext('2d');
+    tCtx.filter = 'saturate(1.15) contrast(1.08)';
+    tCtx.drawImage(c, 0, 0);
+    tCtx.filter = 'none';
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
     ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
     ctx.closePath(); ctx.clip();
-    ctx.filter = 'saturate(1.15) contrast(1.08)';
-    ctx.drawImage(c, 0, 0);
-    ctx.filter = 'none';
+    ctx.drawImage(tmp, 0, 0);
     ctx.restore();
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
@@ -744,15 +748,19 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.fill();
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
-    // Boost saturation + contraste sur la zone plaque (couleurs plus profondes)
+    // Boost saturation + contraste sur la zone plaque via canvas temporaire
+    const tmp = document.createElement('canvas');
+    tmp.width = c.width; tmp.height = c.height;
+    const tCtx = tmp.getContext('2d');
+    tCtx.filter = 'saturate(1.15) contrast(1.08)';
+    tCtx.drawImage(c, 0, 0);
+    tCtx.filter = 'none';
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
     ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
     ctx.closePath(); ctx.clip();
-    ctx.filter = 'saturate(1.15) contrast(1.08)';
-    ctx.drawImage(c, 0, 0);
-    ctx.filter = 'none';
+    ctx.drawImage(tmp, 0, 0);
     ctx.restore();
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners };
@@ -1444,14 +1452,19 @@ export default function AutoCache() {
       ctx.restore();
       drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
       // Boost saturation + contraste sur la zone plaque (couleurs plus profondes)
+      // Copie via canvas temporaire pour éviter de dessiner le canvas sur lui-même
+      const tmp = document.createElement('canvas');
+      tmp.width = canvas.width; tmp.height = canvas.height;
+      const tCtx = tmp.getContext('2d');
+      tCtx.filter = 'saturate(1.15) contrast(1.08)';
+      tCtx.drawImage(canvas, 0, 0);
+      tCtx.filter = 'none';
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
       ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
       ctx.closePath(); ctx.clip();
-      ctx.filter = 'saturate(1.15) contrast(1.08)';
-      ctx.drawImage(canvas, 0, 0);
-      ctx.filter = 'none';
+      ctx.drawImage(tmp, 0, 0);
       ctx.restore();
     }
   };
