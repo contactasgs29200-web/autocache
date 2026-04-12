@@ -378,16 +378,15 @@ function polishHeadlights(ctx, W, H) {
     const lum = r * 0.299 + g * 0.587 + b * 0.114;
 
     // ── Détection du jaunissement par pixel ─────────────────────────────
-    // Warmth = excès de (R+G pondéré) sur B — signature du plastique oxydé
     const warmth = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
-    if (warmth < 0.08) continue; // pixel pas jaune → on skip
+    if (warmth < 0.05) continue;
 
-    // Saturation HSL approximée
+    // Saturation HSV
     const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
     const delta = cMax - cMin;
     const sat = cMax > 0 ? delta / cMax : 0;
 
-    // Hue approximée (0-360) pour cibler jaune/ambre (20°-65°)
+    // Hue (0-360)
     let hue = 0;
     if (delta > 5) {
       if (cMax === r)      hue = 60 * (((g - b) / delta) % 6);
@@ -396,23 +395,20 @@ function polishHeadlights(ctx, W, H) {
       if (hue < 0) hue += 360;
     }
 
-    // Le plastique jauni a une teinte ambre/jaune (hue ~20-65°),
-    // une saturation modérée (0.15-0.85), et une luminosité moyenne (30-220)
-    const isYellowHue = hue >= 15 && hue <= 70;
-    const isModerateSat = sat >= 0.12 && sat <= 0.90;
-    const isModerateLum = lum >= 25 && lum <= 225;
+    // Cibler jaune/ambre large (10°-75°), toute saturation > 0.08, lum 20-240
+    if (hue < 10 || hue > 75) continue;
+    if (sat < 0.08 || lum < 20 || lum > 240) continue;
 
-    if (!isYellowHue || !isModerateSat || !isModerateLum) continue;
+    // ── Force de correction très agressive ──────────────────────────────
+    // Blend proportionnel au warmth et à la saturation, plafonné à 0.95
+    const blend = Math.min(0.95, warmth * 4.5 * Math.min(1.0, sat * 3.0));
+    if (blend < 0.02) continue;
 
-    // Force de correction : plus c'est jaune et saturé, plus on corrige
-    const blend = Math.min(1.0, warmth * 2.8) * Math.min(1.0, sat * 2.5);
-    if (blend < 0.03) continue;
-
-    // ── Correction : désaturer le jaune + shift vers neutre/froid ───────
-    // Cible = même luminosité mais gris neutre légèrement froid
-    const targetR = lum * 0.95;
-    const targetG = lum * 0.98;
-    const targetB = lum * 1.08;
+    // ── Correction : désaturer fortement + shift froid ──────────────────
+    // Cible = luminosité identique, teinte gris neutre froid
+    const targetR = lum * 0.88;   // rouge bien réduit
+    const targetG = lum * 0.97;   // vert quasi neutre
+    const targetB = lum * 1.18;   // bleu boosté fort
 
     d[k]   = Math.max(0, Math.min(255, Math.round(r + (targetR - r) * blend)));
     d[k+1] = Math.max(0, Math.min(255, Math.round(g + (targetG - g) * blend)));
