@@ -247,12 +247,14 @@ function cornersFromShowroom(sc, t) {
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
 function drawPerspective(ctx, img, tl, tr, br, bl) {
-  const STEPS = 80;
+  const STEPS = 200;
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
   ctx.save();
   for (let i = 0; i < STEPS; i++) {
-    const t1 = i / STEPS, t2 = (i + 1) / STEPS, tm = (t1 + t2) / 2;
+    // Léger chevauchement (0.3px equiv) pour éliminer les gaps entre bandes
+    const overlap = 0.3 / STEPS;
+    const t1 = Math.max(0, i / STEPS - overlap), t2 = Math.min(1, (i + 1) / STEPS + overlap), tm = (t1 + t2) / 2;
     const x00 = lerp(tl.x, bl.x, t1), y00 = lerp(tl.y, bl.y, t1);
     const x10 = lerp(tr.x, br.x, t1), y10 = lerp(tr.y, br.y, t1);
     const x01 = lerp(tl.x, bl.x, t2), y01 = lerp(tl.y, bl.y, t2);
@@ -619,6 +621,15 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath(); ctx.clip();
+    ctx.filter = 'saturate(1.15) contrast(1.08)';
+    ctx.drawImage(c, 0, 0);
+    ctx.filter = 'none';
+    ctx.restore();
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
   if (returnFull) return { dataURL, baseURL, transform: { carX, carY, cw, ch, W, H } };
@@ -733,6 +744,16 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.fill();
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
+    // Boost saturation + contraste sur la zone plaque (couleurs plus profondes)
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath(); ctx.clip();
+    ctx.filter = 'saturate(1.15) contrast(1.08)';
+    ctx.drawImage(c, 0, 0);
+    ctx.filter = 'none';
+    ctx.restore();
   }
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners };
 }
@@ -1422,6 +1443,16 @@ export default function AutoCache() {
       ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
       ctx.restore();
       drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
+      // Boost saturation + contraste sur la zone plaque (couleurs plus profondes)
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+      ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+      ctx.closePath(); ctx.clip();
+      ctx.filter = 'saturate(1.15) contrast(1.08)';
+      ctx.drawImage(canvas, 0, 0);
+      ctx.filter = 'none';
+      ctx.restore();
     }
   };
 
