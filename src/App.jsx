@@ -379,7 +379,7 @@ function polishHeadlights(ctx, W, H) {
 
     // ── Détection du jaunissement par pixel ─────────────────────────────
     const warmth = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
-    if (warmth < 0.05) continue;
+    if (warmth < 0.06) continue;
 
     // Saturation HSV
     const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
@@ -395,20 +395,21 @@ function polishHeadlights(ctx, W, H) {
       if (hue < 0) hue += 360;
     }
 
-    // Cibler jaune/ambre large (10°-75°), toute saturation > 0.08, lum 20-240
-    if (hue < 10 || hue > 75) continue;
-    if (sat < 0.08 || lum < 20 || lum > 240) continue;
+    // Cibler jaune/ambre (15°-65°), saturation significative, lum moyenne
+    if (hue < 15 || hue > 65) continue;
+    if (sat < 0.15 || lum < 30 || lum > 230) continue;
 
-    // ── Force de correction très agressive ──────────────────────────────
-    // Blend proportionnel au warmth et à la saturation, plafonné à 0.95
-    const blend = Math.min(0.95, warmth * 4.5 * Math.min(1.0, sat * 3.0));
-    if (blend < 0.02) continue;
+    // ── Force progressive : proportionnelle au jaunissement réel ────────
+    // Plus le pixel est jaune, plus on corrige — mais plafonné à 0.7
+    const blend = Math.min(0.70, warmth * 3.0 * Math.min(1.0, sat * 2.0));
+    if (blend < 0.03) continue;
 
-    // ── Correction : désaturer fortement + shift froid ──────────────────
-    // Cible = luminosité identique, teinte gris neutre froid
-    const targetR = lum * 0.88;   // rouge bien réduit
-    const targetG = lum * 0.97;   // vert quasi neutre
-    const targetB = lum * 1.18;   // bleu boosté fort
+    // ── Correction : désaturation partielle vers gris neutre ────────────
+    // On ramène vers la luminosité du pixel (= gris neutre), pas vers bleu
+    // Résultat = plastique clair/transparent, pas bleuté
+    const targetR = lum * 0.96;
+    const targetG = lum * 1.00;
+    const targetB = lum * 1.05;
 
     d[k]   = Math.max(0, Math.min(255, Math.round(r + (targetR - r) * blend)));
     d[k+1] = Math.max(0, Math.min(255, Math.round(g + (targetG - g) * blend)));
