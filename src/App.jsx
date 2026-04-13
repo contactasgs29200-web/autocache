@@ -376,14 +376,13 @@ function autoEnhance(ctx, W, H) {
 }
 
 // ── Détection des phares via GPT-4o-mini ─────────────────────────────────────
-// ── Lustrage IA des optiques — régénération complète via gpt-image-1 ─────────
-// Envoie l'image ENTIÈRE avec un masque full-transparent → l'IA peut modifier
-// toute la photo mais le prompt la guide à ne restaurer que les phares.
-// Le résultat entier remplace le canvas (pas de compositing = pas de décalage).
+// ── Lustrage IA des optiques — via OpenAI Responses API (comme ChatGPT) ──────
+// Utilise gpt-4o + outil image_generation : même pipeline qu'en interne dans
+// ChatGPT quand on lui demande d'éditer une photo. Résultat >> images/edits.
 const API_W = 1536, API_H = 1024;
 
 async function aiPolishHeadlights(ctx, W, H) {
-  // ── 1. Redimensionner l'image complète vers 1536×1024 ─────────────────
+  // ── 1. Redimensionner l'image vers 1536×1024 ──────────────────────────
   const imgC = document.createElement("canvas");
   imgC.width = API_W; imgC.height = API_H;
   const iCtx = imgC.getContext("2d");
@@ -392,18 +391,12 @@ async function aiPolishHeadlights(ctx, W, H) {
   iCtx.drawImage(ctx.canvas, 0, 0, W, H, 0, 0, API_W, API_H);
   const imageB64 = imgC.toDataURL("image/png").split(",")[1];
 
-  // ── 2. Masque entièrement transparent → l'IA peut tout modifier ───────
-  // Un canvas vierge est transparent par défaut : pas de fillRect.
-  const maskC = document.createElement("canvas");
-  maskC.width = API_W; maskC.height = API_H;
-  const maskB64 = maskC.toDataURL("image/png").split(",")[1];
-
-  // ── 3. Appel API ──────────────────────────────────────────────────────
-  console.log("[Headlights] Appel API régénération complète...");
-  const resp = await fetch("/api/polish-headlights-ai", {
+  // ── 2. Appel Responses API (gpt-4o + image_generation) ───────────────
+  console.log("[Headlights] Appel Responses API (gpt-4o)...");
+  const resp = await fetch("/api/regen-headlights", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
+    body: JSON.stringify({ imageBase64: imageB64 }),
   });
   if (!resp.ok) {
     const errText = await resp.text().catch(() => resp.status);
@@ -417,7 +410,7 @@ async function aiPolishHeadlights(ctx, W, H) {
   }
   console.log("[Headlights] Image reçue, remplacement du canvas...");
 
-  // ── 4. Remplacer le canvas entier par le résultat IA ─────────────────
+  // ── 3. Remplacer le canvas entier par le résultat ─────────────────────
   const resImg = await new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
