@@ -378,15 +378,19 @@ function autoEnhance(ctx, W, H) {
 // ── Détection des phares via GPT-4o-mini ─────────────────────────────────────
 async function detectHeadlights(b64) {
   try {
+    console.log("[Headlights] Détection en cours...");
     const r = await fetch("/api/headlights", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ b64 }),
     });
     const data = await r.json();
-    return Array.isArray(data.lights) ? data.lights : [];
+    const lights = Array.isArray(data.lights) ? data.lights : [];
+    console.log(`[Headlights] Détection: ${lights.length} phare(s) trouvé(s)`, lights);
+    if (!r.ok) console.error("[Headlights] Erreur API détection:", data);
+    return lights;
   } catch(e) {
-    console.error("detectHeadlights error:", e);
+    console.error("[Headlights] Erreur détection:", e);
     return [];
   }
 }
@@ -433,14 +437,23 @@ async function aiPolishHeadlights(ctx, lights, W, H) {
   const maskB64 = maskC.toDataURL("image/png").split(",")[1];
 
   // ── 3. Appel API (image complète + masque) ────────────────────────────
+  console.log(`[Headlights] Appel API lustrage (${lights.length} phare(s), image ${API_W}x${API_H})`);
   const resp = await fetch("/api/polish-headlights-ai", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
   });
-  if (!resp.ok) { console.error("AI headlight API error:", resp.status); return; }
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => resp.status);
+    console.error("[Headlights] Erreur API lustrage:", resp.status, errText);
+    return;
+  }
   const data = await resp.json();
-  if (!data.imageBase64) { console.error("No result from AI headlight API"); return; }
+  if (!data.imageBase64) {
+    console.error("[Headlights] Pas d'image dans la réponse API:", data);
+    return;
+  }
+  console.log("[Headlights] Image IA reçue, compositing en cours...");
 
   // ── 4. Recomposer : ne prendre que les zones phares du résultat IA ────
   const resImg = await new Promise((resolve, reject) => {
@@ -483,7 +496,9 @@ async function aiPolishHeadlights(ctx, lights, W, H) {
     pCtx.fillRect(0, 0, lw, lh);
 
     ctx.drawImage(pC, lx, ly);
+    console.log(`[Headlights] Phare composé sur canvas: pos(${lx},${ly}) taille(${lw}x${lh})`);
   }
+  console.log("[Headlights] Lustrage terminé ✓");
 }
 
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
