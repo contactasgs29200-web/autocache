@@ -376,13 +376,40 @@ function autoEnhance(ctx, W, H) {
 }
 
 // ── Détection des phares via GPT-4o-mini ─────────────────────────────────────
-// ── Lustrage IA des optiques — via OpenAI Responses API (comme ChatGPT) ──────
-// Utilise gpt-4o + outil image_generation : même pipeline qu'en interne dans
-// ChatGPT quand on lui demande d'éditer une photo. Résultat >> images/edits.
+// ── Lustrage IA des optiques — détection + images/edits + résultat complet ────
+// 1. Détecte les phares via GPT-4o-mini (detail:auto)
+// 2. Crée un masque rectangulaire transparent sur les phares
+// 3. Envoie à gpt-image-1 images/edits
+// 4. Remplace le canvas entier par le résultat (pas de compositing = pas de décalage)
 const API_W = 1536, API_H = 1024;
 
-async function aiPolishHeadlights(ctx, W, H) {
-  // ── 1. Redimensionner l'image vers 1536×1024 ──────────────────────────
+async function detectHeadlights(b64) {
+  try {
+    console.log("[Headlights] Détection en cours (detail:auto)...");
+    const r = await fetch("/api/headlights", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ b64 }),
+    });
+    const data = await r.json();
+    const lights = Array.isArray(data.lights) ? data.lights : [];
+    console.log(`[Headlights] ${lights.length} phare(s) détecté(s)`, lights);
+    return lights;
+  } catch(e) {
+    console.error("[Headlights] Erreur détection:", e);
+    return [];
+  }
+}
+
+async function aiPolishHeadlights(ctx, W, H, b64Original) {
+  // ── 1. Détecter les phares ────────────────────────────────────────────
+  const lights = await detectHeadlights(b64Original);
+  if (!lights.length) {
+    console.warn("[Headlights] Aucun phare détecté, lustrage ignoré");
+    return;
+  }
+
+  // ── 2. Redimensionner l'image vers 1536×1024 ──────────────────────────
   const imgC = document.createElement("canvas");
   imgC.width = API_W; imgC.height = API_H;
   const iCtx = imgC.getContext("2d");
@@ -391,15 +418,32 @@ async function aiPolishHeadlights(ctx, W, H) {
   iCtx.drawImage(ctx.canvas, 0, 0, W, H, 0, 0, API_W, API_H);
   const imageB64 = imgC.toDataURL("image/png").split(",")[1];
 
-  // ── 2. Appel Responses API (gpt-4o + image_generation) ───────────────
-  console.log("[Headlights] Appel Responses API (gpt-4o)...");
-  const resp = await fetch("/api/regen-headlights", {
+  // ── 3. Masque : opaque partout, transparent sur les phares (rectangles) ─
+  const maskC = document.createElement("canvas");
+  maskC.width = API_W; maskC.height = API_H;
+  const mCtx = maskC.getContext("2d");
+  mCtx.fillStyle = "black";
+  mCtx.fillRect(0, 0, API_W, API_H);
+  mCtx.globalCompositeOperation = "destination-out";
+  for (const l of lights) {
+    const pad = 0.02;
+    const lx = Math.max(0, (l.x - pad) * API_W);
+    const ly = Math.max(0, (l.y - pad) * API_H);
+    const lw = Math.min(API_W - lx, (l.w + pad * 2) * API_W);
+    const lh = Math.min(API_H - ly, (l.h + pad * 2) * API_H);
+    mCtx.fillRect(lx, ly, lw, lh);  // rectangulaire : couvre tout le phare
+  }
+  const maskB64 = maskC.toDataURL("image/png").split(",")[1];
+
+  // ── 4. Appel images/edits ─────────────────────────────────────────────
+  console.log(`[Headlights] Appel images/edits (${lights.length} phare(s))...`);
+  const resp = await fetch("/api/polish-headlights-ai", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageBase64: imageB64 }),
+    body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
   });
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => resp.status);
+    const errText = await resp.text().catch(() => String(resp.status));
     console.error("[Headlights] Erreur API:", resp.status, errText);
     return;
   }
@@ -410,7 +454,7 @@ async function aiPolishHeadlights(ctx, W, H) {
   }
   console.log("[Headlights] Image reçue, remplacement du canvas...");
 
-  // ── 3. Remplacer le canvas entier par le résultat ─────────────────────
+  // ── 5. Remplacer le canvas entier par le résultat ─────────────────────
   const resImg = await new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -420,7 +464,7 @@ async function aiPolishHeadlights(ctx, W, H) {
   ctx.clearRect(0, 0, W, H);
   ctx.drawImage(resImg, 0, 0, W, H);
 
-  console.log("[Headlights] Régénération terminée ✓");
+  console.log("[Headlights] Lustrage terminé ✓");
 }
 
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
@@ -685,8 +729,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = "none";
   // Amélioration couleurs (canvas)
   if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
-  // Lustrage des optiques IA — régénération complète via gpt-image-1
-  if (headlightPolish) await aiPolishHeadlights(ctx, c.width, c.height);
+  // Lustrage des optiques IA — détection + images/edits + résultat complet
+  if (headlightPolish) await aiPolishHeadlights(ctx, c.width, c.height, b64);
   // Sol : flou adaptatif pro (après couleurs) ou adoucissement simple
   if (enhancePro) applyFloorBlur(ctx, c, c.width, c.height);
   else if (floorClean) {
