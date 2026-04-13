@@ -376,16 +376,12 @@ function autoEnhance(ctx, W, H) {
 }
 
 // ── Détection des phares via GPT-4o-mini ─────────────────────────────────────
-// ── Lustrage IA des optiques — détection + images/edits + résultat complet ────
-// 1. Détecte les phares via GPT-4o-mini (detail:auto)
-// 2. Crée un masque rectangulaire transparent sur les phares
-// 3. Envoie à gpt-image-1 images/edits
-// 4. Remplace le canvas entier par le résultat (pas de compositing = pas de décalage)
-const API_W = 1536, API_H = 1024;
+// ── Lustrage des optiques — correction canvas ciblée ─────────────────────────
+// Approche fiable : détection de la zone phare via GPT-4o-mini, puis correction
+// colorimétrique canvas sur ces zones uniquement. Résultat garanti = même voiture.
 
 async function detectHeadlights(b64) {
   try {
-    console.log("[Headlights] Détection en cours (detail:auto)...");
     const r = await fetch("/api/headlights", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -401,69 +397,83 @@ async function detectHeadlights(b64) {
   }
 }
 
+// Correction colorimétrique d'une zone rectangulaire du canvas.
+// Cible les pixels jaunes/ambrés (jaunissement UV) et les ramène vers neutre/clair.
+function correctHeadlightZone(ctx, x, y, zw, zh) {
+  const id = ctx.getImageData(x, y, zw, zh);
+  const d = id.data;
+  for (let k = 0; k < d.length; k += 4) {
+    const r = d[k], g = d[k+1], b = d[k+2];
+    const lum = r * 0.299 + g * 0.587 + b * 0.114;
+
+    // Teinte ambre/jaune (jaunissement UV)
+    const warmth = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
+    if (warmth < 0.04) continue;
+
+    // Saturation HSV
+    const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
+    const delta = cMax - cMin;
+    const sat = cMax > 0 ? delta / cMax : 0;
+
+    // Teinte (0–360°)
+    let hue = 0;
+    if (delta > 4) {
+      if (cMax === r)      hue = 60 * (((g - b) / delta) % 6);
+      else if (cMax === g) hue = 60 * ((b - r) / delta + 2);
+      else                 hue = 60 * ((r - g) / delta + 4);
+      if (hue < 0) hue += 360;
+    }
+
+    // Cibler jaune/ambre : 10°–70°, saturation > 12%, lum moyenne
+    if (hue < 10 || hue > 70) continue;
+    if (sat < 0.12 || lum < 20 || lum > 240) continue;
+
+    // Intensité de correction proportionnelle au jaunissement
+    const blend = Math.min(0.85, warmth * 3.5 * Math.min(1.0, sat * 2.2));
+    if (blend < 0.05) continue;
+
+    // Cible : gris neutre légèrement froid (simuler plastique transparent neuf)
+    const tR = lum * 0.93;
+    const tG = lum * 0.98;
+    const tB = lum * 1.08;
+
+    let nR = r + (tR - r) * blend;
+    let nG = g + (tG - g) * blend;
+    let nB = b + (tB - b) * blend;
+
+    // Clarté : éclaircir légèrement (simuler transparence retrouvée)
+    const clarity = blend * 0.3;
+    nR += (255 - nR) * clarity * 0.2;
+    nG += (255 - nG) * clarity * 0.2;
+    nB += (255 - nB) * clarity * 0.2;
+
+    d[k]   = Math.max(0, Math.min(255, Math.round(nR)));
+    d[k+1] = Math.max(0, Math.min(255, Math.round(nG)));
+    d[k+2] = Math.max(0, Math.min(255, Math.round(nB)));
+  }
+  ctx.putImageData(id, x, y);
+}
+
 async function aiPolishHeadlights(ctx, W, H, b64Original) {
-  // ── 1. Détecter les phares ────────────────────────────────────────────
   const lights = await detectHeadlights(b64Original);
-  if (!lights.length) {
-    console.warn("[Headlights] Aucun phare détecté, lustrage ignoré");
+
+  if (lights.length === 0) {
+    // Fallback : correction sur toute l'image si détection échoue
+    console.log("[Headlights] Pas de détection → correction globale");
+    correctHeadlightZone(ctx, 0, 0, W, H);
     return;
   }
 
-  // ── 2. Redimensionner l'image vers 1536×1024 ──────────────────────────
-  const imgC = document.createElement("canvas");
-  imgC.width = API_W; imgC.height = API_H;
-  const iCtx = imgC.getContext("2d");
-  iCtx.imageSmoothingEnabled = true;
-  iCtx.imageSmoothingQuality = "high";
-  iCtx.drawImage(ctx.canvas, 0, 0, W, H, 0, 0, API_W, API_H);
-  const imageB64 = imgC.toDataURL("image/png").split(",")[1];
-
-  // ── 3. Masque : opaque partout, transparent sur les phares (rectangles) ─
-  const maskC = document.createElement("canvas");
-  maskC.width = API_W; maskC.height = API_H;
-  const mCtx = maskC.getContext("2d");
-  mCtx.fillStyle = "black";
-  mCtx.fillRect(0, 0, API_W, API_H);
-  mCtx.globalCompositeOperation = "destination-out";
   for (const l of lights) {
     const pad = 0.02;
-    const lx = Math.max(0, (l.x - pad) * API_W);
-    const ly = Math.max(0, (l.y - pad) * API_H);
-    const lw = Math.min(API_W - lx, (l.w + pad * 2) * API_W);
-    const lh = Math.min(API_H - ly, (l.h + pad * 2) * API_H);
-    mCtx.fillRect(lx, ly, lw, lh);  // rectangulaire : couvre tout le phare
+    const lx = Math.max(0, Math.round((l.x - pad) * W));
+    const ly = Math.max(0, Math.round((l.y - pad) * H));
+    const lw = Math.min(W - lx, Math.round((l.w + pad * 2) * W));
+    const lh = Math.min(H - ly, Math.round((l.h + pad * 2) * H));
+    if (lw < 5 || lh < 5) continue;
+    console.log(`[Headlights] Correction zone: (${lx},${ly}) ${lw}×${lh}px`);
+    correctHeadlightZone(ctx, lx, ly, lw, lh);
   }
-  const maskB64 = maskC.toDataURL("image/png").split(",")[1];
-
-  // ── 4. Appel images/edits ─────────────────────────────────────────────
-  console.log(`[Headlights] Appel images/edits (${lights.length} phare(s))...`);
-  const resp = await fetch("/api/polish-headlights-ai", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
-  });
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => String(resp.status));
-    console.error("[Headlights] Erreur API:", resp.status, errText);
-    return;
-  }
-  const data = await resp.json();
-  if (!data.imageBase64) {
-    console.error("[Headlights] Pas d'image dans la réponse:", data);
-    return;
-  }
-  console.log("[Headlights] Image reçue, remplacement du canvas...");
-
-  // ── 5. Remplacer le canvas entier par le résultat ─────────────────────
-  const resImg = await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = "data:image/png;base64," + data.imageBase64;
-  });
-  ctx.clearRect(0, 0, W, H);
-  ctx.drawImage(resImg, 0, 0, W, H);
-
   console.log("[Headlights] Lustrage terminé ✓");
 }
 
