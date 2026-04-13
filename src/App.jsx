@@ -375,72 +375,115 @@ function autoEnhance(ctx, W, H) {
   ctx.putImageData(id, 0, 0);
 }
 
-// ── Lustrage des optiques — correction sélective sur toute l'image ────────────
-// Cible uniquement les pixels ayant la signature colorimétrique du plastique
-// jauni (ambre chaud, luminosité moyenne). Aucune détection de position nécessaire.
-function polishHeadlights(ctx, W, H) {
-  const id = ctx.getImageData(0, 0, W, H);
-  const d  = id.data;
-
-  for (let k = 0; k < d.length; k += 4) {
-    const r = d[k], g = d[k+1], b = d[k+2];
-    const lum = r * 0.299 + g * 0.587 + b * 0.114;
-
-    // ── Détection du jaunissement par pixel ─────────────────────────────
-    const warmth = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
-    if (warmth < 0.06) continue;
-
-    // Saturation HSV
-    const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
-    const delta = cMax - cMin;
-    const sat = cMax > 0 ? delta / cMax : 0;
-
-    // Hue (0-360)
-    let hue = 0;
-    if (delta > 5) {
-      if (cMax === r)      hue = 60 * (((g - b) / delta) % 6);
-      else if (cMax === g) hue = 60 * ((b - r) / delta + 2);
-      else                 hue = 60 * ((r - g) / delta + 4);
-      if (hue < 0) hue += 360;
-    }
-
-    // Cibler jaune/ambre (15°-65°), saturation significative, lum moyenne
-    if (hue < 15 || hue > 65) continue;
-    if (sat < 0.15 || lum < 30 || lum > 230) continue;
-
-    // ── Force progressive : proportionnelle au jaunissement réel ────────
-    // Plus le pixel est jaune, plus on corrige — mais plafonné à 0.7
-    const blend = Math.min(0.70, warmth * 3.0 * Math.min(1.0, sat * 2.0));
-    if (blend < 0.03) continue;
-
-    // ── Correction couleur : désaturation vers gris neutre ───────────────
-    const targetR = lum * 0.96;
-    const targetG = lum * 1.00;
-    const targetB = lum * 1.05;
-
-    let newR = r + (targetR - r) * blend;
-    let newG = g + (targetG - g) * blend;
-    let newB = b + (targetB - b) * blend;
-
-    // ── Clarté : boost luminosité + contraste local ────────────────────
-    // Plastique neuf = plus clair et plus net que plastique oxydé
-    const clarity = blend * 0.35;
-    // Eclaircir (simuler transparence vs opacité du voile)
-    newR = newR + (255 - newR) * clarity * 0.25;
-    newG = newG + (255 - newG) * clarity * 0.25;
-    newB = newB + (255 - newB) * clarity * 0.25;
-    // Contraste local : amplifier les écarts par rapport à la luminosité moyenne (128)
-    const contrastBoost = clarity * 0.4;
-    const newLum = newR * 0.299 + newG * 0.587 + newB * 0.114;
-    newR = newR + (newR - newLum) * contrastBoost;
-    newG = newG + (newG - newLum) * contrastBoost;
-    newB = newB + (newB - newLum) * contrastBoost;
-
-    d[k]   = Math.max(0, Math.min(255, Math.round(newR)));
-    d[k+1] = Math.max(0, Math.min(255, Math.round(newG)));
-    d[k+2] = Math.max(0, Math.min(255, Math.round(newB)));
+// ── Détection des phares via GPT-4o-mini ─────────────────────────────────────
+async function detectHeadlights(b64) {
+  try {
+    const r = await fetch("/api/headlights", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ b64 }),
+    });
+    const data = await r.json();
+    return Array.isArray(data.lights) ? data.lights : [];
+  } catch(e) {
+    console.error("detectHeadlights error:", e);
+    return [];
   }
-  ctx.putImageData(id, 0, 0);
+}
+
+// ── Lustrage IA des optiques — image complète + masque ───────────────────────
+// Envoie l'image ENTIÈRE à gpt-image-1 avec un masque transparent sur les phares.
+// L'IA voit toute la voiture → comprend la forme, l'angle, et restaure naturellement.
+const API_W = 1536, API_H = 1024;
+
+async function aiPolishHeadlights(ctx, lights, W, H) {
+  if (!lights.length) return;
+
+  // ── 1. Redimensionner l'image complète vers 1536×1024 ─────────────────
+  const imgC = document.createElement("canvas");
+  imgC.width = API_W; imgC.height = API_H;
+  const iCtx = imgC.getContext("2d");
+  iCtx.imageSmoothingEnabled = true;
+  iCtx.imageSmoothingQuality = "high";
+  iCtx.drawImage(ctx.canvas, 0, 0, W, H, 0, 0, API_W, API_H);
+  const imageB64 = imgC.toDataURL("image/png").split(",")[1];
+
+  // ── 2. Créer le masque : opaque partout, transparent sur les phares ───
+  const maskC = document.createElement("canvas");
+  maskC.width = API_W; maskC.height = API_H;
+  const mCtx = maskC.getContext("2d");
+  // Remplir en noir opaque (zones à préserver)
+  mCtx.fillStyle = "black";
+  mCtx.fillRect(0, 0, API_W, API_H);
+  // Découper les zones phares (transparent = zones à éditer)
+  mCtx.globalCompositeOperation = "destination-out";
+  for (const light of lights) {
+    const pad = 0.015; // petite marge autour du phare
+    const lx = Math.max(0, (light.x - pad) * API_W);
+    const ly = Math.max(0, (light.y - pad) * API_H);
+    const lw = Math.min(API_W - lx, (light.w + pad * 2) * API_W);
+    const lh = Math.min(API_H - ly, (light.h + pad * 2) * API_H);
+    // Forme elliptique pour un fondu naturel
+    const cx = lx + lw / 2, cy = ly + lh / 2;
+    const rx = lw / 2, ry = lh / 2;
+    mCtx.beginPath();
+    mCtx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    mCtx.fill();
+  }
+  const maskB64 = maskC.toDataURL("image/png").split(",")[1];
+
+  // ── 3. Appel API (image complète + masque) ────────────────────────────
+  const resp = await fetch("/api/polish-headlights-ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
+  });
+  if (!resp.ok) { console.error("AI headlight API error:", resp.status); return; }
+  const data = await resp.json();
+  if (!data.imageBase64) { console.error("No result from AI headlight API"); return; }
+
+  // ── 4. Recomposer : ne prendre que les zones phares du résultat IA ────
+  const resImg = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = "data:image/png;base64," + data.imageBase64;
+  });
+
+  // Pour chaque phare, copier la zone depuis le résultat IA vers le canvas original
+  for (const light of lights) {
+    const pad = 0.03; // marge un peu plus grande pour le fondu
+    const lx = Math.max(0, Math.round((light.x - pad) * W));
+    const ly = Math.max(0, Math.round((light.y - pad) * H));
+    const lw = Math.min(W - lx, Math.round((light.w + pad * 2) * W));
+    const lh = Math.min(H - ly, Math.round((light.h + pad * 2) * H));
+    if (lw < 10 || lh < 10) continue;
+
+    // Extraire la zone correspondante depuis le résultat IA (coordonnées API)
+    const sx = (light.x - pad) * API_W;
+    const sy = (light.y - pad) * API_H;
+    const sw = (light.w + pad * 2) * API_W;
+    const sh = (light.h + pad * 2) * API_H;
+
+    // Dessiner sur un canvas temporaire avec fondu elliptique aux bords
+    const pC = document.createElement("canvas");
+    pC.width = lw; pC.height = lh;
+    const pCtx = pC.getContext("2d");
+    pCtx.imageSmoothingEnabled = true;
+    pCtx.imageSmoothingQuality = "high";
+    pCtx.drawImage(resImg, sx, sy, sw, sh, 0, 0, lw, lh);
+
+    // Masque elliptique doux pour fondre avec l'original
+    pCtx.globalCompositeOperation = "destination-in";
+    const grd = pCtx.createRadialGradient(lw/2, lh/2, Math.min(lw, lh) * 0.25, lw/2, lh/2, Math.max(lw, lh) * 0.50);
+    grd.addColorStop(0, "rgba(0,0,0,1)");
+    grd.addColorStop(0.85, "rgba(0,0,0,0.9)");
+    grd.addColorStop(1, "rgba(0,0,0,0)");
+    pCtx.fillStyle = grd;
+    pCtx.fillRect(0, 0, lw, lh);
+
+    ctx.drawImage(pC, lx, ly);
+  }
 }
 
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
@@ -688,10 +731,11 @@ async function detectPlate(b64, imgW, imgH) {
 
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
-  // Détection plaque + (angle GPT-4o seulement si showroom activé) en parallèle
-  const [plate, angleData] = await Promise.all([
+  // Détection plaque + angle + optiques en parallèle
+  const [plate, angleData, lights] = await Promise.all([
     detectPlate(b64, imgW, imgH),
     useGptAngle ? detectCarAngle(b64) : Promise.resolve(null),
+    headlightPolish ? detectHeadlights(b64) : Promise.resolve([]),
   ]);
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
@@ -705,8 +749,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = "none";
   // Amélioration couleurs (canvas)
   if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
-  // Lustrage des optiques (correction couleur sélective sur toute l'image)
-  if (headlightPolish) polishHeadlights(ctx, c.width, c.height);
+  // Lustrage des optiques IA (image complète + masque → gpt-image-1)
+  if (lights.length > 0) await aiPolishHeadlights(ctx, lights, c.width, c.height);
   // Sol : flou adaptatif pro (après couleurs) ou adoucissement simple
   if (enhancePro) applyFloorBlur(ctx, c, c.width, c.height);
   else if (floorClean) {
