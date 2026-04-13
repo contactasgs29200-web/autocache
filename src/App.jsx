@@ -455,7 +455,7 @@ async function aiPolishHeadlights(ctx, lights, W, H) {
   }
   console.log("[Headlights] Image IA reçue, compositing en cours...");
 
-  // ── 4. Recomposer : ne prendre que les zones phares du résultat IA ────
+  // ── 4. Charger le résultat IA ─────────────────────────────────────────
   const resImg = await new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -463,41 +463,30 @@ async function aiPolishHeadlights(ctx, lights, W, H) {
     img.src = "data:image/png;base64," + data.imageBase64;
   });
 
-  // Pour chaque phare, copier la zone depuis le résultat IA vers le canvas original
-  for (const light of lights) {
-    const pad = 0.03; // marge un peu plus grande pour le fondu
-    const lx = Math.max(0, Math.round((light.x - pad) * W));
-    const ly = Math.max(0, Math.round((light.y - pad) * H));
-    const lw = Math.min(W - lx, Math.round((light.w + pad * 2) * W));
-    const lh = Math.min(H - ly, Math.round((light.h + pad * 2) * H));
-    if (lw < 10 || lh < 10) continue;
+  // ── 5. Compositing propre : masque → alignement garanti ──────────────
+  // patchC = résultat IA entier, découpé aux zones phares grâce au MÊME masque
+  // qu'on a envoyé à l'API. Pas de bounding boxes → pas de décalage possible.
+  //
+  // Logique :
+  //   - maskC est opaque (noir) partout SAUF les phares (transparent)
+  //   - destination-out efface le résultat IA là où le masque est opaque
+  //   - Il ne reste que les phares IA → on les colle sur le canvas original
+  const patchC = document.createElement("canvas");
+  patchC.width = W; patchC.height = H;
+  const pCtx = patchC.getContext("2d");
+  pCtx.imageSmoothingEnabled = true;
+  pCtx.imageSmoothingQuality = "high";
 
-    // Extraire la zone correspondante depuis le résultat IA (coordonnées API)
-    const sx = (light.x - pad) * API_W;
-    const sy = (light.y - pad) * API_H;
-    const sw = (light.w + pad * 2) * API_W;
-    const sh = (light.h + pad * 2) * API_H;
+  // Résultat IA mis à l'échelle du canvas original
+  pCtx.drawImage(resImg, 0, 0, W, H);
 
-    // Dessiner sur un canvas temporaire avec fondu elliptique aux bords
-    const pC = document.createElement("canvas");
-    pC.width = lw; pC.height = lh;
-    const pCtx = pC.getContext("2d");
-    pCtx.imageSmoothingEnabled = true;
-    pCtx.imageSmoothingQuality = "high";
-    pCtx.drawImage(resImg, sx, sy, sw, sh, 0, 0, lw, lh);
+  // Effacer tout ce qui n'est pas phare (le masque est opaque hors phares)
+  pCtx.globalCompositeOperation = "destination-out";
+  pCtx.drawImage(maskC, 0, 0, W, H);
 
-    // Masque elliptique doux pour fondre avec l'original
-    pCtx.globalCompositeOperation = "destination-in";
-    const grd = pCtx.createRadialGradient(lw/2, lh/2, Math.min(lw, lh) * 0.25, lw/2, lh/2, Math.max(lw, lh) * 0.50);
-    grd.addColorStop(0, "rgba(0,0,0,1)");
-    grd.addColorStop(0.85, "rgba(0,0,0,0.9)");
-    grd.addColorStop(1, "rgba(0,0,0,0)");
-    pCtx.fillStyle = grd;
-    pCtx.fillRect(0, 0, lw, lh);
+  // Coller la patch (phares IA uniquement) sur le canvas original
+  ctx.drawImage(patchC, 0, 0);
 
-    ctx.drawImage(pC, lx, ly);
-    console.log(`[Headlights] Phare composé sur canvas: pos(${lx},${ly}) taille(${lw}x${lh})`);
-  }
   console.log("[Headlights] Lustrage terminé ✓");
 }
 
