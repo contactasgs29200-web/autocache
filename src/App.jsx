@@ -477,6 +477,80 @@ async function aiPolishHeadlights(ctx, W, H, b64Original) {
   console.log("[Headlights] Lustrage terminé ✓");
 }
 
+// ── Lustrage Pro — Stability AI inpainting ────────────────────────────────────
+// Masque Stability AI : blanc (255) = zones à éditer, noir (0) = zones à garder.
+// Préserve la voiture originale, modifie uniquement les phares détectés.
+const LPRO_W = 1024, LPRO_H = 1024;
+
+async function proPolishHeadlights(ctx, W, H, b64Original) {
+  // 1. Détecter les phares
+  const lights = await detectHeadlights(b64Original);
+  if (!lights.length) {
+    console.warn("[LustrageePro] Aucun phare détecté → fallback canvas");
+    correctHeadlightZone(ctx, 0, 0, W, H);
+    return;
+  }
+
+  // 2. Redimensionner l'image (carré 1024×1024 pour Stability AI)
+  const imgC = document.createElement("canvas");
+  imgC.width = LPRO_W; imgC.height = LPRO_H;
+  const iCtx = imgC.getContext("2d");
+  iCtx.imageSmoothingEnabled = true;
+  iCtx.imageSmoothingQuality = "high";
+  iCtx.drawImage(ctx.canvas, 0, 0, W, H, 0, 0, LPRO_W, LPRO_H);
+  const imageB64 = imgC.toDataURL("image/png").split(",")[1];
+
+  // 3. Masque blanc sur fond noir — zones phares en blanc
+  const maskC = document.createElement("canvas");
+  maskC.width = LPRO_W; maskC.height = LPRO_H;
+  const mCtx = maskC.getContext("2d");
+  mCtx.fillStyle = "black";
+  mCtx.fillRect(0, 0, LPRO_W, LPRO_H);
+  mCtx.fillStyle = "white";
+  for (const l of lights) {
+    const pad = 0.025;
+    const lx = Math.max(0, (l.x - pad) * LPRO_W);
+    const ly = Math.max(0, (l.y - pad) * LPRO_H);
+    const lw = Math.min(LPRO_W - lx, (l.w + pad * 2) * LPRO_W);
+    const lh = Math.min(LPRO_H - ly, (l.h + pad * 2) * LPRO_H);
+    mCtx.fillRect(lx, ly, lw, lh);
+  }
+  const maskB64 = maskC.toDataURL("image/png").split(",")[1];
+
+  // 4. Appel Stability AI
+  console.log(`[LustrageePro] Appel Stability AI (${lights.length} phare(s))...`);
+  const resp = await fetch("/api/lustrage-pro", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageBase64: imageB64, maskBase64: maskB64 }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => String(resp.status));
+    console.error("[LustrageePro] Erreur API:", resp.status, errText);
+    console.warn("[LustrageePro] Fallback canvas");
+    correctHeadlightZone(ctx, 0, 0, W, H);
+    return;
+  }
+  const data = await resp.json();
+  if (!data.imageBase64) {
+    console.error("[LustrageePro] Pas d'image:", data);
+    correctHeadlightZone(ctx, 0, 0, W, H);
+    return;
+  }
+  console.log("[LustrageePro] Image reçue, remplacement canvas...");
+
+  // 5. Remplacer le canvas par le résultat Stability AI
+  const resImg = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = "data:image/png;base64," + data.imageBase64;
+  });
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(resImg, 0, 0, W, H);
+  console.log("[LustrageePro] Lustrage Pro terminé ✓");
+}
+
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
 function makeShowroomBackground(index, W, H) {
   const c = document.createElement('canvas');
@@ -720,7 +794,7 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, lustrageePro = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
   // Détection plaque + angle en parallèle
   const [plate, angleData] = await Promise.all([
@@ -739,8 +813,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = "none";
   // Amélioration couleurs (canvas)
   if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
-  // Lustrage des optiques IA — détection + images/edits + résultat complet
-  if (headlightPolish) await aiPolishHeadlights(ctx, c.width, c.height, b64);
+  // Lustrage des optiques (canvas) ou Lustrage Pro (Stability AI)
+  if (lustrageePro) await proPolishHeadlights(ctx, c.width, c.height, b64);
+  else if (headlightPolish) await aiPolishHeadlights(ctx, c.width, c.height, b64);
   // Sol : flou adaptatif pro (après couleurs) ou adoucissement simple
   if (enhancePro) applyFloorBlur(ctx, c, c.width, c.height);
   else if (floorClean) {
@@ -986,6 +1061,7 @@ export default function AutoCache() {
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [enhance, setEnhance] = useState(false);
   const [headlightPolish, setHeadlightPolish] = useState(false);
+  const [lustrageProEnabled, setLustrageProEnabled] = useState(false);
   const [floorClean, setFloorClean] = useState(false);
   const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
   const [tab, setTab] = useState("setup");
@@ -1169,7 +1245,7 @@ export default function AutoCache() {
       : null;
 
     for (let i = 0; i < photosToProcess.length; i++) {
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, floorClean, enhancePro);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, floorClean, enhancePro, lustrageProEnabled);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
@@ -1212,7 +1288,8 @@ export default function AutoCache() {
   const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
   const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
   const canUseShowroom  = userPlan === "pro" || userPlan === "trial";
-  const canUseHeadlight = userPlan === "pro";
+  const canUseHeadlight   = userPlan === "pro";
+  const canUseLustrageePro = userPlan === "pro";
   const canStart = logo && photos.length > 0 && !processing;
 
   const logout = async () => {
@@ -1935,8 +2012,16 @@ export default function AutoCache() {
                     toggle: () => { if (!canUseHeadlight) { setShowPlansModal(true); return; } setHeadlightPolish(p => !p); },
                     icon: "💡",
                     label: "Lustrage des optiques",
-                    sub: canUseHeadlight ? "Réduit le jaunissement des phares et feux" : "Disponible avec l'abonnement Pro",
+                    sub: canUseHeadlight ? "Correction colorimétrique du jaunissement" : "Disponible avec l'abonnement Pro",
                     locked: !canUseHeadlight,
+                  },
+                  {
+                    active: lustrageProEnabled,
+                    toggle: () => { if (!canUseLustrageePro) { setShowPlansModal(true); return; } setLustrageProEnabled(p => !p); },
+                    icon: "✦",
+                    label: "Lustrage Pro",
+                    sub: canUseLustrageePro ? "Restauration IA par Stability AI — résultat photo réaliste" : "Disponible avec l'abonnement Pro",
+                    locked: !canUseLustrageePro,
                   },
                 ].map(({ active, toggle, icon, label, sub, locked }) => (
                   <div key={label}
