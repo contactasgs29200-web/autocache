@@ -1,7 +1,7 @@
 // /api/lustrage-pro.js
 // Lustrage Pro via Stability AI inpainting (stable-image/edit/inpaint).
-// Contrairement à gpt-image-1, Stability AI préserve la voiture originale
-// et n'inpaint QUE les zones blanches du masque.
+// Préserve la voiture originale, inpaint uniquement les zones blanches du masque.
+// Utilise un builder multipart manuel (compatible toutes versions Node.js).
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } };
 
@@ -18,20 +18,39 @@ export default async function handler(req, res) {
   const imageBuffer = Buffer.from(imageBase64, 'base64');
   const maskBuffer  = Buffer.from(maskBase64,  'base64');
 
-  // Stability AI attend un multipart/form-data avec image + mask + prompt
-  const formData = new FormData();
-  formData.append('image', new Blob([imageBuffer], { type: 'image/png' }), 'car.png');
-  formData.append('mask',  new Blob([maskBuffer],  { type: 'image/png' }), 'mask.png');
-  formData.append('prompt',
-    'Brand new crystal clear transparent headlight plastic lens cover, ' +
-    'no yellowing, no oxidation, no hazing, clean reflectors visible inside, ' +
-    'professional headlight restoration, photorealistic'
-  );
-  formData.append('negative_prompt',
-    'yellow, amber, foggy, hazy, oxidized, blurry, distorted, different car'
-  );
-  formData.append('output_format', 'png');
-  formData.append('strength', '0.75');
+  const boundary = '----StabilityBoundary' + Date.now();
+  const CRLF = '\r\n';
+
+  function part(name, filename, contentType, data) {
+    const header =
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="${name}"; filename="${filename}"${CRLF}` +
+      `Content-Type: ${contentType}${CRLF}${CRLF}`;
+    return Buffer.concat([Buffer.from(header), data, Buffer.from(CRLF)]);
+  }
+  function field(name, value) {
+    return Buffer.from(
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}` +
+      `${value}${CRLF}`
+    );
+  }
+
+  const body = Buffer.concat([
+    part('image', 'car.png',  'image/png', imageBuffer),
+    part('mask',  'mask.png', 'image/png', maskBuffer),
+    field('prompt',
+      'Brand new crystal clear transparent headlight plastic lens cover, ' +
+      'no yellowing, no oxidation, no hazing, clean reflectors visible inside, ' +
+      'professional headlight restoration, photorealistic'
+    ),
+    field('negative_prompt',
+      'yellow, amber, foggy, hazy, oxidized, blurry, distorted, different car'
+    ),
+    field('output_format', 'png'),
+    field('strength', '0.75'),
+    Buffer.from(`--${boundary}--${CRLF}`),
+  ]);
 
   try {
     const response = await fetch(
@@ -41,8 +60,9 @@ export default async function handler(req, res) {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           Accept: 'image/*',
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
         },
-        body: formData,
+        body,
       }
     );
 
