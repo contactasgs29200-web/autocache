@@ -1,7 +1,6 @@
 // /api/polish-headlights-ai.js
-// Reçoit l'image COMPLÈTE du véhicule + un masque PNG (transparent sur les phares).
-// Envoie à gpt-image-1 (images/edits) pour restaurer uniquement les zones masquées.
-// L'IA voit toute la voiture → résultat naturel et cohérent.
+// Reçoit l'image COMPLÈTE du véhicule + un masque entièrement transparent.
+// L'IA régénère la photo entière guidée uniquement par le prompt → restaure les phares.
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } };
 
@@ -37,13 +36,13 @@ export default async function handler(req, res) {
   }
 
   const prompt =
-    'Restore the car headlight plastic lens covers in the transparent/marked areas. ' +
-    'The headlight plastic is yellowed and oxidized from UV exposure. ' +
-    'Make the plastic look brand new: perfectly clear, transparent, and clean. ' +
-    'You should be able to clearly see the reflectors, bulbs and chrome inside. ' +
-    'The headlights are OFF — do NOT add any light, glow, beam or illumination. ' +
-    'Keep the exact same headlight shape, size, position and surrounding bodywork. ' +
-    'The result must look like a real photograph, not artificial.';
+    'This is a car photo. The headlight plastic lens covers are yellowed and oxidized from UV exposure. ' +
+    'Restore ONLY the headlight lens covers to look brand new: perfectly clear, transparent, and clean. ' +
+    'You should be able to clearly see the reflectors, bulbs and chrome inside the headlights. ' +
+    'The headlights are OFF — do NOT add any light, glow, beam or illumination effect. ' +
+    'Keep EVERYTHING else in the photo EXACTLY the same: the car body, color, background, wheels, windows, reflections, license plate. ' +
+    'Only the headlight plastic clarity should change. ' +
+    'The result must look like a real photograph taken after professional headlight restoration.';
 
   const body = Buffer.concat([
     part('image', 'car.png', 'image/png', imageBuffer),
