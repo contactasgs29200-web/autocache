@@ -88,15 +88,18 @@ export default async function handler(req, res) {
     }
 
     if (event.type === "invoice.paid") {
-      // Paiement réussi (renouvellement ou rattrapage d'impayé) → réactive le plan
+      // Paiement réussi (renouvellement ou rattrapage d'impayé) → réactive le plan + remet les crédits à zéro
       const invoice = event.data.object;
       if (invoice.subscription && invoice.billing_reason === "subscription_cycle") {
         const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
         const userId = subscription.metadata?.userId;
         const plan   = subscription.metadata?.plan;
         if (userId && plan) {
-          await setUserPlan(userId, plan);
-          console.log(`Renouvellement réussi — user ${userId} plan "${plan}" réactivé`);
+          const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
+            user_metadata: { plan, photos_used: 0 },
+          });
+          if (error) throw new Error(`Supabase reset failed: ${error.message}`);
+          console.log(`Renouvellement réussi — user ${userId} plan "${plan}" réactivé, crédits remis à zéro`);
         }
       }
     }
