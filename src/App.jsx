@@ -292,7 +292,7 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
 }
 
 
-// ── Amélioration Pro — couleurs froides + flou sol adaptatif ─────────────────
+// ── Amélioration automatique — couleurs froides + flou sol adaptatif ──────────
 // Combine la correction colorimétrique (autoEnhance) et un adoucissement
 // du sol par flou CSS appliqué uniquement sur la zone basse via masque canvas.
 // Aucun appel API, aucune déformation, transitions douces.
@@ -2004,7 +2004,7 @@ export default function AutoCache() {
                     active: enhancePro,
                     toggle: () => setEnhancePro(p => !p),
                     icon: "✨",
-                    label: "Amélioration Pro",
+                    label: "Amélioration automatique",
                     sub: "Couleurs froides & naturelles",
                   },
                   {
