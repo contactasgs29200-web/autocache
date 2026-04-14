@@ -48,7 +48,7 @@ export default async function handler(req, res) {
       'yellow, amber, foggy, hazy, oxidized, blurry, distorted, different car'
     ),
     field('output_format', 'png'),
-    field('strength', '0.75'),
+    field('strength', '0.35'),
     Buffer.from(`--${boundary}--${CRLF}`),
   ]);
 

@@ -537,17 +537,30 @@ async function proPolishHeadlights(ctx, W, H, b64Original) {
     correctHeadlightZone(ctx, 0, 0, W, H);
     return;
   }
-  console.log("[LustrageePro] Image reçue, remplacement canvas...");
+  console.log("[LustrageePro] Image reçue, compositing zones phares...");
 
-  // 5. Remplacer le canvas par le résultat Stability AI
+  // 5. Composite uniquement les zones de phares depuis le résultat AI
+  // L'image AI est en 1024×1024, on copie seulement les rectangles de phares
   const resImg = await new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = reject;
     img.src = "data:image/png;base64," + data.imageBase64;
   });
-  ctx.clearRect(0, 0, W, H);
-  ctx.drawImage(resImg, 0, 0, W, H);
+  for (const l of lights) {
+    const pad = 0.025;
+    // Source dans l'image AI (1024×1024)
+    const sx = Math.max(0, (l.x - pad) * LPRO_W);
+    const sy = Math.max(0, (l.y - pad) * LPRO_H);
+    const sw = Math.min(LPRO_W - sx, (l.w + pad * 2) * LPRO_W);
+    const sh = Math.min(LPRO_H - sy, (l.h + pad * 2) * LPRO_H);
+    // Destination sur le canvas original (W×H)
+    const dx = Math.max(0, (l.x - pad) * W);
+    const dy = Math.max(0, (l.y - pad) * H);
+    const dw = Math.min(W - dx, (l.w + pad * 2) * W);
+    const dh = Math.min(H - dy, (l.h + pad * 2) * H);
+    ctx.drawImage(resImg, sx, sy, sw, sh, dx, dy, dw, dh);
+  }
   console.log("[LustrageePro] Lustrage Pro terminé ✓");
 }
 
