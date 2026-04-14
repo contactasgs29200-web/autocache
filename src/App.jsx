@@ -2904,12 +2904,13 @@ export default function AutoCache() {
                     {
                       key: "essential",
                       name: "Essentiel",
+                      price: "14,90 €",
                       badge: null,
                       features: [
                         { ok: true,  label: "Cache plaque personnalisé" },
                         { ok: true,  label: "Logo importé ou généré" },
                         { ok: true,  label: "Ajustements couleurs" },
-                        { ok: true,  label: "Amélioration Pro" },
+                        { ok: true,  label: "Amélioration automatique" },
                         { ok: false, label: "Lustrage des optiques" },
                         { ok: false, label: "Showroom Virtuel (fonds IA)" },
                         { ok: false, label: "Enseigne murale" },
@@ -2918,12 +2919,13 @@ export default function AutoCache() {
                     {
                       key: "pro",
                       name: "Pro",
+                      price: "24,90 €",
                       badge: "Recommandé",
                       features: [
                         { ok: true, label: "Cache plaque personnalisé" },
                         { ok: true, label: "Logo importé ou généré" },
                         { ok: true, label: "Ajustements couleurs" },
-                        { ok: true, label: "Amélioration Pro" },
+                        { ok: true, label: "Amélioration automatique" },
                         { ok: true, label: "Lustrage des optiques" },
                         { ok: true, label: "Showroom Virtuel (fonds IA)" },
                         { ok: true, label: "Enseigne murale" },
@@ -2940,6 +2942,10 @@ export default function AutoCache() {
                           <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 8, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
                         )}
                         <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 4 }}>{plan.name}</div>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 2 }}>
+                          <span style={{ fontSize: 22, fontWeight: 700, color: isPro ? "#f26522" : "#ccc" }}>{plan.price}</span>
+                          <span style={{ fontSize: 9, color: "#555", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>/mois</span>
+                        </div>
                         <div style={{ marginBottom: 20, marginTop: 14 }}>
                           {plan.features.map((f, i) => (
                             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
