@@ -2059,6 +2059,12 @@ export default function AutoCache() {
                 </div>
                 {showroomEnabled && (
                   <div style={{ padding: "12px 14px", background: "#121212", border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "rgba(242,101,34,0.06)", border: "1px solid rgba(242,101,34,0.2)", borderRadius: 3, padding: "9px 11px", marginBottom: 14 }}>
+                      <span style={{ color: "#f26522", fontSize: 13, flexShrink: 0, lineHeight: 1.4 }}>⚠</span>
+                      <p style={{ fontSize: 9, color: "#aaa", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7, margin: 0 }}>
+                        Pour un détourage optimal, utilisez une photo où le véhicule est <span style={{ color: "#ddd5c8" }}>seul dans le cadre</span>. La présence d'autres véhicules à proximité peut perturber l'analyse de l'IA et affecter la qualité du détourage.
+                      </p>
+                    </div>
                     <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "stretch" }}>
                       {[0, 1, 2, 3].map(idx => {
