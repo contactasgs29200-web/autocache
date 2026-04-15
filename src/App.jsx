@@ -2267,34 +2267,34 @@ export default function AutoCache() {
                     <div key={i} style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
                         <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#1e1e1e", display: "block" }} />
-                        <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4 }}>
                           <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>
                             {r.plateFound ? "✓ PLAQUE CACHÉE" : "⚠ NON DÉTECTÉE"}
                           </span>
                           {r.cropped && (
                             <span style={{ background: "rgba(242,101,34,0.85)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>✂ ROGNÉ</span>
                           )}
-                          {!r.plateFound && (
-                            <button
-                              onClick={e => {
-                                e.stopPropagation();
-                                openLightbox(r);
-                                const dc = { tl: { x: 0.35, y: 0.70 }, tr: { x: 0.65, y: 0.70 }, br: { x: 0.65, y: 0.78 }, bl: { x: 0.35, y: 0.78 } };
-                                adjustCornersRef.current = dc;
-                                setAdjustCorners(dc);
-                                setAdjustMode(true);
-                                setManualPlateMode(true);
-                                setCropMode(false);
-                              }}
-                              style={{ background: "rgba(242,101,34,0.92)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, border: "none", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}
-                            >⊕ Ajouter cache plaque</button>
-                          )}
                         </div>
                         <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: "3px 7px", fontSize: 9, color: "#aaa", fontFamily: "'JetBrains Mono',monospace" }}>🔍 Agrandir</div>
                       </div>
-                      <div style={{ padding: "9px 11px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #161616" }}>
-                        <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "68%" }}>{r.name}</div>
-                        <button onClick={() => downloadOne(r)} style={{ background: "transparent", border: "1px solid #2a2a2a", color: "#f26522", padding: "4px 11px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>DL</button>
+                      <div style={{ padding: "9px 11px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #161616", gap: 6 }}>
+                        <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{r.name}</div>
+                        {!r.plateFound && (
+                          <button
+                            onClick={e => {
+                              e.stopPropagation();
+                              openLightbox(r);
+                              const dc = { tl: { x: 0.35, y: 0.70 }, tr: { x: 0.65, y: 0.70 }, br: { x: 0.65, y: 0.78 }, bl: { x: 0.35, y: 0.78 } };
+                              adjustCornersRef.current = dc;
+                              setAdjustCorners(dc);
+                              setAdjustMode(true);
+                              setManualPlateMode(true);
+                              setCropMode(false);
+                            }}
+                            style={{ background: "#f26522", border: "none", color: "#090909", padding: "4px 9px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, whiteSpace: "nowrap", flexShrink: 0 }}
+                          >+ Cache plaque</button>
+                        )}
+                        <button onClick={() => downloadOne(r)} style={{ background: "transparent", border: "1px solid #2a2a2a", color: "#f26522", padding: "4px 11px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, flexShrink: 0 }}>DL</button>
                       </div>
                     </div>
                   ))}
