@@ -408,7 +408,7 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
 
     // Teinte ambre/jaune (jaunissement UV)
     const warmth = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
-    if (warmth < 0.04) continue;
+    if (warmth < 0.08) continue;
 
     // Saturation HSV
     const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
@@ -429,7 +429,7 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
     if (sat < 0.08 || lum < 20 || lum > 245) continue;
 
     // Intensité de correction proportionnelle au jaunissement — plus agressive
-    const blend = Math.min(0.97, warmth * 6.0 * Math.min(1.0, sat * 3.0));
+    const blend = Math.min(0.88, warmth * 5.0 * Math.min(1.0, sat * 2.5));
     if (blend < 0.04) continue;
 
     // Cible : gris neutre lumineux (simuler plastique transparent neuf, sans bleu)
