@@ -432,20 +432,20 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
     const blend = Math.min(0.97, warmth * 6.0 * Math.min(1.0, sat * 3.0));
     if (blend < 0.04) continue;
 
-    // Cible : gris neutre légèrement froid (simuler plastique transparent neuf)
-    const tR = lum * 0.90;
-    const tG = lum * 0.97;
-    const tB = lum * 1.12;
+    // Cible : gris neutre lumineux (simuler plastique transparent neuf, sans bleu)
+    const tR = lum * 0.97;
+    const tG = lum * 1.01;
+    const tB = lum * 1.03;
 
     let nR = r + (tR - r) * blend;
     let nG = g + (tG - g) * blend;
     let nB = b + (tB - b) * blend;
 
-    // Clarté : éclaircir (simuler transparence retrouvée)
-    const clarity = blend * 0.55;
-    nR += (255 - nR) * clarity * 0.25;
-    nG += (255 - nG) * clarity * 0.25;
-    nB += (255 - nB) * clarity * 0.25;
+    // Clarté : éclaircir pour simuler la transparence retrouvée
+    const clarity = blend * 0.75;
+    nR += (255 - nR) * clarity * 0.35;
+    nG += (255 - nG) * clarity * 0.35;
+    nB += (255 - nB) * clarity * 0.35;
 
     d[k]   = Math.max(0, Math.min(255, Math.round(nR)));
     d[k+1] = Math.max(0, Math.min(255, Math.round(nG)));
