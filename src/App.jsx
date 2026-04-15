@@ -608,21 +608,41 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const ch = carImg.height * scale;
   const carX = (W - cw) / 2 + offsetX;
   const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
-  // Ombre de contact au sol (ellipse dégradée sous les roues)
+  // Ombre réaliste deux couches — proportionnelle à la voiture
   const shadowCX = carX + cw / 2;
   const shadowCY = carY + ch;
-  const shadowRX = cw * 0.44;
-  const shadowRY = ch * 0.042;
-  const scaleY = shadowRY / shadowRX;
-  const groundGrad = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, shadowRX);
-  groundGrad.addColorStop(0,   'rgba(0,0,0,0.32)');
-  groundGrad.addColorStop(0.55,'rgba(0,0,0,0.14)');
-  groundGrad.addColorStop(1,   'rgba(0,0,0,0)');
+
+  // Couche 1 : ombre diffuse large (lumière ambiante, bords très doux)
+  const rx1 = cw * 0.50;
+  const ry1 = ch * 0.058;
+  const sy1 = ry1 / rx1;
+  const grad1 = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, rx1);
+  grad1.addColorStop(0,    'rgba(0,0,0,0.20)');
+  grad1.addColorStop(0.40, 'rgba(0,0,0,0.12)');
+  grad1.addColorStop(0.72, 'rgba(0,0,0,0.04)');
+  grad1.addColorStop(1,    'rgba(0,0,0,0)');
   ctx.save();
-  ctx.transform(1, 0, 0, scaleY, 0, shadowCY * (1 - scaleY));
-  ctx.fillStyle = groundGrad;
+  ctx.transform(1, 0, 0, sy1, 0, shadowCY * (1 - sy1));
+  ctx.fillStyle = grad1;
   ctx.beginPath();
-  ctx.arc(shadowCX, shadowCY, shadowRX, 0, Math.PI * 2);
+  ctx.arc(shadowCX, shadowCY, rx1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Couche 2 : ombre de contact étroite (zone de contact pneus/sol, plus sombre)
+  const rx2 = cw * 0.38;
+  const ry2 = ch * 0.020;
+  const sy2 = ry2 / rx2;
+  const grad2 = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, rx2);
+  grad2.addColorStop(0,    'rgba(0,0,0,0.52)');
+  grad2.addColorStop(0.38, 'rgba(0,0,0,0.28)');
+  grad2.addColorStop(0.70, 'rgba(0,0,0,0.07)');
+  grad2.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.save();
+  ctx.transform(1, 0, 0, sy2, 0, shadowCY * (1 - sy2));
+  ctx.fillStyle = grad2;
+  ctx.beginPath();
+  ctx.arc(shadowCX, shadowCY, rx2, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
   // Voiture (sans drop shadow générique)
