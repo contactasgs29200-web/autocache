@@ -1196,7 +1196,7 @@ export default function AutoCache() {
   const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
   const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
   const canUseShowroom  = userPlan === "pro" || userPlan === "trial";
-  const canUseHeadlight   = userPlan === "pro";
+  const canUseHeadlight   = userPlan === "pro" || userPlan === "essential";
   const canStart = logo && photos.length > 0 && !processing;
 
   const logout = async () => {
@@ -1919,7 +1919,7 @@ export default function AutoCache() {
                     toggle: () => { if (!canUseHeadlight) { setShowPlansModal(true); return; } setHeadlightPolish(p => !p); },
                     icon: "💡",
                     label: "Lustrage des optiques",
-                    sub: canUseHeadlight ? "Correction colorimétrique du jaunissement" : "Disponible avec l'abonnement Pro",
+                    sub: canUseHeadlight ? "Correction colorimétrique du jaunissement" : "Disponible dès l'abonnement Essentiel",
                     locked: !canUseHeadlight,
                   },
                 ].map(({ active, toggle, icon, label, sub, locked }) => (
@@ -2810,7 +2810,7 @@ export default function AutoCache() {
                         { ok: true,  label: "Logo importé ou généré" },
                         { ok: true,  label: "Ajustements couleurs" },
                         { ok: true,  label: "Amélioration automatique" },
-                        { ok: false, label: "Lustrage des optiques" },
+                        { ok: true,  label: "Lustrage des optiques" },
                         { ok: false, label: "Showroom Virtuel (fonds IA)" },
                         { ok: false, label: "Enseigne murale" },
                       ],
@@ -3051,7 +3051,7 @@ export default function AutoCache() {
                     { ok: true,  label: "Cache plaque personnalisé" },
                     { ok: true,  label: "Logo importé ou généré" },
                     { ok: true,  label: "Ajustements couleurs" },
-                    { ok: false, label: "Lustrage des optiques" },
+                    { ok: true,  label: "Lustrage des optiques" },
                     { ok: false, label: "Showroom Virtuel (fonds IA)" },
                     { ok: false, label: "Enseigne murale" },
                   ],
