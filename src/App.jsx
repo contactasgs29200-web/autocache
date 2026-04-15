@@ -608,9 +608,31 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const ch = carImg.height * scale;
   const carX = (W - cw) / 2 + offsetX;
   const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
+
+  // Trouver le bas réel de la voiture (dernier pixel non-transparent du cutout)
+  // pour éviter un écart entre l'ombre et les pneus
+  let actualBottomFrac = 1.0;
+  try {
+    const scanC = document.createElement('canvas');
+    scanC.width = carImg.width; scanC.height = carImg.height;
+    const scanCtx = scanC.getContext('2d');
+    scanCtx.drawImage(carImg, 0, 0);
+    const imgData = scanCtx.getImageData(0, 0, carImg.width, carImg.height);
+    const data = imgData.data;
+    let lastRow = carImg.height - 1;
+    for (let y = carImg.height - 1; y >= 0; y--) {
+      let hasPixel = false;
+      for (let x = 0; x < carImg.width; x++) {
+        if (data[(y * carImg.width + x) * 4 + 3] > 20) { hasPixel = true; break; }
+      }
+      if (hasPixel) { lastRow = y; break; }
+    }
+    actualBottomFrac = (lastRow + 1) / carImg.height;
+  } catch (_) { /* fallback to 1.0 */ }
+
   // Ombre réaliste deux couches — proportionnelle à la voiture
   const shadowCX = carX + cw / 2;
-  const shadowCY = carY + ch;
+  const shadowCY = carY + actualBottomFrac * ch;
 
   // Couche 1 : ombre diffuse large (lumière ambiante, bords très doux)
   const rx1 = cw * 0.50;
