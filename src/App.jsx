@@ -1194,6 +1194,7 @@ export default function AutoCache() {
           entry._wallLogoRatio    = wallLogoRatio;
         } catch(e) {
           console.error('Showroom processing error:', e);
+          setError('Showroom : ' + (e?.message || String(e)));
         }
       }
       all.push(entry);
