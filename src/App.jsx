@@ -1033,6 +1033,7 @@ export default function AutoCache() {
   const [adjustMode, setAdjustMode] = useState(false);
   const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
+  const [manualPlateMode, setManualPlateMode] = useState(false); // true = pose manuelle (plaque non détectée)
   const [lbZoom, setLbZoom] = useState(1);            // zoom de la lightbox (1 = normal, max 8)
   const [lbPan,  setLbPan]  = useState({ x: 0, y: 0 }); // décalage (px) du calque zoomé
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
@@ -1493,7 +1494,8 @@ export default function AutoCache() {
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
   const startAdjustDrag = (e, corner) => {
     e.preventDefault(); e.stopPropagation();
-    setAdjustDrag({ corner, startMx: e.clientX, startMy: e.clientY, startCorners: { ...adjustCorners, [corner]: { ...adjustCorners[corner] } } });
+    const sc = adjustCorners;
+    setAdjustDrag({ corner, startMx: e.clientX, startMy: e.clientY, startCorners: { tl: { ...sc.tl }, tr: { ...sc.tr }, br: { ...sc.br }, bl: { ...sc.bl } } });
   };
 
   // Rendu direct sur le canvas (pas de setState — pas de re-render — 60 fps)
@@ -1543,13 +1545,22 @@ export default function AutoCache() {
     const dx = (e.clientX - adjustDrag.startMx) / rect.width;
     const dy = (e.clientY - adjustDrag.startMy) / rect.height;
     const { corner, startCorners } = adjustDrag;
-    const newCorners = {
-      ...startCorners,
-      [corner]: {
-        x: Math.max(0, Math.min(1, startCorners[corner].x + dx)),
-        y: Math.max(0, Math.min(1, startCorners[corner].y + dy)),
-      }
-    };
+    const clamp = (v) => Math.max(0, Math.min(1, v));
+    let newCorners;
+    if (corner === 'center') {
+      // Déplace les 4 coins ensemble
+      newCorners = {
+        tl: { x: clamp(startCorners.tl.x + dx), y: clamp(startCorners.tl.y + dy) },
+        tr: { x: clamp(startCorners.tr.x + dx), y: clamp(startCorners.tr.y + dy) },
+        br: { x: clamp(startCorners.br.x + dx), y: clamp(startCorners.br.y + dy) },
+        bl: { x: clamp(startCorners.bl.x + dx), y: clamp(startCorners.bl.y + dy) },
+      };
+    } else {
+      newCorners = {
+        ...startCorners,
+        [corner]: { x: clamp(startCorners[corner].x + dx), y: clamp(startCorners[corner].y + dy) },
+      };
+    }
     adjustCornersRef.current = newCorners;
     setAdjustCorners(newCorners);          // met à jour les points oranges
     renderAdjustPreview(newCorners);       // met à jour le canvas en direct
@@ -2263,6 +2274,21 @@ export default function AutoCache() {
                           {r.cropped && (
                             <span style={{ background: "rgba(242,101,34,0.85)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>✂ ROGNÉ</span>
                           )}
+                          {!r.plateFound && (
+                            <button
+                              onClick={e => {
+                                e.stopPropagation();
+                                openLightbox(r);
+                                const dc = { tl: { x: 0.35, y: 0.70 }, tr: { x: 0.65, y: 0.70 }, br: { x: 0.65, y: 0.78 }, bl: { x: 0.35, y: 0.78 } };
+                                adjustCornersRef.current = dc;
+                                setAdjustCorners(dc);
+                                setAdjustMode(true);
+                                setManualPlateMode(true);
+                                setCropMode(false);
+                              }}
+                              style={{ background: "rgba(242,101,34,0.92)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, border: "none", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}
+                            >⊕ Ajouter cache plaque</button>
+                          )}
                         </div>
                         <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: "3px 7px", fontSize: 9, color: "#aaa", fontFamily: "'JetBrains Mono',monospace" }}>🔍 Agrandir</div>
                       </div>
@@ -2302,7 +2328,7 @@ export default function AutoCache() {
                 } else {
                   // Mode normal : sauvegarde la photo avec le cache plaque
                   const newDataURL = canvas.toDataURL('image/jpeg', 0.97);
-                  const updated = { ...lightbox, processed: newDataURL, corners: latestCorners };
+                  const updated = { ...lightbox, processed: newDataURL, corners: latestCorners, ...(manualPlateMode ? { plateFound: true } : {}) };
                   setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
                   setLightbox(updated);
                   // Régénère le showroom avec les nouveaux coins si showroom actif
@@ -2352,15 +2378,31 @@ export default function AutoCache() {
               {/* Bouton Ajuster — visible seulement si plaque détectée */}
               {lightbox.plateFound && lightbox.corners && (
                 <button
-                  onClick={e => { e.stopPropagation(); const nm = !adjustMode; if (nm) adjustCornersRef.current = lightbox.corners; setAdjustMode(nm); setCropMode(false); setCropDrag(null); setAdjustCorners(lightbox.corners); }}
+                  onClick={e => { e.stopPropagation(); const nm = !adjustMode; if (nm) adjustCornersRef.current = lightbox.corners; setAdjustMode(nm); setManualPlateMode(false); setCropMode(false); setCropDrag(null); setAdjustCorners(lightbox.corners); }}
                   style={{ background: adjustMode ? "#e8a020" : "#181818", color: adjustMode ? "#090909" : "#e8a020", border: `1px solid ${adjustMode ? "#e8a020" : "#3a2800"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >⊹ Ajuster</button>
+              )}
+
+              {/* Bouton Ajouter cache plaque — visible seulement si plaque NON détectée */}
+              {!lightbox.plateFound && !adjustMode && (
+                <button
+                  onClick={e => {
+                    e.stopPropagation();
+                    const dc = { tl: { x: 0.35, y: 0.70 }, tr: { x: 0.65, y: 0.70 }, br: { x: 0.65, y: 0.78 }, bl: { x: 0.35, y: 0.78 } };
+                    adjustCornersRef.current = dc;
+                    setAdjustCorners(dc);
+                    setAdjustMode(true);
+                    setManualPlateMode(true);
+                    setCropMode(false); setCropDrag(null);
+                  }}
+                  style={{ background: "#181818", color: "#f26522", border: "1px solid #3a1400", padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                >⊕ Ajouter cache plaque</button>
               )}
 
               {/* Télécharger / Fermer ajustement */}
               {adjustMode ? (
                 <button
-                  onClick={e => { e.stopPropagation(); setAdjustMode(false); setAdjustDrag(null); }}
+                  onClick={e => { e.stopPropagation(); setAdjustMode(false); setAdjustDrag(null); setManualPlateMode(false); }}
                   style={{ background: "#e8a020", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
                 >✓ Terminé</button>
               ) : cropMode ? (<>
@@ -2543,6 +2585,11 @@ export default function AutoCache() {
             {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
             {adjustMode && adjustCorners && (
               <div style={{ position: "absolute", inset: 0, cursor: adjustDrag ? "grabbing" : "crosshair" }}>
+                {manualPlateMode && !adjustDrag && (
+                  <div style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.75)", color: "#f26522", fontSize: 10, fontFamily: "'JetBrains Mono',monospace", padding: "5px 12px", borderRadius: 3, letterSpacing: 1, whiteSpace: "nowrap", pointerEvents: "none" }}>
+                    Glisser ✥ pour positionner · coins oranges pour ajuster · ✓ Terminé pour valider
+                  </div>
+                )}
                 {/* Contour du trapèze — viewBox 0-100 = % de l'image, pas d'unité % en SVG */}
                 <svg
                   viewBox="0 0 100 100"
@@ -2585,6 +2632,33 @@ export default function AutoCache() {
                     }}
                   />;
                 })}
+                {/* Poignée centrale — déplace toute la plaque d'un bloc */}
+                {(() => {
+                  const cx = (adjustCorners.tl.x + adjustCorners.tr.x + adjustCorners.br.x + adjustCorners.bl.x) / 4;
+                  const cy = (adjustCorners.tl.y + adjustCorners.tr.y + adjustCorners.br.y + adjustCorners.bl.y) / 4;
+                  const isMoving = adjustDrag?.corner === 'center';
+                  return (
+                    <div
+                      onMouseDown={e => startAdjustDrag(e, 'center')}
+                      title="Déplacer la plaque"
+                      style={{
+                        position: "absolute",
+                        left: `${cx * 100}%`, top: `${cy * 100}%`,
+                        width: 22, height: 22,
+                        background: isMoving ? "rgba(242,101,34,0.4)" : "rgba(242,101,34,0.85)",
+                        border: "2px solid #fff",
+                        borderRadius: "50%",
+                        transform: "translate(-50%,-50%)",
+                        cursor: isMoving ? "grabbing" : "move",
+                        zIndex: 11,
+                        boxShadow: "0 0 7px rgba(0,0,0,0.9)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 11, color: "#fff", fontWeight: 700, lineHeight: 1,
+                        userSelect: "none",
+                      }}
+                    >✥</div>
+                  );
+                })()}
               </div>
             )}
 
