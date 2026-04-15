@@ -455,15 +455,11 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
 }
 
 async function aiPolishHeadlights(ctx, W, H, b64Original) {
+  // Passe globale légère d'abord — traite les phares non détectés aussi
+  correctHeadlightZone(ctx, 0, 0, W, H);
+
+  // Passe ciblée sur les zones détectées pour renforcer
   const lights = await detectHeadlights(b64Original);
-
-  if (lights.length === 0) {
-    // Fallback : correction sur toute l'image si détection échoue
-    console.log("[Headlights] Pas de détection → correction globale");
-    correctHeadlightZone(ctx, 0, 0, W, H);
-    return;
-  }
-
   for (const l of lights) {
     const pad = 0.02;
     const lx = Math.max(0, Math.round((l.x - pad) * W));
@@ -471,7 +467,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original) {
     const lw = Math.min(W - lx, Math.round((l.w + pad * 2) * W));
     const lh = Math.min(H - ly, Math.round((l.h + pad * 2) * H));
     if (lw < 5 || lh < 5) continue;
-    console.log(`[Headlights] Correction zone: (${lx},${ly}) ${lw}×${lh}px`);
+    console.log(`[Headlights] Renfort zone: (${lx},${ly}) ${lw}×${lh}px`);
     correctHeadlightZone(ctx, lx, ly, lw, lh);
   }
   console.log("[Headlights] Lustrage terminé ✓");
