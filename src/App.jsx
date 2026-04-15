@@ -408,7 +408,7 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
 
     // Teinte ambre/jaune (jaunissement UV)
     const warmth = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
-    if (warmth < 0.08) continue;
+    if (warmth < 0.04) continue;
 
     // Saturation HSV
     const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
@@ -437,11 +437,15 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
     const tG = lum * 1.01;
     const tB = lum * 1.03;
 
-    const nR = r + (tR - r) * blend;
-    const nG = g + (tG - g) * blend;
-    const nB = b + (tB - b) * blend;
+    let nR = r + (tR - r) * blend;
+    let nG = g + (tG - g) * blend;
+    let nB = b + (tB - b) * blend;
 
-    // Pas de boost de clarté — évite les taches blanches sur zones chaudes non-phares
+    // Légère clarté uniquement sur pixels fortement jaunes (warmth élevé)
+    const clarity = Math.max(0, warmth - 0.08) * blend * 1.2;
+    nR += (255 - nR) * clarity;
+    nG += (255 - nG) * clarity;
+    nB += (255 - nB) * clarity;
 
     d[k]   = Math.max(0, Math.min(255, Math.round(nR)));
     d[k+1] = Math.max(0, Math.min(255, Math.round(nG)));
