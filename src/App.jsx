@@ -442,10 +442,10 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
     let nB = b + (tB - b) * blend;
 
     // Clarté : fort éclaircissement pour simuler la transparence (optique neuf = très clair)
-    const clarity = blend * 0.80;
-    nR += (255 - nR) * clarity * 0.45;
-    nG += (255 - nG) * clarity * 0.45;
-    nB += (255 - nB) * clarity * 0.45;
+    const clarity = blend * 0.65;
+    nR += (255 - nR) * clarity * 0.35;
+    nG += (255 - nG) * clarity * 0.35;
+    nB += (255 - nB) * clarity * 0.35;
 
     d[k]   = Math.max(0, Math.min(255, Math.round(nR)));
     d[k+1] = Math.max(0, Math.min(255, Math.round(nG)));
@@ -455,21 +455,8 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
 }
 
 async function aiPolishHeadlights(ctx, W, H, b64Original) {
-  // Passe globale légère d'abord — traite les phares non détectés aussi
+  // Passe unique globale — traite tous les phares de façon identique
   correctHeadlightZone(ctx, 0, 0, W, H);
-
-  // Passe ciblée sur les zones détectées pour renforcer
-  const lights = await detectHeadlights(b64Original);
-  for (const l of lights) {
-    const pad = 0.02;
-    const lx = Math.max(0, Math.round((l.x - pad) * W));
-    const ly = Math.max(0, Math.round((l.y - pad) * H));
-    const lw = Math.min(W - lx, Math.round((l.w + pad * 2) * W));
-    const lh = Math.min(H - ly, Math.round((l.h + pad * 2) * H));
-    if (lw < 5 || lh < 5) continue;
-    console.log(`[Headlights] Renfort zone: (${lx},${ly}) ${lw}×${lh}px`);
-    correctHeadlightZone(ctx, lx, ly, lw, lh);
-  }
   console.log("[Headlights] Lustrage terminé ✓");
 }
 
