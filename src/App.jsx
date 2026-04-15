@@ -442,10 +442,10 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
     let nB = b + (tB - b) * blend;
 
     // Clarté : fort éclaircissement pour simuler la transparence (optique neuf = très clair)
-    const clarity = blend * 0.95;
-    nR += (255 - nR) * clarity * 0.60;
-    nG += (255 - nG) * clarity * 0.60;
-    nB += (255 - nB) * clarity * 0.60;
+    const clarity = blend * 0.80;
+    nR += (255 - nR) * clarity * 0.45;
+    nG += (255 - nG) * clarity * 0.45;
+    nB += (255 - nB) * clarity * 0.45;
 
     d[k]   = Math.max(0, Math.min(255, Math.round(nR)));
     d[k+1] = Math.max(0, Math.min(255, Math.round(nG)));
