@@ -428,24 +428,20 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
     if (hue < 8 || hue > 80) continue;
     if (sat < 0.08 || lum < 20 || lum > 245) continue;
 
-    // Intensité de correction proportionnelle au jaunissement — plus agressive
-    const blend = Math.min(0.88, warmth * 5.0 * Math.min(1.0, sat * 2.5));
-    if (blend < 0.04) continue;
+    // Intensité de correction proportionnelle au jaunissement
+    const blend = Math.min(0.82, warmth * 4.5 * Math.min(1.0, sat * 2.0));
+    if (blend < 0.06) continue;
 
-    // Cible : gris neutre lumineux (simuler plastique transparent neuf, sans bleu)
+    // Cible : gris neutre (correction de teinte uniquement, pas de blanchiment)
     const tR = lum * 0.97;
     const tG = lum * 1.01;
     const tB = lum * 1.03;
 
-    let nR = r + (tR - r) * blend;
-    let nG = g + (tG - g) * blend;
-    let nB = b + (tB - b) * blend;
+    const nR = r + (tR - r) * blend;
+    const nG = g + (tG - g) * blend;
+    const nB = b + (tB - b) * blend;
 
-    // Clarté : fort éclaircissement pour simuler la transparence (optique neuf = très clair)
-    const clarity = blend * 0.65;
-    nR += (255 - nR) * clarity * 0.35;
-    nG += (255 - nG) * clarity * 0.35;
-    nB += (255 - nB) * clarity * 0.35;
+    // Pas de boost de clarté — évite les taches blanches sur zones chaudes non-phares
 
     d[k]   = Math.max(0, Math.min(255, Math.round(nR)));
     d[k+1] = Math.max(0, Math.min(255, Math.round(nG)));
