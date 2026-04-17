@@ -2468,10 +2468,17 @@ export default function AutoCache() {
           }}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: isMobile ? 8 : 16, userSelect: "none" }}
         >
+          {/* ── Bouton fermer fixe (mobile) — toujours accessible même si zoomé ── */}
+          {isMobile && (
+            <button
+              onClick={e => { e.stopPropagation(); closeLightbox(); }}
+              style={{ position: "fixed", top: 10, right: 10, zIndex: 1010, width: 36, height: 36, borderRadius: "50%", background: "rgba(20,20,20,0.92)", border: "1px solid #3a3a3a", color: "#ccc", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}
+            >✕</button>
+          )}
           {/* ── Barre du haut ── */}
-          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: "0 2px", flexWrap: "wrap", gap: 6 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: isMobile ? "0 44px 0 2px" : "0 2px", gap: 6 }}>
             {!isMobile && <div style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>}
-            <div style={{ display: "flex", gap: isMobile ? 5 : 8, alignItems: "center", flexWrap: "wrap", width: isMobile ? "100%" : "auto", justifyContent: isMobile ? "center" : "flex-end" }}>
+            <div style={{ display: "flex", gap: isMobile ? 6 : 8, alignItems: "center", overflowX: isMobile ? "auto" : "visible", width: isMobile ? "100%" : "auto", justifyContent: isMobile ? "flex-start" : "flex-end", paddingBottom: isMobile ? 4 : 0 }}>
 
               {/* Bouton Rogner toggle */}
               <button
@@ -2535,7 +2542,7 @@ export default function AutoCache() {
                 >⬇ {isMobile ? "DL" : "Télécharger"}</button>
               )}
 
-              <button onClick={closeLightbox} style={{ background: "#1e1e1e", color: "#aaa", border: "1px solid #2a2a2a", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 14, borderRadius: 2, minHeight: "unset" }}>✕</button>
+              {!isMobile && <button onClick={closeLightbox} style={{ background: "#1e1e1e", color: "#aaa", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 14, borderRadius: 2, minHeight: "unset" }}>✕</button>}
             </div>
           </div>
 
@@ -2553,10 +2560,13 @@ export default function AutoCache() {
               cursor: lbZoom > 1 ? (lbPanDrag ? "grabbing" : "grab") : "default",
             }}
           >
-            {/* Indicateur de zoom */}
+            {/* Indicateur de zoom — cliquable sur mobile pour réinitialiser */}
             {lbZoom > 1.05 && (
-              <div style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.75)", color: "#f26522", fontSize: 10, fontFamily: "'JetBrains Mono',monospace", padding: "3px 8px", borderRadius: 2, zIndex: 30, pointerEvents: "none", letterSpacing: 1 }}>
-                ×{lbZoom.toFixed(1)}
+              <div
+                onClick={isMobile ? (e => { e.stopPropagation(); setLbZoom(1); setLbPan({ x: 0, y: 0 }); }) : undefined}
+                style={{ position: "absolute", top: 8, right: isMobile ? 54 : 8, background: "rgba(0,0,0,0.82)", color: "#f26522", fontSize: 10, fontFamily: "'JetBrains Mono',monospace", padding: isMobile ? "5px 10px" : "3px 8px", borderRadius: 2, zIndex: 30, letterSpacing: 1, cursor: isMobile ? "pointer" : "default" }}
+              >
+                ×{lbZoom.toFixed(1)}{isMobile && " ↩"}
               </div>
             )}
             {/* Calque zoomé — transform appliqué ici, les overlays bougent avec l'image */}
