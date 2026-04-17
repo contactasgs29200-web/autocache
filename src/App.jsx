@@ -2638,8 +2638,8 @@ export default function AutoCache() {
                     }}
                   />;
                 })}
-                {/* Poignée centrale — déplace toute la plaque d'un bloc */}
-                {(() => {
+                {/* Poignée centrale — déplace toute la plaque d'un bloc (mode pose manuelle uniquement) */}
+                {manualPlateMode && (() => {
                   const cx = (adjustCorners.tl.x + adjustCorners.tr.x + adjustCorners.br.x + adjustCorners.bl.x) / 4;
                   const cy = (adjustCorners.tl.y + adjustCorners.tr.y + adjustCorners.br.y + adjustCorners.bl.y) / 4;
                   const isMoving = adjustDrag?.corner === 'center';
