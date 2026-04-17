@@ -1135,6 +1135,7 @@ export default function AutoCache() {
   const cropCanvasRef    = useRef(null); // canvas live-preview en mode Rogner
   const cropBaseImgRef   = useRef(null); // photo chargée pour le canvas de rognage
   const lbContainerRef   = useRef(null); // ref sur le conteneur de la lightbox (zoom/pan)
+  const pinchRef         = useRef(null); // { dist, midX, midY, startZoom, startPan }
   const adjustCanvasRef  = useRef(null); // canvas live-preview en mode Ajuster
   const adjustBaseImgRef           = useRef(null);
   const adjustLogoImgRef           = useRef(null);
@@ -1583,10 +1584,13 @@ export default function AutoCache() {
   }, [cropMode, lightbox?.showroomDataURL, lightbox?.processed]);
 
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
+  const startAdjustDragAt = (clientX, clientY, corner) => {
+    const sc = adjustCorners;
+    setAdjustDrag({ corner, startMx: clientX, startMy: clientY, startCorners: { tl: { ...sc.tl }, tr: { ...sc.tr }, br: { ...sc.br }, bl: { ...sc.bl } } });
+  };
   const startAdjustDrag = (e, corner) => {
     e.preventDefault(); e.stopPropagation();
-    const sc = adjustCorners;
-    setAdjustDrag({ corner, startMx: e.clientX, startMy: e.clientY, startCorners: { tl: { ...sc.tl }, tr: { ...sc.tr }, br: { ...sc.br }, bl: { ...sc.bl } } });
+    startAdjustDragAt(e.clientX, e.clientY, corner);
   };
 
   // Rendu direct sur le canvas (pas de setState — pas de re-render — 60 fps)
@@ -1657,6 +1661,14 @@ export default function AutoCache() {
     renderAdjustPreview(newCorners);       // met à jour le canvas en direct
   };
 
+  const onAdjustTouchMove = (e) => {
+    if (!adjustDrag || !adjustCanvasRef.current) return;
+    e.preventDefault();
+    if (e.touches.length > 0) {
+      onAdjustMouseMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
+    }
+  };
+
   // ── Zoom / Pan de la lightbox ─────────────────────────────────────────────
   const onLbWheel = (e) => {
     e.preventDefault();
@@ -1681,10 +1693,57 @@ export default function AutoCache() {
   const onLbPanDown = (e) => {
     // Ne pas démarrer le pan si un drag rognage/ajustement est en cours
     if (lbZoom > 1 && !cropDrag && !adjustDrag) {
-      e.preventDefault();
+      if (e.preventDefault) e.preventDefault();
       setLbPanDrag({ startMx: e.clientX, startMy: e.clientY, startPan: { ...lbPan } });
     }
   };
+
+  // ── Touch : pinch-to-zoom + pan sur l'image (hors modes adjust/crop) ──────
+  const onLbTouchStart = (e) => {
+    if (adjustMode || cropMode) return;
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const dx = t0.clientX - t1.clientX, dy = t0.clientY - t1.clientY;
+      pinchRef.current = {
+        dist: Math.sqrt(dx * dx + dy * dy),
+        midX: (t0.clientX + t1.clientX) / 2,
+        midY: (t0.clientY + t1.clientY) / 2,
+        startZoom: lbZoom,
+        startPan: { ...lbPan },
+      };
+    } else if (e.touches.length === 1 && lbZoom > 1) {
+      onLbPanDown({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY, preventDefault: () => e.preventDefault() });
+    }
+  };
+
+  const onLbTouchMove = (e) => {
+    if (adjustMode || cropMode) return;
+    e.preventDefault();
+    if (e.touches.length === 2 && pinchRef.current) {
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const dx = t0.clientX - t1.clientX, dy = t0.clientY - t1.clientY;
+      const newDist = Math.sqrt(dx * dx + dy * dy);
+      const scale = newDist / pinchRef.current.dist;
+      const newZoom = Math.max(1, Math.min(8, pinchRef.current.startZoom * scale));
+      if (!lbContainerRef.current) return;
+      const rect = lbContainerRef.current.getBoundingClientRect();
+      const mx = pinchRef.current.midX - rect.left;
+      const my = pinchRef.current.midY - rect.top;
+      const newX = mx - (mx - pinchRef.current.startPan.x) * newZoom / pinchRef.current.startZoom;
+      const newY = my - (my - pinchRef.current.startPan.y) * newZoom / pinchRef.current.startZoom;
+      setLbZoom(newZoom);
+      if (newZoom === 1) { setLbPan({ x: 0, y: 0 }); return; }
+      setLbPan({
+        x: Math.max(rect.width  * (1 - newZoom), Math.min(0, newX)),
+        y: Math.max(rect.height * (1 - newZoom), Math.min(0, newY)),
+      });
+    } else if (e.touches.length === 1) {
+      onLbPanMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
+    }
+  };
+
+  const onLbTouchEnd = () => { pinchRef.current = null; setLbPanDrag(null); };
 
   const onLbPanMove = (e) => {
     if (!lbPanDrag || !lbContainerRef.current) return;
@@ -2424,6 +2483,8 @@ export default function AutoCache() {
         <div
           onClick={cropMode || adjustMode ? undefined : closeLightbox}
           onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
+          onTouchMove={e => { if (adjustMode) onAdjustTouchMove(e); else onLbTouchMove(e); }}
+          onTouchEnd={() => { setAdjustDrag(null); setLbPanDrag(null); pinchRef.current = null; }}
           onMouseUp={() => {
             setCropDrag(null);
             // Auto-sauvegarde dès qu'un coin est relâché
@@ -2552,6 +2613,7 @@ export default function AutoCache() {
             onClick={e => e.stopPropagation()}
             onWheel={onLbWheel}
             onMouseDown={onLbPanDown}
+            onTouchStart={e => { if (adjustMode) { /* corner handles handle their own touch */ } else onLbTouchStart(e); }}
             onDoubleClick={e => { e.stopPropagation(); setLbZoom(1); setLbPan({ x: 0, y: 0 }); }}
             style={{
               position: "relative", display: "inline-block", maxWidth: "100%",
@@ -2737,20 +2799,23 @@ export default function AutoCache() {
                 {/* Points de coin draggables */}
                 {[["tl","nwse-resize"],["tr","nesw-resize"],["br","nwse-resize"],["bl","nesw-resize"]].map(([corner, cur]) => {
                   const isDragging = adjustDrag?.corner === corner;
+                  const sz = isMobile ? 30 : 12;
                   return <div
                     key={corner}
                     onMouseDown={e => startAdjustDrag(e, corner)}
+                    onTouchStart={e => { e.preventDefault(); e.stopPropagation(); if (e.touches[0]) startAdjustDragAt(e.touches[0].clientX, e.touches[0].clientY, corner); }}
                     style={{
                       position: "absolute",
                       left: `${adjustCorners[corner].x * 100}%`,
                       top:  `${adjustCorners[corner].y * 100}%`,
-                      width: 12, height: 12,
+                      width: sz, height: sz,
                       background: isDragging ? "transparent" : "#e8a020",
                       border: isDragging ? "2px solid rgba(255,255,255,0.25)" : "2px solid #fff",
                       borderRadius: "50%",
                       transform: "translate(-50%,-50%)",
                       cursor: cur,
                       zIndex: 10,
+                      touchAction: "none",
                       boxShadow: isDragging ? "none" : "0 0 5px rgba(0,0,0,0.8)",
                       transition: "background 0.05s, border 0.05s",
                     }}
@@ -2764,20 +2829,22 @@ export default function AutoCache() {
                   return (
                     <div
                       onMouseDown={e => startAdjustDrag(e, 'center')}
+                      onTouchStart={e => { e.preventDefault(); e.stopPropagation(); if (e.touches[0]) startAdjustDragAt(e.touches[0].clientX, e.touches[0].clientY, 'center'); }}
                       title="Déplacer la plaque"
                       style={{
                         position: "absolute",
                         left: `${cx * 100}%`, top: `${cy * 100}%`,
-                        width: 22, height: 22,
+                        width: isMobile ? 36 : 22, height: isMobile ? 36 : 22,
                         background: isMoving ? "rgba(242,101,34,0.4)" : "rgba(242,101,34,0.85)",
                         border: "2px solid #fff",
                         borderRadius: "50%",
                         transform: "translate(-50%,-50%)",
                         cursor: isMoving ? "grabbing" : "move",
                         zIndex: 11,
+                        touchAction: "none",
                         boxShadow: "0 0 7px rgba(0,0,0,0.9)",
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 11, color: "#fff", fontWeight: 700, lineHeight: 1,
+                        fontSize: isMobile ? 16 : 11, color: "#fff", fontWeight: 700, lineHeight: 1,
                         userSelect: "none",
                       }}
                     >✥</div>
