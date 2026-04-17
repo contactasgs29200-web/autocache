@@ -3,6 +3,16 @@ import { useState, useRef, useEffect } from "react";
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 767);
+  useEffect(() => {
+    const h = () => setIsMobile(window.innerWidth <= 767);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return isMobile;
+}
+
 const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
@@ -1085,6 +1095,7 @@ export default function AutoCache() {
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
+  const isMobile = useIsMobile();
   const TRIAL_LIMIT = 30;
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
@@ -1799,17 +1810,23 @@ export default function AutoCache() {
         input[type=range]{-webkit-appearance:none;height:2px;background:#252525;border-radius:1px;outline:none;width:100%;}
         input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#f26522;cursor:pointer;}
         ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:#f26522;border-radius:2px;}
+        @media(max-width:767px){
+          input[type=range]{height:4px;}
+          input[type=range]::-webkit-slider-thumb{width:20px;height:20px;}
+          input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#f26522;border:none;}
+          button,select{min-height:40px;}
+        }
       `}</style>
       <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#1c1c1c", minHeight: "100vh", color: "#e0dbd4" }}>
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 28px", height: 56, borderBottom: "1px solid #1e1e1e", position: "sticky", top: 0, background: "#1c1c1c", zIndex: 10 }}>
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: isMobile ? "0 12px" : "0 28px", height: 56, borderBottom: "1px solid #1e1e1e", position: "sticky", top: 0, background: "#1c1c1c", zIndex: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <svg width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
-            <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase" }}>AutoCache</span>
-            <span style={{ fontSize: 9, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace" }}>PRO</span>
+            <span style={{ fontSize: isMobile ? 15 : 19, fontWeight: 700, letterSpacing: isMobile ? 2 : 4, textTransform: "uppercase" }}>AutoCache</span>
+            {!isMobile && <span style={{ fontSize: 9, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace" }}>PRO</span>}
           </div>
-          <nav style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {[["setup", "Configuration"], ["results", `Résultats${results.length ? ` · ${results.length}` : ""}`]].map(([t, label]) => (
-              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>{label}</button>
+          <nav style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 8 }}>
+            {[["setup", isMobile ? "Config" : "Configuration"], ["results", `Résultats${results.length ? ` · ${results.length}` : ""}`]].map(([t, label]) => (
+              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: isMobile ? "7px 10px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", minHeight: "unset" }}>{label}</button>
             ))}
             <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />
             {/* ── Compteur crédits ── */}
@@ -1897,7 +1914,7 @@ export default function AutoCache() {
         </header>
 
         {tab === "setup" && (
-          <div style={{ maxWidth: 980, margin: "0 auto", padding: "32px 28px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28, alignItems: "start" }}>
+          <div style={{ maxWidth: 980, margin: "0 auto", padding: isMobile ? "16px 12px" : "32px 28px", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 16 : 28, alignItems: "start" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
               <section>
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>01 — Cache plaque</div>
@@ -2104,14 +2121,14 @@ export default function AutoCache() {
                   style={{ border: `1px dashed ${dragOver === "photos" ? "#f26522" : "#222"}`, borderRadius: 3, padding: "22px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#161616", marginBottom: 12 }}>
                   <div style={{ textAlign: "center", color: "#555" }}>
                     <div style={{ fontSize: 30, marginBottom: 8 }}>◈</div>
-                    <div style={{ fontSize: 12, color: "#666" }}>Glisser les photos ici</div>
+                    <div style={{ fontSize: 12, color: "#666" }}>{isMobile ? "Appuyer pour sélectionner" : "Glisser les photos ici"}</div>
                     <div style={{ fontSize: 10, marginTop: 3, color: "#2a2a2a" }}>JPG, PNG — plusieurs fichiers acceptés</div>
                   </div>
                 </div>
                 <input ref={photosRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => handlePhotoFiles(e.target.files)} />
                 {photos.length > 0 && (
                   <>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 5, maxHeight: 210, overflowY: "auto", marginBottom: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(4, 1fr)" : "repeat(5, 1fr)", gap: 5, maxHeight: 210, overflowY: "auto", marginBottom: 10 }}>
                       {photos.map(p => (
                         <div key={p.id} style={{ position: "relative" }}>
                           <img src={p.preview} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", borderRadius: 2, border: "1px solid #252525", display: "block" }} />
@@ -2339,7 +2356,7 @@ export default function AutoCache() {
         )}
 
         {tab === "results" && (
-          <div style={{ maxWidth: 1200, margin: "0 auto", padding: "32px 28px" }}>
+          <div style={{ maxWidth: 1200, margin: "0 auto", padding: isMobile ? "16px 12px" : "32px 28px" }}>
             {results.length === 0 ? (
               <div style={{ textAlign: "center", padding: "80px 0", color: "#555" }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>◈</div>
@@ -2356,7 +2373,7 @@ export default function AutoCache() {
                   </div>
                   {!processing && <button onClick={downloadAll} style={{ background: "#f26522", color: "#090909", border: "none", padding: "9px 22px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3 }}>Tout télécharger ({results.length})</button>}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 150 : 260}px, 1fr))`, gap: isMobile ? 10 : 14 }}>
                   {results.map((r, i) => (
                     <div key={i} style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
@@ -2446,12 +2463,12 @@ export default function AutoCache() {
             setAdjustDrag(null);
             setLbPanDrag(null);
           }}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16, userSelect: "none" }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: isMobile ? 8 : 16, userSelect: "none" }}
         >
           {/* ── Barre du haut ── */}
-          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "0 4px", flexWrap: "wrap", gap: 8 }}>
-            <div style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: "0 2px", flexWrap: "wrap", gap: 6 }}>
+            {!isMobile && <div style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>}
+            <div style={{ display: "flex", gap: isMobile ? 5 : 8, alignItems: "center", flexWrap: "wrap", width: isMobile ? "100%" : "auto", justifyContent: isMobile ? "center" : "flex-end" }}>
 
               {/* Bouton Rogner toggle */}
               <button
@@ -2466,14 +2483,14 @@ export default function AutoCache() {
                   });
                   setAdjustMode(false); setAdjustDrag(null);
                 }}
-                style={{ background: cropMode ? "#f26522" : "#181818", color: cropMode ? "#090909" : "#aaa", border: `1px solid ${cropMode ? "#f26522" : "#2a2a2a"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
-              >✂ Rogner</button>
+                style={{ background: cropMode ? "#f26522" : "#181818", color: cropMode ? "#090909" : "#aaa", border: `1px solid ${cropMode ? "#f26522" : "#2a2a2a"}`, padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 10 : 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+              >✂ {isMobile ? "" : "Rogner"}</button>
 
               {/* Bouton Ajuster — visible seulement si plaque détectée */}
               {lightbox.plateFound && lightbox.corners && (
                 <button
                   onClick={e => { e.stopPropagation(); const nm = !adjustMode; if (nm) adjustCornersRef.current = lightbox.corners; setAdjustMode(nm); setManualPlateMode(false); setCropMode(false); setCropDrag(null); setAdjustCorners(lightbox.corners); }}
-                  style={{ background: adjustMode ? "#e8a020" : "#181818", color: adjustMode ? "#090909" : "#e8a020", border: `1px solid ${adjustMode ? "#e8a020" : "#3a2800"}`, padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                  style={{ background: adjustMode ? "#e8a020" : "#181818", color: adjustMode ? "#090909" : "#e8a020", border: `1px solid ${adjustMode ? "#e8a020" : "#3a2800"}`, padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 10 : 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
                 >⊹ Ajuster</button>
               )}
 
@@ -2489,33 +2506,33 @@ export default function AutoCache() {
                     setManualPlateMode(true);
                     setCropMode(false); setCropDrag(null);
                   }}
-                  style={{ background: "#181818", color: "#f26522", border: "1px solid #3a1400", padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
-                >⊕ Ajouter cache plaque</button>
+                  style={{ background: "#181818", color: "#f26522", border: "1px solid #3a1400", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 10 : 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                >⊕ {isMobile ? "Cache plaque" : "Ajouter cache plaque"}</button>
               )}
 
               {/* Télécharger / Fermer ajustement */}
               {adjustMode ? (
                 <button
                   onClick={e => { e.stopPropagation(); setAdjustMode(false); setAdjustDrag(null); setManualPlateMode(false); }}
-                  style={{ background: "#e8a020", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
+                  style={{ background: "#e8a020", color: "#090909", border: "none", padding: isMobile ? "6px 12px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
                 >✓ Terminé</button>
               ) : cropMode ? (<>
                 <button
                   onClick={e => { e.stopPropagation(); saveCrop(); }}
-                  style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", padding: "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
-                >💾 Sauvegarder</button>
+                  style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 10 : 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                >💾 {isMobile ? "" : "Sauvegarder"}</button>
                 <button
                   onClick={e => { e.stopPropagation(); downloadCropped(); }}
-                  style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
-                >⬇ Télécharger rogné</button>
+                  style={{ background: "#f26522", color: "#090909", border: "none", padding: isMobile ? "6px 12px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                >⬇ {isMobile ? "Rogné" : "Télécharger rogné"}</button>
               </>) : (
                 <button
                   onClick={e => { e.stopPropagation(); downloadOne(lightbox); }}
-                  style={{ background: "#f26522", color: "#090909", border: "none", padding: "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}
-                >⬇ Télécharger</button>
+                  style={{ background: "#f26522", color: "#090909", border: "none", padding: isMobile ? "6px 14px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                >⬇ {isMobile ? "DL" : "Télécharger"}</button>
               )}
 
-              <button onClick={closeLightbox} style={{ background: "#1e1e1e", color: "#aaa", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 14, borderRadius: 2 }}>✕</button>
+              <button onClick={closeLightbox} style={{ background: "#1e1e1e", color: "#aaa", border: "1px solid #2a2a2a", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 14, borderRadius: 2, minHeight: "unset" }}>✕</button>
             </div>
           </div>
 
@@ -2887,7 +2904,7 @@ export default function AutoCache() {
         <div onClick={() => setShowContactModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "100%", maxWidth: 420, fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "92%", maxWidth: 420, fontFamily: "'Rajdhani',sans-serif" }}>
             <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ fontSize: 11, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Nous contacter</div>
               <button onClick={() => setShowContactModal(false)} style={{ background: "none", border: "none", color: "#555", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
@@ -2930,7 +2947,7 @@ export default function AutoCache() {
           <div onClick={() => setShowProfileModal(false)}
             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
             <div onClick={e => e.stopPropagation()}
-              style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "100%", maxWidth: 480, fontFamily: "'Rajdhani',sans-serif" }}>
+              style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "92%", maxWidth: 480, fontFamily: "'Rajdhani',sans-serif" }}>
               {/* Header */}
               <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
@@ -2964,7 +2981,7 @@ export default function AutoCache() {
         <div onClick={() => setShowPromoModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 6, padding: "36px 40px", maxWidth: 400, width: "90%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 6, padding: isMobile ? "24px 20px" : "36px 40px", maxWidth: 400, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
             <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 6, textTransform: "uppercase" }}>Code Promo</div>
             <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginBottom: 20 }}>Entrez votre code pour débloquer des photos supplémentaires.</div>
             <input
@@ -2997,7 +3014,7 @@ export default function AutoCache() {
         <div onClick={() => setShowPlansModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: "36px 40px", maxWidth: userPlan === "trial" ? 740 : 480, width: "100%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: userPlan === "trial" ? 740 : 480, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
 
             {userPlan === "trial" ? (
               /* ── Vue comparaison des plans (utilisateurs en essai) ── */
@@ -3009,7 +3026,7 @@ export default function AutoCache() {
                   </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 28 }}>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 28 }}>
                   {[
                     {
                       key: "essential",
@@ -3213,7 +3230,7 @@ export default function AutoCache() {
         <div onClick={() => setShowUpgradeProModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #f26522", borderRadius: 6, padding: "36px 40px", maxWidth: 420, width: "90%", textAlign: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "#141414", border: "1px solid #f26522", borderRadius: 6, padding: isMobile ? "24px 16px" : "36px 40px", maxWidth: 420, width: "92%", textAlign: "center", fontFamily: "'Rajdhani',sans-serif" }}>
             <div style={{ fontSize: 32, marginBottom: 12 }}>⬡</div>
             <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 4, textTransform: "uppercase" }}>Showroom Virtuel</div>
             <div style={{ fontSize: 11, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 16, textTransform: "uppercase" }}>Abonnement Pro requis</div>
@@ -3237,7 +3254,7 @@ export default function AutoCache() {
       {showUpgradeModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: "36px 40px", maxWidth: 740, width: "100%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: 740, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
 
             {/* En-tête */}
             <div style={{ textAlign: "center", marginBottom: 28 }}>
@@ -3250,7 +3267,7 @@ export default function AutoCache() {
             </div>
 
             {/* Cartes plans */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 24 }}>
               {[
                 {
                   key: "essential",
