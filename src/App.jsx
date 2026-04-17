@@ -2536,6 +2536,13 @@ export default function AutoCache() {
               style={{ position: "fixed", top: 10, right: 10, zIndex: 1010, width: 36, height: 36, borderRadius: "50%", background: "rgba(20,20,20,0.92)", border: "1px solid #3a3a3a", color: "#ccc", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}
             >✕</button>
           )}
+          {/* ── Bouton Terminé fixe en bas (mobile + adjust mode) ── */}
+          {isMobile && adjustMode && (
+            <button
+              onClick={e => { e.stopPropagation(); setAdjustMode(false); setAdjustDrag(null); setManualPlateMode(false); }}
+              style={{ position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)", zIndex: 1010, height: 44, paddingInline: 28, borderRadius: 22, background: "#e8a020", border: "none", color: "#090909", fontSize: 14, fontWeight: 700, fontFamily: "'Rajdhani',sans-serif", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", boxShadow: "0 4px 16px rgba(0,0,0,0.7)" }}
+            >✓ Terminé</button>
+          )}
           {/* ── Barre du haut ── */}
           <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: isMobile ? "0 44px 0 2px" : "0 2px", gap: 6 }}>
             {!isMobile && <div style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>}
@@ -2799,7 +2806,7 @@ export default function AutoCache() {
                 {/* Points de coin draggables */}
                 {[["tl","nwse-resize"],["tr","nesw-resize"],["br","nwse-resize"],["bl","nesw-resize"]].map(([corner, cur]) => {
                   const isDragging = adjustDrag?.corner === corner;
-                  const sz = isMobile ? 30 : 12;
+                  const sz = isMobile ? 20 : 12;
                   return <div
                     key={corner}
                     onMouseDown={e => startAdjustDrag(e, corner)}
@@ -2834,7 +2841,7 @@ export default function AutoCache() {
                       style={{
                         position: "absolute",
                         left: `${cx * 100}%`, top: `${cy * 100}%`,
-                        width: isMobile ? 36 : 22, height: isMobile ? 36 : 22,
+                        width: isMobile ? 28 : 22, height: isMobile ? 28 : 22,
                         background: isMoving ? "rgba(242,101,34,0.4)" : "rgba(242,101,34,0.85)",
                         border: "2px solid #fff",
                         borderRadius: "50%",
@@ -2844,7 +2851,7 @@ export default function AutoCache() {
                         touchAction: "none",
                         boxShadow: "0 0 7px rgba(0,0,0,0.9)",
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: isMobile ? 16 : 11, color: "#fff", fontWeight: 700, lineHeight: 1,
+                        fontSize: isMobile ? 13 : 11, color: "#fff", fontWeight: 700, lineHeight: 1,
                         userSelect: "none",
                       }}
                     >✥</div>
