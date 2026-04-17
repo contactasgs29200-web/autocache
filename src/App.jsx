@@ -460,6 +460,82 @@ async function aiPolishHeadlights(ctx, W, H, b64Original) {
   console.log("[Headlights] Lustrage terminé ✓");
 }
 
+// ── Lustrage carrosserie ─────────────────────────────────────────────────────
+// 3 passes canvas :
+//   1) Saturation boost HSL (+22 %) sur pixels colorés (hors blanc/noir/gris)
+//   2) Courbe S (smoothstep 18 %) → ombres plus profondes, tons clairs plus vifs
+//   3) Brillance spéculaire → zones lumineuses poussées légèrement vers le blanc
+//      (simule le vernis de la peinture sans artifice)
+function polishBodywork(ctx, W, H) {
+  // --- Courbe S : LUT 0-255 ---
+  const lut = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    const sc = 3 * t * t - 2 * t * t * t; // smoothstep
+    lut[i] = Math.max(0, Math.min(255, Math.round((t + (sc - t) * 0.18) * 255)));
+  }
+
+  // --- Helper hue → rgb (HSL) ---
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 0.5)   return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+
+  const id = ctx.getImageData(0, 0, W, H);
+  const d = id.data;
+
+  for (let k = 0; k < d.length; k += 4) {
+    if (d[k + 3] < 10) continue; // pixel transparent
+
+    let r = d[k] / 255, g = d[k + 1] / 255, b = d[k + 2] / 255;
+
+    // --- 1) Saturation boost (espace HSL) ---
+    const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
+    const delta = cMax - cMin;
+    const l = (cMax + cMin) / 2;
+
+    if (delta > 0.008 && l > 0.06 && l < 0.94) {
+      const s = l > 0.5 ? delta / (2 - cMax - cMin) : delta / (cMax + cMin);
+      if (s > 0.05) {
+        const newS = Math.min(1, s * 1.22);
+        const q2 = l < 0.5 ? l * (1 + newS) : l + newS - l * newS;
+        const p2 = 2 * l - q2;
+        let h;
+        if (cMax === r)      h = ((g - b) / delta + (g < b ? 6 : 0)) / 6;
+        else if (cMax === g) h = ((b - r) / delta + 2) / 6;
+        else                 h = ((r - g) / delta + 4) / 6;
+        r = hue2rgb(p2, q2, h + 1 / 3);
+        g = hue2rgb(p2, q2, h);
+        b = hue2rgb(p2, q2, h - 1 / 3);
+      }
+    }
+
+    // --- 2) Courbe S (LUT) ---
+    let r8 = lut[Math.round(r * 255)];
+    let g8 = lut[Math.round(g * 255)];
+    let b8 = lut[Math.round(b * 255)];
+
+    // --- 3) Brillance spéculaire sur les zones lumineuses ---
+    const lum8 = r8 * 0.299 + g8 * 0.587 + b8 * 0.114;
+    if (lum8 > 168) {
+      const strength = Math.min(0.10, (lum8 - 168) / 87 * 0.10);
+      r8 = Math.min(255, r8 + (255 - r8) * strength);
+      g8 = Math.min(255, g8 + (255 - g8) * strength);
+      b8 = Math.min(255, b8 + (255 - b8) * strength);
+    }
+
+    d[k]     = r8;
+    d[k + 1] = g8;
+    d[k + 2] = b8;
+  }
+
+  ctx.putImageData(id, 0, 0);
+  console.log("[Bodywork] Lustrage carrosserie terminé ✓");
+}
+
 
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
 function makeShowroomBackground(index, W, H) {
@@ -746,7 +822,7 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
   // Détection plaque + angle en parallèle
   const [plate, angleData] = await Promise.all([
@@ -767,6 +843,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
   // Lustrage des optiques (canvas)
   if (headlightPolish) await aiPolishHeadlights(ctx, c.width, c.height, b64);
+  // Lustrage carrosserie (canvas)
+  if (bodyPolish) polishBodywork(ctx, c.width, c.height);
   // Sol : flou adaptatif pro (après couleurs) ou adoucissement simple
   if (enhancePro) applyFloorBlur(ctx, c, c.width, c.height);
   else if (floorClean) {
@@ -1012,6 +1090,7 @@ export default function AutoCache() {
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [enhance, setEnhance] = useState(false);
   const [headlightPolish, setHeadlightPolish] = useState(false);
+  const [bodyPolish, setBodyPolish] = useState(false);
   const [floorClean, setFloorClean] = useState(false);
   const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
   const [tab, setTab] = useState("setup");
@@ -1196,7 +1275,7 @@ export default function AutoCache() {
       : null;
 
     for (let i = 0; i < photosToProcess.length; i++) {
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, floorClean, enhancePro);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, floorClean, enhancePro, bodyPolish);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
@@ -1241,6 +1320,7 @@ export default function AutoCache() {
   const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
   const canUseShowroom  = userPlan === "pro" || userPlan === "trial";
   const canUseHeadlight   = userPlan === "pro" || userPlan === "essential";
+  const canUseBodyPolish  = userPlan === "pro" || userPlan === "essential";
   const canStart = logo && photos.length > 0 && !processing;
 
   const logout = async () => {
@@ -1975,6 +2055,14 @@ export default function AutoCache() {
                     label: "Lustrage des optiques",
                     sub: canUseHeadlight ? "Correction colorimétrique du jaunissement" : "Disponible dès l'abonnement Essentiel",
                     locked: !canUseHeadlight,
+                  },
+                  {
+                    active: bodyPolish,
+                    toggle: () => { if (!canUseBodyPolish) { setShowPlansModal(true); return; } setBodyPolish(p => !p); },
+                    icon: "✦",
+                    label: "Lustrage carrosserie",
+                    sub: canUseBodyPolish ? "Brillance, saturation & profondeur de couleur" : "Disponible dès l'abonnement Essentiel",
+                    locked: !canUseBodyPolish,
                   },
                 ].map(({ active, toggle, icon, label, sub, locked }) => (
                   <div key={label}
