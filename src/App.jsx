@@ -1807,6 +1807,7 @@ export default function AutoCache() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
+        html,body{overflow-x:hidden;max-width:100%;}
         input[type=range]{-webkit-appearance:none;height:2px;background:#252525;border-radius:1px;outline:none;width:100%;}
         input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#f26522;cursor:pointer;}
         ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:#f26522;border-radius:2px;}
@@ -1817,7 +1818,7 @@ export default function AutoCache() {
           button,select{min-height:40px;}
         }
       `}</style>
-      <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#1c1c1c", minHeight: "100vh", color: "#e0dbd4" }}>
+      <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#1c1c1c", minHeight: "100vh", color: "#e0dbd4", overflowX: "hidden", maxWidth: "100vw" }}>
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: isMobile ? "0 12px" : "0 28px", height: 56, borderBottom: "1px solid #1e1e1e", position: "sticky", top: 0, background: "#1c1c1c", zIndex: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <svg width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
@@ -1828,7 +1829,7 @@ export default function AutoCache() {
             {[["setup", isMobile ? "Config" : "Configuration"], ["results", `Résultats${results.length ? ` · ${results.length}` : ""}`]].map(([t, label]) => (
               <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: isMobile ? "7px 10px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", minHeight: "unset" }}>{label}</button>
             ))}
-            <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />
+            {!isMobile && <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />}
             {/* ── Compteur crédits ── */}
             {(() => {
               const used = user?.user_metadata?.photos_used ?? 0;
@@ -1837,11 +1838,13 @@ export default function AutoCache() {
               const isLow = left <= (PLAN_LIMIT <= 30 ? 5 : 20);
               return (
                 <div onClick={() => isExpired && setShowUpgradeModal(true)}
-                  style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 2, border: `1px solid ${isExpired ? "#c0392b" : "#2a2a2a"}`, cursor: isExpired ? "pointer" : "default", background: isExpired ? "rgba(192,57,43,0.08)" : "transparent" }}
+                  style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "4px 6px" : "4px 10px", borderRadius: 2, border: `1px solid ${isExpired ? "#c0392b" : "#2a2a2a"}`, cursor: isExpired ? "pointer" : "default", background: isExpired ? "rgba(192,57,43,0.08)" : "transparent" }}
                   title={isExpired ? "Crédits épuisés — cliquez pour mettre à niveau" : `${left} photo${left > 1 ? "s" : ""} restante${left > 1 ? "s" : ""}`}
                 >
                   <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: isExpired ? "#c0392b" : isLow ? "#f26522" : "#666", letterSpacing: 1 }}>
-                    {isExpired ? `${PLAN_LABEL} ÉPUISÉ` : `${PLAN_LABEL} · ${left}/${PLAN_LIMIT}`}
+                    {isExpired
+                      ? (isMobile ? "ÉPUISÉ" : `${PLAN_LABEL} ÉPUISÉ`)
+                      : (isMobile ? `${left}/${PLAN_LIMIT}` : `${PLAN_LABEL} · ${left}/${PLAN_LIMIT}`)}
                   </span>
                 </div>
               );
@@ -1849,17 +1852,17 @@ export default function AutoCache() {
             {/* ── Bouton Settings + Menu déroulant ── */}
             <div ref={settingsRef} style={{ position: "relative" }}>
               <button onClick={() => setSettingsOpen(o => !o)}
-                style={{ background: settingsOpen ? "#1e1e1e" : "transparent", border: `1px solid ${settingsOpen ? "#f26522" : "#282828"}`, color: settingsOpen ? "#f26522" : "#777", padding: "5px 10px", cursor: "pointer", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}
+                style={{ background: settingsOpen ? "#1e1e1e" : "transparent", border: `1px solid ${settingsOpen ? "#f26522" : "#282828"}`, color: settingsOpen ? "#f26522" : "#777", padding: "5px 10px", cursor: "pointer", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, display: "flex", alignItems: "center", gap: 5, minHeight: "unset" }}
                 title="Paramètres"
               >
                 <span style={{ fontSize: 14 }}>⚙</span>
-                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", fontFamily: "'Rajdhani',sans-serif" }}>Menu</span>
+                {!isMobile && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", fontFamily: "'Rajdhani',sans-serif" }}>Menu</span>}
               </button>
               {settingsOpen && (
                 <div style={{
-                  position: "absolute", top: "calc(100% + 6px)", right: 0,
+                  position: "fixed", top: 56, right: 0,
                   background: "#141414", border: "1px solid #2a2a2a", borderRadius: 4,
-                  minWidth: 220, boxShadow: "0 8px 32px rgba(0,0,0,0.6)", zIndex: 2000,
+                  minWidth: 220, maxWidth: "92vw", boxShadow: "0 8px 32px rgba(0,0,0,0.6)", zIndex: 2000,
                   overflow: "hidden",
                 }}>
                   {/* En-tête utilisateur */}
