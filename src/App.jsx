@@ -1143,6 +1143,7 @@ export default function AutoCache() {
   const adjustShowroomTransformRef = useRef(null);
   const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
   const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
+  const adjustDragRef    = useRef(null); // sync immédiat avec setAdjustDrag (évite état périmé sur touch)
 
   // ── Showroom Setup (page principale) ──────────────────────────────────────
   const [showroomEnabled,      setShowroomEnabled]      = useState(false);
@@ -1585,8 +1586,10 @@ export default function AutoCache() {
 
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
   const startAdjustDragAt = (clientX, clientY, corner) => {
-    const sc = adjustCorners;
-    setAdjustDrag({ corner, startMx: clientX, startMy: clientY, startCorners: { tl: { ...sc.tl }, tr: { ...sc.tr }, br: { ...sc.br }, bl: { ...sc.bl } } });
+    const sc = adjustCornersRef.current || adjustCorners;
+    const drag = { corner, startMx: clientX, startMy: clientY, startCorners: { tl: { ...sc.tl }, tr: { ...sc.tr }, br: { ...sc.br }, bl: { ...sc.bl } } };
+    adjustDragRef.current = drag;
+    setAdjustDrag(drag);
   };
   const startAdjustDrag = (e, corner) => {
     e.preventDefault(); e.stopPropagation();
@@ -1635,11 +1638,12 @@ export default function AutoCache() {
   };
 
   const onAdjustMouseMove = (e) => {
-    if (!adjustDrag || !adjustCanvasRef.current) return;
+    const drag = adjustDragRef.current;
+    if (!drag || !adjustCanvasRef.current) return;
     const rect = adjustCanvasRef.current.getBoundingClientRect();
-    const dx = (e.clientX - adjustDrag.startMx) / rect.width;
-    const dy = (e.clientY - adjustDrag.startMy) / rect.height;
-    const { corner, startCorners } = adjustDrag;
+    const dx = (e.clientX - drag.startMx) / rect.width;
+    const dy = (e.clientY - drag.startMy) / rect.height;
+    const { corner, startCorners } = drag;
     const clamp = (v) => Math.max(0, Math.min(1, v));
     let newCorners;
     if (corner === 'center') {
@@ -1662,7 +1666,7 @@ export default function AutoCache() {
   };
 
   const onAdjustTouchMove = (e) => {
-    if (!adjustDrag || !adjustCanvasRef.current) return;
+    if (!adjustDragRef.current || !adjustCanvasRef.current) return;
     e.preventDefault();
     if (e.touches.length > 0) {
       onAdjustMouseMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
@@ -2484,7 +2488,7 @@ export default function AutoCache() {
           onClick={cropMode || adjustMode ? undefined : closeLightbox}
           onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
           onTouchMove={e => { if (adjustMode) onAdjustTouchMove(e); else onLbTouchMove(e); }}
-          onTouchEnd={() => { setAdjustDrag(null); setLbPanDrag(null); pinchRef.current = null; }}
+          onTouchEnd={() => { adjustDragRef.current = null; setAdjustDrag(null); setLbPanDrag(null); pinchRef.current = null; }}
           onMouseUp={() => {
             setCropDrag(null);
             // Auto-sauvegarde dès qu'un coin est relâché
@@ -2524,6 +2528,7 @@ export default function AutoCache() {
                 }
               }
             }
+            adjustDragRef.current = null;
             setAdjustDrag(null);
             setLbPanDrag(null);
           }}
@@ -2806,7 +2811,7 @@ export default function AutoCache() {
                 {/* Points de coin draggables */}
                 {[["tl","nwse-resize"],["tr","nesw-resize"],["br","nwse-resize"],["bl","nesw-resize"]].map(([corner, cur]) => {
                   const isDragging = adjustDrag?.corner === corner;
-                  const sz = isMobile ? 20 : 12;
+                  const sz = isMobile ? 14 : 12;
                   return <div
                     key={corner}
                     onMouseDown={e => startAdjustDrag(e, corner)}
@@ -2841,7 +2846,7 @@ export default function AutoCache() {
                       style={{
                         position: "absolute",
                         left: `${cx * 100}%`, top: `${cy * 100}%`,
-                        width: isMobile ? 28 : 22, height: isMobile ? 28 : 22,
+                        width: isMobile ? 24 : 22, height: isMobile ? 24 : 22,
                         background: isMoving ? "rgba(242,101,34,0.4)" : "rgba(242,101,34,0.85)",
                         border: "2px solid #fff",
                         borderRadius: "50%",
