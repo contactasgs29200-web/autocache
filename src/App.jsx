@@ -1176,7 +1176,7 @@ export default function AutoCache() {
   const [wallTextUnderline, setWallTextUnderline]     = useState(false);
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
-  const [showroomZoom,    setShowroomZoom]    = useState(1.0);
+  const [showroomZoom,    setShowroomZoom]    = useState(1.5);
   const [showroomNudging, setShowroomNudging] = useState(false);
   const zoomTimerRef = useRef(null);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
@@ -1313,7 +1313,7 @@ export default function AutoCache() {
           const cutout = await removeBackground(r.baseDataURL);
           // Cache plaque redessiné nativement sur le composite (pas de double compression)
           const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts);
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.5, true, wOpts);
           entry.cutoutDataURL     = cutout;
           entry.showroomDataURL   = sr.dataURL;
           entry.showroomBaseURL   = sr.baseURL;
@@ -1394,7 +1394,7 @@ export default function AutoCache() {
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
     setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
-    setShowroomZoom(r.showroomZoom ?? 1.0);
+    setShowroomZoom(r.showroomZoom ?? 1.5);
   };
 
   const NUDGE_STEP = 75; // pas de déplacement en px sur canvas 2400×1350
