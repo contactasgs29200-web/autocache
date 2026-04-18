@@ -730,6 +730,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const groundY = carY + groundFrac * ch;
 
   try {
+    // Silhouette noire de la voiture
     const silh = document.createElement('canvas');
     silh.width = carImg.width; silh.height = carImg.height;
     const sCtx = silh.getContext('2d');
@@ -738,76 +739,35 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     sCtx.fillStyle = '#000';
     sCtx.fillRect(0, 0, silh.width, silh.height);
 
-    // 1) Ombre ambiante douce — silhouette entière squashée, grand flou
-    ctx.save();
-    ctx.transform(1, 0, 0, 0.20, 0, groundY * 0.80);
-    ctx.filter = `blur(${Math.max(6, Math.round(cw * 0.020))}px)`;
-    ctx.globalAlpha = 0.28;
-    ctx.drawImage(silh, carX, carY, cw, ch);
-    ctx.restore();
-
-    // 2) Ombre de contact + bas de caisse — silhouette squashée clippée
-    // Le clip est basé sur la masse verticale par colonne :
-    // pare-chocs = fine bande (masse < 25 %), roues/carrosserie = colonne haute (masse ≥ 25 %)
-    const massThresh = 0.25;
-    let xShadLeft = -1, xShadRight = -1;
-    for (let x = 0; x < carImg.width; x++) {
-      if (columnMass[x] >= massThresh) {
-        if (xShadLeft === -1) xShadLeft = x;
-        xShadRight = x;
-      }
-    }
-    if (xShadLeft === -1) { xShadLeft = 0; xShadRight = carImg.width - 1; }
-
-    const colScale  = cw / carImg.width;
-    const xClipL = carX + xShadLeft  * colScale;
-    const xClipR = carX + (xShadRight + 1) * colScale;
-
-    // Silhouette squashée sur canvas intermédiaire, puis clip soft
-    const contactCvs = document.createElement('canvas');
-    contactCvs.width = W; contactCvs.height = H;
-    const ccCtx = contactCvs.getContext('2d');
-    ccCtx.save();
-    ccCtx.transform(1, 0, 0, 0.13, 0, groundY * (1 - 0.13));
-    ccCtx.filter = `blur(${Math.max(3, Math.round(cw * 0.007))}px)`;
-    ccCtx.globalAlpha = 0.65;
-    ccCtx.drawImage(silh, carX, carY, cw, ch);
-    ccCtx.restore();
-
-    // Effacer les zones hors clip (pare-chocs, débordements)
-    const fade = Math.max(8, cw * 0.015);
-    ccCtx.globalCompositeOperation = 'destination-out';
-    // Gauche
-    if (xClipL > 0) {
-      const gL = ccCtx.createLinearGradient(xClipL - fade, 0, xClipL, 0);
-      gL.addColorStop(0, 'rgba(0,0,0,1)'); gL.addColorStop(1, 'rgba(0,0,0,0)');
-      ccCtx.fillStyle = '#000'; ccCtx.fillRect(0, 0, xClipL - fade, H);
-      ccCtx.fillStyle = gL;    ccCtx.fillRect(xClipL - fade, 0, fade, H);
-    }
-    // Droite
-    if (xClipR < W) {
-      const gR = ccCtx.createLinearGradient(xClipR, 0, xClipR + fade, 0);
-      gR.addColorStop(0, 'rgba(0,0,0,0)'); gR.addColorStop(1, 'rgba(0,0,0,1)');
-      ccCtx.fillStyle = gR;    ccCtx.fillRect(xClipR, 0, fade, H);
-      ccCtx.fillStyle = '#000'; ccCtx.fillRect(xClipR + fade, 0, W - xClipR - fade, H);
-    }
+    // Éclairage zénithal : ombre aplatie au sol (sy très faible)
+    // La voiture dessinée après recouvre la quasi-totalité ; seul un liseré
+    // fin dépasse autour du bas de caisse, exactement comme dans la réalité.
+    const shadowCvs = document.createElement('canvas');
+    shadowCvs.width = W; shadowCvs.height = H;
+    const shCtx = shadowCvs.getContext('2d');
+    const sy = 0.07;
+    shCtx.save();
+    shCtx.transform(1, 0, 0, sy, 0, groundY * (1 - sy));
+    shCtx.drawImage(silh, carX, carY, cw, ch);
+    shCtx.restore();
 
     ctx.save();
-    ctx.globalAlpha = 0.92;
-    ctx.drawImage(contactCvs, 0, 0);
+    ctx.filter = `blur(${Math.max(4, Math.round(cw * 0.013))}px)`;
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(shadowCvs, 0, 0);
     ctx.restore();
 
   } catch (_) {
-    // Fallback : ellipse simple
+    // Fallback : ellipse radiale
     const shadowCX = carX + cw / 2;
     const rx = cw * 0.50;
-    const sy = (cw * 0.040) / rx;
+    const esy = (cw * 0.040) / rx;
     const g = ctx.createRadialGradient(shadowCX, groundY, 0, shadowCX, groundY, rx);
     g.addColorStop(0, 'rgba(0,0,0,0.40)');
     g.addColorStop(0.55, 'rgba(0,0,0,0.18)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.save();
-    ctx.transform(1, 0, 0, sy, 0, groundY * (1 - sy));
+    ctx.transform(1, 0, 0, esy, 0, groundY * (1 - esy));
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(shadowCX, groundY, rx, 0, Math.PI * 2);
