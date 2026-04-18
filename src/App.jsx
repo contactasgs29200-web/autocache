@@ -695,64 +695,121 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const carX = (W - cw) / 2 + offsetX;
   const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
 
-  // Trouver le bas réel de la voiture (dernier pixel non-transparent du cutout)
-  // pour éviter un écart entre l'ombre et les pneus
-  let actualBottomFrac = 1.0;
+  // Scan par colonne pour trouver l'empreinte réelle des pneus
+  let groundFrac = 1.0;     // fraction Y du bas réel de la voiture
+  let tireL = 0.05;         // fraction X du bord gauche de l'empreinte
+  let tireR = 0.95;         // fraction X du bord droit de l'empreinte
+  let frontCX = 0.22;       // centre X du train avant (fraction)
+  let rearCX  = 0.78;       // centre X du train arrière (fraction)
   try {
     const scanC = document.createElement('canvas');
-    scanC.width = carImg.width; scanC.height = carImg.height;
+    const W_img = carImg.width, H_img = carImg.height;
+    scanC.width = W_img; scanC.height = H_img;
     const scanCtx = scanC.getContext('2d');
     scanCtx.drawImage(carImg, 0, 0);
-    const imgData = scanCtx.getImageData(0, 0, carImg.width, carImg.height);
-    const data = imgData.data;
-    let lastRow = carImg.height - 1;
-    for (let y = carImg.height - 1; y >= 0; y--) {
-      let hasPixel = false;
-      for (let x = 0; x < carImg.width; x++) {
-        if (data[(y * carImg.width + x) * 4 + 3] > 20) { hasPixel = true; break; }
+    const data = scanCtx.getImageData(0, 0, W_img, H_img).data;
+
+    // 1. Trouver la dernière ligne non-transparente (bas absolu)
+    let lastRow = H_img - 1;
+    outer: for (let y = H_img - 1; y >= 0; y--) {
+      for (let x = 0; x < W_img; x++) {
+        if (data[(y * W_img + x) * 4 + 3] > 20) { lastRow = y; break outer; }
       }
-      if (hasPixel) { lastRow = y; break; }
     }
-    actualBottomFrac = (lastRow + 1) / carImg.height;
-  } catch (_) { /* fallback to 1.0 */ }
+    groundFrac = (lastRow + 1) / H_img;
 
-  // Ombre réaliste deux couches — proportionnelle à la voiture
-  const shadowCX = carX + cw / 2;
-  const shadowCY = carY + actualBottomFrac * ch;
+    // 2. Pour chaque colonne, trouver le pixel le plus bas dans les 30% inférieurs
+    const scanTop = Math.floor(lastRow * 0.70);
+    const colBottom = new Int32Array(W_img).fill(-1);
+    for (let x = 0; x < W_img; x++) {
+      for (let y = lastRow; y >= scanTop; y--) {
+        if (data[(y * W_img + x) * 4 + 3] > 20) { colBottom[x] = y; break; }
+      }
+    }
 
-  // Couche 1 : ombre diffuse large (lumière ambiante, bords très doux)
-  const rx1 = cw * 0.50;
-  const ry1 = ch * 0.058;
-  const sy1 = ry1 / rx1;
-  const grad1 = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, rx1);
-  grad1.addColorStop(0,    'rgba(0,0,0,0.20)');
-  grad1.addColorStop(0.40, 'rgba(0,0,0,0.12)');
-  grad1.addColorStop(0.72, 'rgba(0,0,0,0.04)');
-  grad1.addColorStop(1,    'rgba(0,0,0,0)');
-  ctx.save();
-  ctx.transform(1, 0, 0, sy1, 0, shadowCY * (1 - sy1));
-  ctx.fillStyle = grad1;
-  ctx.beginPath();
-  ctx.arc(shadowCX, shadowCY, rx1, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+    // 3. Les zones de contact pneus = colonnes dont le bas est à ≥ 96% du max
+    const contactThreshold = lastRow * 0.96;
+    let lx = W_img, rx_val = 0;
+    const contactCols = [];
+    for (let x = 0; x < W_img; x++) {
+      if (colBottom[x] >= contactThreshold) {
+        contactCols.push(x);
+        if (x < lx) lx = x;
+        if (x > rx_val) rx_val = x;
+      }
+    }
+    if (rx_val > lx) {
+      tireL = lx / W_img;
+      tireR = rx_val / W_img;
+      // Séparer les colonnes de contact en deux groupes (avant/arrière)
+      const mid = (lx + rx_val) / 2;
+      const frontCols = contactCols.filter(x => x < mid);
+      const rearCols  = contactCols.filter(x => x >= mid);
+      if (frontCols.length) frontCX = (frontCols.reduce((a, b) => a + b, 0) / frontCols.length) / W_img;
+      if (rearCols.length)  rearCX  = (rearCols.reduce((a, b) => a + b, 0) / rearCols.length) / W_img;
+    }
+  } catch (_) {}
 
-  // Couche 2 : ombre de contact étroite (zone de contact pneus/sol, plus sombre)
-  const rx2 = cw * 0.38;
-  const ry2 = ch * 0.020;
-  const sy2 = ry2 / rx2;
-  const grad2 = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, rx2);
-  grad2.addColorStop(0,    'rgba(0,0,0,0.52)');
-  grad2.addColorStop(0.38, 'rgba(0,0,0,0.28)');
-  grad2.addColorStop(0.70, 'rgba(0,0,0,0.07)');
-  grad2.addColorStop(1,    'rgba(0,0,0,0)');
-  ctx.save();
-  ctx.transform(1, 0, 0, sy2, 0, shadowCY * (1 - sy2));
-  ctx.fillStyle = grad2;
-  ctx.beginPath();
-  ctx.arc(shadowCX, shadowCY, rx2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  // Ligne de sol en pixels canvas
+  const groundY = carY + groundFrac * ch;
+
+  // Helper : dessine une ellipse aplatie avec gradient radial
+  function drawShadowBlob(cx, cy, rx, ry, stops) {
+    const sy = ry / rx;
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, rx);
+    stops.forEach(([t, a]) => grad.addColorStop(t, `rgba(0,0,0,${a})`));
+    ctx.save();
+    ctx.transform(1, 0, 0, sy, 0, cy * (1 - sy));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rx, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // — Couche 1 : ombre ambiante large (toute la longueur de la voiture)
+  drawShadowBlob(
+    carX + cw / 2, groundY,
+    cw * 0.56, cw * 0.056,   // large, très plate
+    [[0, 0.18], [0.45, 0.10], [0.75, 0.03], [1, 0]]
+  );
+
+  // — Couche 2 : ombre de contact train avant
+  drawShadowBlob(
+    carX + frontCX * cw, groundY,
+    cw * 0.18, cw * 0.018,
+    [[0, 0.55], [0.40, 0.28], [0.72, 0.08], [1, 0]]
+  );
+
+  // — Couche 3 : ombre de contact train arrière
+  drawShadowBlob(
+    carX + rearCX * cw, groundY,
+    cw * 0.18, cw * 0.018,
+    [[0, 0.55], [0.40, 0.28], [0.72, 0.08], [1, 0]]
+  );
+
+  // — Couche 4 : pont sombre entre les deux trains (dessous du châssis)
+  {
+    const bx1 = carX + (frontCX + 0.06) * cw;
+    const bx2 = carX + (rearCX  - 0.06) * cw;
+    if (bx2 > bx1) {
+      const bw = bx2 - bx1;
+      const by = groundY;
+      const bry = cw * 0.012;
+      const linGrad = ctx.createLinearGradient(bx1, 0, bx2, 0);
+      linGrad.addColorStop(0,   'rgba(0,0,0,0)');
+      linGrad.addColorStop(0.15,'rgba(0,0,0,0.20)');
+      linGrad.addColorStop(0.50,'rgba(0,0,0,0.22)');
+      linGrad.addColorStop(0.85,'rgba(0,0,0,0.20)');
+      linGrad.addColorStop(1,   'rgba(0,0,0,0)');
+      const sy = bry / (bw * 0.5);
+      ctx.save();
+      ctx.transform(1, 0, 0, sy, 0, by * (1 - sy));
+      ctx.fillStyle = linGrad;
+      ctx.fillRect(bx1, by - bw * 0.5, bw, bw);
+      ctx.restore();
+    }
+  }
   // Voiture (sans drop shadow générique)
   ctx.save();
   ctx.imageSmoothingEnabled = true;
