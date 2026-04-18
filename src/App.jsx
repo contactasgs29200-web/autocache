@@ -2928,7 +2928,7 @@ export default function AutoCache() {
                 </span>
               </div>
               <input
-                type="range" min={0} max={360} step={1} value={cropAngle}
+                type="range" min={135} max={225} step={0.5} value={cropAngle}
                 onChange={e => {
                   const a = parseFloat(e.target.value);
                   setCropAngle(a);
