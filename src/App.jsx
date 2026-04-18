@@ -695,16 +695,16 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const carX = (W - cw) / 2 + offsetX;
   const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
 
-  // Trouver le bas réel de la voiture + profil bas par colonne
+  // Trouver le bas réel de la voiture + profil bas + masse verticale par colonne
   let groundFrac = 1.0;
-  const bottomProfile = new Float32Array(carImg.width); // fraction 0-1 depuis le haut par colonne
+  const bottomProfile = new Float32Array(carImg.width);
+  const columnMass    = new Float32Array(carImg.width); // span vertical opaque / hauteur image
   try {
     const scanC = document.createElement('canvas');
     scanC.width = carImg.width; scanC.height = carImg.height;
     const scanCtx = scanC.getContext('2d');
     scanCtx.drawImage(carImg, 0, 0);
     const data = scanCtx.getImageData(0, 0, carImg.width, carImg.height).data;
-    // Niveau global du sol (pixel le plus bas toutes colonnes confondues)
     for (let y = carImg.height - 1; y >= 0; y--) {
       let found = false;
       for (let x = 0; x < carImg.width; x++) {
@@ -712,23 +712,23 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       }
       if (found) { groundFrac = (y + 1) / carImg.height; break; }
     }
-    // Profil bas colonne par colonne (pour détecter roues vs bas de caisse vs capot)
     for (let x = 0; x < carImg.width; x++) {
-      for (let y = carImg.height - 1; y >= 0; y--) {
+      let topY = -1, botY = -1;
+      for (let y = 0; y < carImg.height; y++) {
         if (data[(y * carImg.width + x) * 4 + 3] > 40) {
-          bottomProfile[x] = (y + 1) / carImg.height;
-          break;
+          if (topY === -1) topY = y;
+          botY = y;
         }
+      }
+      if (botY !== -1) {
+        bottomProfile[x] = (botY + 1) / carImg.height;
+        columnMass[x]    = (botY - topY + 1) / carImg.height;
       }
     }
   } catch (_) {}
 
   const groundY = carY + groundFrac * ch;
 
-  // ─ Ombre réaliste adaptée au contour bas du véhicule ──────────────────
-  // Couche 1 : ombre ambiante douce (silhouette écrasée, grand flou)
-  // Couche 2 : ombre de contact par colonne — dense sous les roues,
-  //            visible sous le bas de caisse et le capot avant (profil réel)
   try {
     const silh = document.createElement('canvas');
     silh.width = carImg.width; silh.height = carImg.height;
@@ -738,123 +738,67 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     sCtx.fillStyle = '#000';
     sCtx.fillRect(0, 0, silh.width, silh.height);
 
-    // 1) Ombre ambiante : silhouette écrasée + grand flou
+    // 1) Ombre ambiante douce — silhouette entière squashée, grand flou
     ctx.save();
     ctx.transform(1, 0, 0, 0.20, 0, groundY * 0.80);
     ctx.filter = `blur(${Math.max(6, Math.round(cw * 0.020))}px)`;
-    ctx.globalAlpha = 0.30;
+    ctx.globalAlpha = 0.28;
     ctx.drawImage(silh, carX, carY, cw, ch);
     ctx.restore();
 
-    // 2) Ombre de contact basée sur le profil bas colonne par colonne
-    // Détecter les clusters de contact pour n'inclure que les roues,
-    // et exclure le pare-chocs (petit cluster séparé en bord de voiture)
-    const contactThresh = groundFrac * 0.985;
-    const clusters = [];
-    let clsStart = -1;
-    for (let x = 0; x <= carImg.width; x++) {
-      const isC = x < carImg.width && bottomProfile[x] >= contactThresh;
-      if (isC && clsStart === -1) clsStart = x;
-      else if (!isC && clsStart !== -1) { clusters.push({ s: clsStart, e: x - 1, size: x - clsStart }); clsStart = -1; }
-    }
-    // Fusionner les clusters proches (< 3 % de la largeur = même groupe)
-    const mergeGap = Math.max(3, Math.round(carImg.width * 0.03));
-    const merged = [];
-    for (const c of clusters) {
-      if (merged.length && c.s - merged[merged.length - 1].e <= mergeGap) {
-        merged[merged.length - 1].e = c.e;
-        merged[merged.length - 1].size = merged[merged.length - 1].e - merged[merged.length - 1].s + 1;
-      } else merged.push({ ...c });
-    }
-    let xContactMin = 0, xContactMax = carImg.width - 1;
-    if (merged.length > 0) {
-      xContactMin = merged[0].s;
-      xContactMax = merged[merged.length - 1].e;
-      // Dernier cluster petit ET séparé = pare-chocs avant → l'exclure
-      if (merged.length >= 2) {
-        const last = merged[merged.length - 1];
-        const prev = merged[merged.length - 2];
-        if (last.s - prev.e > mergeGap && last.size < carImg.width * 0.15)
-          xContactMax = prev.e;
+    // 2) Ombre de contact + bas de caisse — silhouette squashée clippée
+    // Le clip est basé sur la masse verticale par colonne :
+    // pare-chocs = fine bande (masse < 25 %), roues/carrosserie = colonne haute (masse ≥ 25 %)
+    const massThresh = 0.25;
+    let xShadLeft = -1, xShadRight = -1;
+    for (let x = 0; x < carImg.width; x++) {
+      if (columnMass[x] >= massThresh) {
+        if (xShadLeft === -1) xShadLeft = x;
+        xShadRight = x;
       }
     }
+    if (xShadLeft === -1) { xShadLeft = 0; xShadRight = carImg.width - 1; }
 
-    const colScale = cw / carImg.width;
-    const xLeft  = carX + xContactMin * colScale;
-    const xRight = carX + (xContactMax + 1) * colScale;
+    const colScale  = cw / carImg.width;
+    const xClipL = carX + xShadLeft  * colScale;
+    const xClipR = carX + (xShadRight + 1) * colScale;
 
-    // Trouver les deux clusters de roues (les deux plus grands)
-    let rearCls = null, frontCls = null;
-    if (merged.length >= 2) {
-      const bySize = [...merged].sort((a, b) => b.size - a.size).slice(0, 2);
-      bySize.sort((a, b) => a.s - b.s);
-      [rearCls, frontCls] = bySize;
-    } else if (merged.length === 1) {
-      rearCls = frontCls = merged[0];
+    // Silhouette squashée sur canvas intermédiaire, puis clip soft
+    const contactCvs = document.createElement('canvas');
+    contactCvs.width = W; contactCvs.height = H;
+    const ccCtx = contactCvs.getContext('2d');
+    ccCtx.save();
+    ccCtx.transform(1, 0, 0, 0.13, 0, groundY * (1 - 0.13));
+    ccCtx.filter = `blur(${Math.max(3, Math.round(cw * 0.007))}px)`;
+    ccCtx.globalAlpha = 0.65;
+    ccCtx.drawImage(silh, carX, carY, cw, ch);
+    ccCtx.restore();
+
+    // Effacer les zones hors clip (pare-chocs, débordements)
+    const fade = Math.max(8, cw * 0.015);
+    ccCtx.globalCompositeOperation = 'destination-out';
+    // Gauche
+    if (xClipL > 0) {
+      const gL = ccCtx.createLinearGradient(xClipL - fade, 0, xClipL, 0);
+      gL.addColorStop(0, 'rgba(0,0,0,1)'); gL.addColorStop(1, 'rgba(0,0,0,0)');
+      ccCtx.fillStyle = '#000'; ccCtx.fillRect(0, 0, xClipL - fade, H);
+      ccCtx.fillStyle = gL;    ccCtx.fillRect(xClipL - fade, 0, fade, H);
+    }
+    // Droite
+    if (xClipR < W) {
+      const gR = ccCtx.createLinearGradient(xClipR, 0, xClipR + fade, 0);
+      gR.addColorStop(0, 'rgba(0,0,0,0)'); gR.addColorStop(1, 'rgba(0,0,0,1)');
+      ccCtx.fillStyle = gR;    ccCtx.fillRect(xClipR, 0, fade, H);
+      ccCtx.fillStyle = '#000'; ccCtx.fillRect(xClipR + fade, 0, W - xClipR - fade, H);
     }
 
-    // 2) Bande d'ombre continue sous le bas de caisse roue-à-roue
-    //    Lumière plafond → ombre projetée directement sous la carrosserie
-    const sillCvs = document.createElement('canvas');
-    sillCvs.width = W; sillCvs.height = H;
-    const scCtx = sillCvs.getContext('2d');
-    const sillH   = Math.max(16, cw * 0.032);
-    const edgeFade = Math.max(10, cw * 0.022);
-    // Dégradé vertical : dense au sol, disparaît vers le bas
-    const vGrad = scCtx.createLinearGradient(0, groundY, 0, groundY + sillH);
-    vGrad.addColorStop(0,    'rgba(0,0,0,0.60)');
-    vGrad.addColorStop(0.45, 'rgba(0,0,0,0.28)');
-    vGrad.addColorStop(1,    'rgba(0,0,0,0)');
-    scCtx.fillStyle = vGrad;
-    scCtx.fillRect(xLeft, groundY, xRight - xLeft, sillH);
-    // Fondu horizontal aux deux extrémités (jonction naturelle avec les roues)
-    scCtx.globalCompositeOperation = 'destination-out';
-    const fadeL = scCtx.createLinearGradient(xLeft, 0, xLeft + edgeFade, 0);
-    fadeL.addColorStop(0, 'rgba(0,0,0,1)'); fadeL.addColorStop(1, 'rgba(0,0,0,0)');
-    scCtx.fillStyle = fadeL;
-    scCtx.fillRect(xLeft, groundY, edgeFade, sillH);
-    const fadeR = scCtx.createLinearGradient(xRight - edgeFade, 0, xRight, 0);
-    fadeR.addColorStop(0, 'rgba(0,0,0,0)'); fadeR.addColorStop(1, 'rgba(0,0,0,1)');
-    scCtx.fillStyle = fadeR;
-    scCtx.fillRect(xRight - edgeFade, groundY, edgeFade, sillH);
     ctx.save();
-    ctx.filter = `blur(${Math.max(2, Math.round(cw * 0.003))}px)`;
     ctx.globalAlpha = 0.92;
-    ctx.drawImage(sillCvs, 0, 0);
+    ctx.drawImage(contactCvs, 0, 0);
     ctx.restore();
 
-    // 3) Ombres de contact sous chaque roue (silhouette squashée masquée aux zones pneus)
-    if (rearCls && frontCls) {
-      const tireCvs = document.createElement('canvas');
-      tireCvs.width = W; tireCvs.height = H;
-      const tcCtx = tireCvs.getContext('2d');
-      tcCtx.save();
-      tcCtx.transform(1, 0, 0, 0.09, 0, groundY * 0.91);
-      tcCtx.filter = `blur(${Math.max(2, Math.round(cw * 0.003))}px)`;
-      tcCtx.globalAlpha = 0.72;
-      tcCtx.drawImage(silh, carX, carY, cw, ch);
-      tcCtx.restore();
-      // Garder uniquement les zones des deux roues
-      const rL = carX + rearCls.s  * colScale;
-      const rR = carX + (rearCls.e  + 1) * colScale;
-      const fL = carX + frontCls.s * colScale;
-      const fR = carX + (frontCls.e + 1) * colScale;
-      const mask = document.createElement('canvas');
-      mask.width = W; mask.height = H;
-      const mCtx = mask.getContext('2d');
-      mCtx.fillStyle = '#fff';
-      mCtx.fillRect(rL, 0, rR - rL, H);
-      mCtx.fillRect(fL, 0, fR - fL, H);
-      tcCtx.globalCompositeOperation = 'destination-in';
-      tcCtx.drawImage(mask, 0, 0);
-      ctx.save();
-      ctx.globalAlpha = 0.95;
-      ctx.drawImage(tireCvs, 0, 0);
-      ctx.restore();
-    }
-
   } catch (_) {
-    // Fallback : ellipse simple si la silhouette échoue (ex : CORS)
+    // Fallback : ellipse simple
     const shadowCX = carX + cw / 2;
     const rx = cw * 0.50;
     const sy = (cw * 0.040) / rx;
