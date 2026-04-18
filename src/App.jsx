@@ -695,15 +695,16 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const carX = (W - cw) / 2 + offsetX;
   const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
 
-  // Trouver le bas réel de la voiture (dernier pixel opaque du cutout)
-  // Seuil 40 pour ignorer les résidus semi-transparents du détourage
+  // Trouver le bas réel de la voiture + profil bas par colonne
   let groundFrac = 1.0;
+  const bottomProfile = new Float32Array(carImg.width); // fraction 0-1 depuis le haut par colonne
   try {
     const scanC = document.createElement('canvas');
     scanC.width = carImg.width; scanC.height = carImg.height;
     const scanCtx = scanC.getContext('2d');
     scanCtx.drawImage(carImg, 0, 0);
     const data = scanCtx.getImageData(0, 0, carImg.width, carImg.height).data;
+    // Niveau global du sol (pixel le plus bas toutes colonnes confondues)
     for (let y = carImg.height - 1; y >= 0; y--) {
       let found = false;
       for (let x = 0; x < carImg.width; x++) {
@@ -711,40 +712,71 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       }
       if (found) { groundFrac = (y + 1) / carImg.height; break; }
     }
+    // Profil bas colonne par colonne (pour détecter roues vs bas de caisse vs capot)
+    for (let x = 0; x < carImg.width; x++) {
+      for (let y = carImg.height - 1; y >= 0; y--) {
+        if (data[(y * carImg.width + x) * 4 + 3] > 40) {
+          bottomProfile[x] = (y + 1) / carImg.height;
+          break;
+        }
+      }
+    }
   } catch (_) {}
 
   const groundY = carY + groundFrac * ch;
 
-  // ─ Silhouette écrasée : suit le contour réel de la voiture (avant + arrière)
-  // en perspective 3/4, l'arrière de la voiture est plus haut dans l'image
-  // que l'avant — l'ombre doit donc couvrir les deux zones de contact
+  // ─ Ombre réaliste adaptée au contour bas du véhicule ──────────────────
+  // Couche 1 : ombre ambiante douce (silhouette écrasée, grand flou)
+  // Couche 2 : ombre de contact par colonne — dense sous les roues,
+  //            visible sous le bas de caisse et le capot avant (profil réel)
   try {
     const silh = document.createElement('canvas');
     silh.width = carImg.width; silh.height = carImg.height;
     const sCtx = silh.getContext('2d');
     sCtx.drawImage(carImg, 0, 0);
-    // Remplacer tous les pixels opaques par du noir pur (garde l'alpha)
     sCtx.globalCompositeOperation = 'source-in';
     sCtx.fillStyle = '#000';
     sCtx.fillRect(0, 0, silh.width, silh.height);
 
-    // 1) Ombre douce ambiante : silhouette écrasée + flou large
+    // 1) Ombre ambiante : silhouette écrasée + grand flou
     ctx.save();
-    const sy1 = 0.22;
-    ctx.transform(1, 0, 0, sy1, 0, groundY * (1 - sy1));
-    ctx.filter = `blur(${Math.max(6, Math.round(cw * 0.018))}px)`;
-    ctx.globalAlpha = 0.38;
+    ctx.transform(1, 0, 0, 0.20, 0, groundY * 0.80);
+    ctx.filter = `blur(${Math.max(6, Math.round(cw * 0.020))}px)`;
+    ctx.globalAlpha = 0.30;
     ctx.drawImage(silh, carX, carY, cw, ch);
     ctx.restore();
 
-    // 2) Ombre de contact : silhouette encore plus écrasée + flou fin = ombre dense sous les pneus
+    // 2) Ombre de contact basée sur le profil bas colonne par colonne
+    const profShadow = document.createElement('canvas');
+    profShadow.width = W; profShadow.height = H;
+    const psCtx = profShadow.getContext('2d');
+    const colW = cw / carImg.width;
+    const shadowH = Math.max(10, cw * 0.032); // hauteur max de l'ombre au sol
+
+    for (let xi = 0; xi < carImg.width; xi++) {
+      if (bottomProfile[xi] === 0) continue;
+      // Ratio de hauteur au-dessus du sol (0 = contact, 1 = très haut)
+      const heightAbove = (groundFrac - bottomProfile[xi]) / groundFrac;
+      // Opacité : max sous les roues (contact), visible sous le bas de caisse, nulle au-delà
+      const alpha = Math.max(0, 1 - heightAbove / 0.28);
+      if (alpha < 0.01) continue;
+      const xCanvas = carX + xi * colW;
+      const bottomY = carY + bottomProfile[xi] * ch;
+      const grad = psCtx.createLinearGradient(0, bottomY, 0, bottomY + shadowH);
+      grad.addColorStop(0,    `rgba(0,0,0,${(0.72 * alpha).toFixed(3)})`);
+      grad.addColorStop(0.40, `rgba(0,0,0,${(0.45 * alpha).toFixed(3)})`);
+      grad.addColorStop(1,    'rgba(0,0,0,0)');
+      psCtx.fillStyle = grad;
+      psCtx.fillRect(xCanvas, bottomY, colW + 0.5, shadowH);
+    }
+
+    // Léger flou horizontal pour adoucir les colonnes
     ctx.save();
-    const sy2 = 0.08;
-    ctx.transform(1, 0, 0, sy2, 0, groundY * (1 - sy2));
-    ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.007))}px)`;
-    ctx.globalAlpha = 0.55;
-    ctx.drawImage(silh, carX, carY, cw, ch);
+    ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.005))}px)`;
+    ctx.globalAlpha = 0.90;
+    ctx.drawImage(profShadow, 0, 0);
     ctx.restore();
+
   } catch (_) {
     // Fallback : ellipse simple si la silhouette échoue (ex : CORS)
     const shadowCX = carX + cw / 2;
