@@ -747,25 +747,37 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.restore();
 
     // 2) Ombre de contact basée sur le profil bas colonne par colonne
-    // Seuil strict 0.985 : seuls les pneus (pas le pare-chocs qui est ~3-8% au-dessus)
+    // Détecter les clusters de contact pour n'inclure que les roues,
+    // et exclure le pare-chocs (petit cluster séparé en bord de voiture)
     const contactThresh = groundFrac * 0.985;
-    let xContactMin = -1, xContactMax = -1;
-    for (let x = 0; x < carImg.width; x++) {
-      if (bottomProfile[x] >= contactThresh) {
-        if (xContactMin === -1) xContactMin = x;
-        xContactMax = x;
+    const clusters = [];
+    let clsStart = -1;
+    for (let x = 0; x <= carImg.width; x++) {
+      const isC = x < carImg.width && bottomProfile[x] >= contactThresh;
+      if (isC && clsStart === -1) clsStart = x;
+      else if (!isC && clsStart !== -1) { clusters.push({ s: clsStart, e: x - 1, size: x - clsStart }); clsStart = -1; }
+    }
+    // Fusionner les clusters proches (< 3 % de la largeur = même groupe)
+    const mergeGap = Math.max(3, Math.round(carImg.width * 0.03));
+    const merged = [];
+    for (const c of clusters) {
+      if (merged.length && c.s - merged[merged.length - 1].e <= mergeGap) {
+        merged[merged.length - 1].e = c.e;
+        merged[merged.length - 1].size = merged[merged.length - 1].e - merged[merged.length - 1].s + 1;
+      } else merged.push({ ...c });
+    }
+    let xContactMin = 0, xContactMax = carImg.width - 1;
+    if (merged.length > 0) {
+      xContactMin = merged[0].s;
+      xContactMax = merged[merged.length - 1].e;
+      // Dernier cluster petit ET séparé = pare-chocs avant → l'exclure
+      if (merged.length >= 2) {
+        const last = merged[merged.length - 1];
+        const prev = merged[merged.length - 2];
+        if (last.s - prev.e > mergeGap && last.size < carImg.width * 0.15)
+          xContactMax = prev.e;
       }
     }
-    // Fallback si seuil trop strict (aucun contact trouvé)
-    if (xContactMin === -1) {
-      for (let x = 0; x < carImg.width; x++) {
-        if (bottomProfile[x] >= groundFrac * 0.94) {
-          if (xContactMin === -1) xContactMin = x;
-          xContactMax = x;
-        }
-      }
-    }
-    if (xContactMin === -1) { xContactMin = 0; xContactMax = carImg.width - 1; }
 
     const profShadow = document.createElement('canvas');
     profShadow.width = W; profShadow.height = H;
