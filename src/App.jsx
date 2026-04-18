@@ -779,33 +779,79 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       }
     }
 
-    // Silhouette écrasée sur canvas intermédiaire, puis masque roue-à-roue
-    // → forme organique naturelle, sans débordement sur le pare-chocs
-    const profShadow = document.createElement('canvas');
-    profShadow.width = W; profShadow.height = H;
-    const psCtx = profShadow.getContext('2d');
+    const colScale = cw / carImg.width;
+    const xLeft  = carX + xContactMin * colScale;
+    const xRight = carX + (xContactMax + 1) * colScale;
 
-    psCtx.save();
-    const sy2 = 0.10;
-    psCtx.transform(1, 0, 0, sy2, 0, groundY * (1 - sy2));
-    psCtx.filter = `blur(${Math.max(2, Math.round(cw * 0.004))}px)`;
-    psCtx.globalAlpha = 0.68;
-    psCtx.drawImage(silh, carX, carY, cw, ch);
-    psCtx.restore();
+    // Trouver les deux clusters de roues (les deux plus grands)
+    let rearCls = null, frontCls = null;
+    if (merged.length >= 2) {
+      const bySize = [...merged].sort((a, b) => b.size - a.size).slice(0, 2);
+      bySize.sort((a, b) => a.s - b.s);
+      [rearCls, frontCls] = bySize;
+    } else if (merged.length === 1) {
+      rearCls = frontCls = merged[0];
+    }
 
-    // Effacer tout ce qui dépasse l'intervalle roue-à-roue
-    const maskL = carX + xContactMin * (cw / carImg.width);
-    const maskR = carX + (xContactMax + 1) * (cw / carImg.width);
-    psCtx.globalCompositeOperation = 'destination-out';
-    psCtx.fillStyle = '#000';
-    if (maskL > 0) psCtx.fillRect(0, 0, maskL, H);
-    if (maskR < W) psCtx.fillRect(maskR, 0, W - maskR, H);
-
+    // 2) Bande d'ombre continue sous le bas de caisse roue-à-roue
+    //    Lumière plafond → ombre projetée directement sous la carrosserie
+    const sillCvs = document.createElement('canvas');
+    sillCvs.width = W; sillCvs.height = H;
+    const scCtx = sillCvs.getContext('2d');
+    const sillH   = Math.max(16, cw * 0.032);
+    const edgeFade = Math.max(10, cw * 0.022);
+    // Dégradé vertical : dense au sol, disparaît vers le bas
+    const vGrad = scCtx.createLinearGradient(0, groundY, 0, groundY + sillH);
+    vGrad.addColorStop(0,    'rgba(0,0,0,0.60)');
+    vGrad.addColorStop(0.45, 'rgba(0,0,0,0.28)');
+    vGrad.addColorStop(1,    'rgba(0,0,0,0)');
+    scCtx.fillStyle = vGrad;
+    scCtx.fillRect(xLeft, groundY, xRight - xLeft, sillH);
+    // Fondu horizontal aux deux extrémités (jonction naturelle avec les roues)
+    scCtx.globalCompositeOperation = 'destination-out';
+    const fadeL = scCtx.createLinearGradient(xLeft, 0, xLeft + edgeFade, 0);
+    fadeL.addColorStop(0, 'rgba(0,0,0,1)'); fadeL.addColorStop(1, 'rgba(0,0,0,0)');
+    scCtx.fillStyle = fadeL;
+    scCtx.fillRect(xLeft, groundY, edgeFade, sillH);
+    const fadeR = scCtx.createLinearGradient(xRight - edgeFade, 0, xRight, 0);
+    fadeR.addColorStop(0, 'rgba(0,0,0,0)'); fadeR.addColorStop(1, 'rgba(0,0,0,1)');
+    scCtx.fillStyle = fadeR;
+    scCtx.fillRect(xRight - edgeFade, groundY, edgeFade, sillH);
     ctx.save();
-    ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.006))}px)`;
-    ctx.globalAlpha = 0.90;
-    ctx.drawImage(profShadow, 0, 0);
+    ctx.filter = `blur(${Math.max(2, Math.round(cw * 0.003))}px)`;
+    ctx.globalAlpha = 0.92;
+    ctx.drawImage(sillCvs, 0, 0);
     ctx.restore();
+
+    // 3) Ombres de contact sous chaque roue (silhouette squashée masquée aux zones pneus)
+    if (rearCls && frontCls) {
+      const tireCvs = document.createElement('canvas');
+      tireCvs.width = W; tireCvs.height = H;
+      const tcCtx = tireCvs.getContext('2d');
+      tcCtx.save();
+      tcCtx.transform(1, 0, 0, 0.09, 0, groundY * 0.91);
+      tcCtx.filter = `blur(${Math.max(2, Math.round(cw * 0.003))}px)`;
+      tcCtx.globalAlpha = 0.72;
+      tcCtx.drawImage(silh, carX, carY, cw, ch);
+      tcCtx.restore();
+      // Garder uniquement les zones des deux roues
+      const rL = carX + rearCls.s  * colScale;
+      const rR = carX + (rearCls.e  + 1) * colScale;
+      const fL = carX + frontCls.s * colScale;
+      const fR = carX + (frontCls.e + 1) * colScale;
+      const mask = document.createElement('canvas');
+      mask.width = W; mask.height = H;
+      const mCtx = mask.getContext('2d');
+      mCtx.fillStyle = '#fff';
+      mCtx.fillRect(rL, 0, rR - rL, H);
+      mCtx.fillRect(fL, 0, fR - fL, H);
+      tcCtx.globalCompositeOperation = 'destination-in';
+      tcCtx.drawImage(mask, 0, 0);
+      ctx.save();
+      ctx.globalAlpha = 0.95;
+      ctx.drawImage(tireCvs, 0, 0);
+      ctx.restore();
+    }
 
   } catch (_) {
     // Fallback : ellipse simple si la silhouette échoue (ex : CORS)
