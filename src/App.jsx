@@ -1029,7 +1029,7 @@ function AuthScreen({ onAuth }) {
               <a href="/cgv.html" target="_blank" style={{ color: "#f26522", textDecoration: "none" }}>CGV</a>
               {" "}et la{" "}
               <a href="/politique-confidentialite.html" target="_blank" style={{ color: "#f26522", textDecoration: "none" }}>politique de confidentialité</a>
-              {" "}d'AutoCache Pro.
+              {" "}d'AutoCache Pro. J'autorise AutoCache Pro à collecter, conserver et utiliser mes données personnelles dans le cadre de la gestion de mon compte et de la fourniture du service.
             </div>
           </div>
         )}
