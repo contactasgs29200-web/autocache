@@ -747,9 +747,8 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.restore();
 
     // 2) Ombre de contact basée sur le profil bas colonne par colonne
-    // Détecter l'intervalle de contact réel (roues) pour ne pas dessiner
-    // l'ombre hors de cet intervalle (évite l'ombre parasite sous le pare-chocs avant)
-    const contactThresh = groundFrac * 0.96;
+    // Seuil strict 0.985 : seuls les pneus (pas le pare-chocs qui est ~3-8% au-dessus)
+    const contactThresh = groundFrac * 0.985;
     let xContactMin = -1, xContactMax = -1;
     for (let x = 0; x < carImg.width; x++) {
       if (bottomProfile[x] >= contactThresh) {
@@ -757,37 +756,43 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
         xContactMax = x;
       }
     }
-    // Si aucun contact détecté, utiliser toute la largeur
+    // Fallback si seuil trop strict (aucun contact trouvé)
+    if (xContactMin === -1) {
+      for (let x = 0; x < carImg.width; x++) {
+        if (bottomProfile[x] >= groundFrac * 0.94) {
+          if (xContactMin === -1) xContactMin = x;
+          xContactMax = x;
+        }
+      }
+    }
     if (xContactMin === -1) { xContactMin = 0; xContactMax = carImg.width - 1; }
 
     const profShadow = document.createElement('canvas');
     profShadow.width = W; profShadow.height = H;
     const psCtx = profShadow.getContext('2d');
     const colW = cw / carImg.width;
-    const shadowH = Math.max(10, cw * 0.032);
+    const shadowH = Math.max(12, cw * 0.035);
 
     for (let xi = 0; xi < carImg.width; xi++) {
       if (bottomProfile[xi] === 0) continue;
-      // Limiter l'ombre à l'intervalle de contact roues (pas de débordement avant/arrière)
       if (xi < xContactMin || xi > xContactMax) continue;
       const heightAbove = (groundFrac - bottomProfile[xi]) / groundFrac;
-      // Seuil élargi à 0.45 : ombre visible sous le bas de caisse entre les roues
       const alpha = Math.max(0, 1 - heightAbove / 0.45);
       if (alpha < 0.01) continue;
       const xCanvas = carX + xi * colW;
-      const bottomY = carY + bottomProfile[xi] * ch;
-      const grad = psCtx.createLinearGradient(0, bottomY, 0, bottomY + shadowH);
-      grad.addColorStop(0,    `rgba(0,0,0,${(0.75 * alpha).toFixed(3)})`);
-      grad.addColorStop(0.40, `rgba(0,0,0,${(0.48 * alpha).toFixed(3)})`);
+      // L'ombre est projetée AU SOL (groundY), pas à la hauteur du bas de caisse
+      const grad = psCtx.createLinearGradient(0, groundY, 0, groundY + shadowH);
+      grad.addColorStop(0,    `rgba(0,0,0,${(0.78 * alpha).toFixed(3)})`);
+      grad.addColorStop(0.40, `rgba(0,0,0,${(0.45 * alpha).toFixed(3)})`);
       grad.addColorStop(1,    'rgba(0,0,0,0)');
       psCtx.fillStyle = grad;
-      psCtx.fillRect(xCanvas, bottomY, colW + 0.5, shadowH);
+      psCtx.fillRect(xCanvas, groundY, colW + 0.5, shadowH);
     }
 
-    // Léger flou horizontal pour adoucir les colonnes
+    // Léger flou pour adoucir les colonnes
     ctx.save();
     ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.005))}px)`;
-    ctx.globalAlpha = 0.90;
+    ctx.globalAlpha = 0.92;
     ctx.drawImage(profShadow, 0, 0);
     ctx.restore();
 
