@@ -42,6 +42,7 @@ export default async function handler(req, res) {
       line_items: [{ price: priceId, quantity: 1 }],
       discounts: [{ coupon: COUPON_ID }],
       metadata: { userId, plan },
+      subscription_data: { metadata: { userId, plan } },
       success_url: `${origin}?payment=success&plan=${plan}`,
       cancel_url: `${origin}?payment=cancelled`,
       locale: "fr",
