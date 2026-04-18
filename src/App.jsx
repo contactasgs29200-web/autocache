@@ -747,24 +747,38 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.restore();
 
     // 2) Ombre de contact basée sur le profil bas colonne par colonne
+    // Détecter l'intervalle de contact réel (roues) pour ne pas dessiner
+    // l'ombre hors de cet intervalle (évite l'ombre parasite sous le pare-chocs avant)
+    const contactThresh = groundFrac * 0.96;
+    let xContactMin = -1, xContactMax = -1;
+    for (let x = 0; x < carImg.width; x++) {
+      if (bottomProfile[x] >= contactThresh) {
+        if (xContactMin === -1) xContactMin = x;
+        xContactMax = x;
+      }
+    }
+    // Si aucun contact détecté, utiliser toute la largeur
+    if (xContactMin === -1) { xContactMin = 0; xContactMax = carImg.width - 1; }
+
     const profShadow = document.createElement('canvas');
     profShadow.width = W; profShadow.height = H;
     const psCtx = profShadow.getContext('2d');
     const colW = cw / carImg.width;
-    const shadowH = Math.max(10, cw * 0.032); // hauteur max de l'ombre au sol
+    const shadowH = Math.max(10, cw * 0.032);
 
     for (let xi = 0; xi < carImg.width; xi++) {
       if (bottomProfile[xi] === 0) continue;
-      // Ratio de hauteur au-dessus du sol (0 = contact, 1 = très haut)
+      // Limiter l'ombre à l'intervalle de contact roues (pas de débordement avant/arrière)
+      if (xi < xContactMin || xi > xContactMax) continue;
       const heightAbove = (groundFrac - bottomProfile[xi]) / groundFrac;
-      // Opacité : max sous les roues (contact), visible sous le bas de caisse, nulle au-delà
-      const alpha = Math.max(0, 1 - heightAbove / 0.28);
+      // Seuil élargi à 0.45 : ombre visible sous le bas de caisse entre les roues
+      const alpha = Math.max(0, 1 - heightAbove / 0.45);
       if (alpha < 0.01) continue;
       const xCanvas = carX + xi * colW;
       const bottomY = carY + bottomProfile[xi] * ch;
       const grad = psCtx.createLinearGradient(0, bottomY, 0, bottomY + shadowH);
-      grad.addColorStop(0,    `rgba(0,0,0,${(0.72 * alpha).toFixed(3)})`);
-      grad.addColorStop(0.40, `rgba(0,0,0,${(0.45 * alpha).toFixed(3)})`);
+      grad.addColorStop(0,    `rgba(0,0,0,${(0.75 * alpha).toFixed(3)})`);
+      grad.addColorStop(0.40, `rgba(0,0,0,${(0.48 * alpha).toFixed(3)})`);
       grad.addColorStop(1,    'rgba(0,0,0,0)');
       psCtx.fillStyle = grad;
       psCtx.fillRect(xCanvas, bottomY, colW + 0.5, shadowH);
