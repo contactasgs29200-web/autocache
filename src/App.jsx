@@ -1156,6 +1156,7 @@ export default function AutoCache() {
   const [wallLogoScale, setWallLogoScale]   = useState(0.18); // taille relative (0.05–0.40)
   const [wallLogoOpacity, setWallLogoOpacity] = useState(0.85);
   const wallLogoUploadRef = useRef(null);
+  const wallTextInputRef  = useRef(null);
   const [wallLogoDrag, setWallLogoDrag]     = useState(null); // drag en cours dans la lightbox
   // ── Texte mural ──
   const [wallText, setWallText]             = useState("");
@@ -1175,6 +1176,13 @@ export default function AutoCache() {
   const [recoveryMsg, setRecoveryMsg] = useState("");
   const [recoveryErr, setRecoveryErr] = useState("");
   const [recoveryLoading, setRecoveryLoading] = useState(false);
+
+  useEffect(() => {
+    const s = document.createElement("style");
+    s.textContent = "@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}";
+    document.head.appendChild(s);
+    return () => document.head.removeChild(s);
+  }, []);
 
   useEffect(() => {
     // Retour depuis Stripe Checkout
@@ -2318,12 +2326,14 @@ export default function AutoCache() {
                       {/* Mode Texte */}
                       {wallLogoMode === "text" && (
                         <div>
-                          <input type="text" value={wallText} onChange={e => setWallText(e.target.value)}
-                            placeholder="Nom de l'enseigne"
-                            style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", background: "#161616", border: "1px solid #2a2a2a", borderRadius: 3, color: "#ddd5c8", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, letterSpacing: 1, marginBottom: 8 }} />
-                          {/* Aperçu */}
+                          <input ref={wallTextInputRef} type="text" value={wallText} onChange={e => setWallText(e.target.value)}
+                            placeholder="Nom de l'enseigne" disabled={processing}
+                            style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", background: processing ? "#0f0f0f" : "#161616", border: "1px solid #2a2a2a", borderRadius: 3, color: "#ddd5c8", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, letterSpacing: 1, marginBottom: 8, opacity: processing ? 0.4 : 1 }} />
+                          {/* Aperçu — cliquable pour re-modifier le texte */}
                           {wallText.trim() && (
-                            <div style={{ background: "#111", border: "1px solid #222", borderRadius: 3, padding: "10px 14px", marginBottom: 8, textAlign: "center", overflow: "hidden" }}>
+                            <div onClick={() => !processing && wallTextInputRef.current?.focus()}
+                              title="Cliquer pour modifier le texte"
+                              style={{ background: "#111", border: "1px solid #222", borderRadius: 3, padding: "10px 14px", marginBottom: 8, textAlign: "center", overflow: "hidden", cursor: processing ? "default" : "text", position: "relative" }}>
                               <span style={{
                                 fontFamily: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).family,
                                 fontWeight: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).weight,
@@ -2331,6 +2341,7 @@ export default function AutoCache() {
                                 WebkitTextStroke: wallTextStrokeWidth > 0 ? `${wallTextStrokeWidth * 0.4}px ${wallTextStrokeColor}` : undefined,
                                 textDecoration: wallTextUnderline ? "underline" : "none",
                               }}>{wallText.trim()}</span>
+                              {!processing && <div style={{ position: "absolute", top: 3, right: 6, fontSize: 8, color: "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>✎ modifier</div>}
                             </div>
                           )}
                           <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
@@ -2404,7 +2415,10 @@ export default function AutoCache() {
               </section>
 
               <section>
-                <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "#1a1a1a", color: canStart ? "#090909" : "#444", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
+                <button onClick={start} disabled={!canStart || processing} style={{ width: "100%", background: canStart && !processing ? "#f26522" : "#1a1a1a", color: canStart && !processing ? "#090909" : "#444", border: "none", padding: "15px 24px", cursor: canStart && !processing ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                  {processing && (
+                    <span style={{ width: 14, height: 14, border: "2px solid #444", borderTopColor: "#f26522", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite", flexShrink: 0 }} />
+                  )}
                   {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}${showroomEnabled ? " + Showroom" : ""}`}
                 </button>
                 {processing && (
