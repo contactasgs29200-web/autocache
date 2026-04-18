@@ -739,15 +739,28 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     sCtx.fillStyle = '#000';
     sCtx.fillRect(0, 0, silh.width, silh.height);
 
-    // Éclairage zénithal : ombre aplatie au sol (sy très faible)
-    // La voiture dessinée après recouvre la quasi-totalité ; seul un liseré
-    // fin dépasse autour du bas de caisse, exactement comme dans la réalité.
+    // Ligne de sol inclinée : point le plus bas dans chaque moitié (≈ roue gauche / roue droite)
+    const halfW = Math.round(carImg.width / 2);
+    let bpL = groundFrac, bpR = groundFrac;
+    for (let x = 0; x < halfW; x++)           if (bottomProfile[x] > bpL) bpL = bottomProfile[x];
+    for (let x = halfW; x < carImg.width; x++) if (bottomProfile[x] > bpR) bpR = bottomProfile[x];
+
+    const gYL   = carY + bpL * ch;          // sol côté gauche
+    const gYR   = carY + bpR * ch;          // sol côté droit
+    const slope = (gYR - gYL) / cw;         // pente de la ligne de sol en px/px
+
+    // Squash incliné vers la ligne de sol en perspective :
+    // y' = sy·y + slope·(1-sy)·x + (1-sy)·(gYL - slope·carX)
+    // → point fixe à (carX, gYL) et (carX+cw, gYR)
+    const sy    = 0.07;
+    const bCoef = slope * (1 - sy);
+    const fCoef = (1 - sy) * (gYL - slope * carX);
+
     const shadowCvs = document.createElement('canvas');
     shadowCvs.width = W; shadowCvs.height = H;
     const shCtx = shadowCvs.getContext('2d');
-    const sy = 0.07;
     shCtx.save();
-    shCtx.transform(1, 0, 0, sy, 0, groundY * (1 - sy));
+    shCtx.transform(1, bCoef, 0, sy, 0, fCoef);
     shCtx.drawImage(silh, carX, carY, cw, ch);
     shCtx.restore();
 
