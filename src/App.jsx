@@ -779,32 +779,31 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       }
     }
 
+    // Silhouette écrasée sur canvas intermédiaire, puis masque roue-à-roue
+    // → forme organique naturelle, sans débordement sur le pare-chocs
     const profShadow = document.createElement('canvas');
     profShadow.width = W; profShadow.height = H;
     const psCtx = profShadow.getContext('2d');
-    const colW = cw / carImg.width;
-    const shadowH = Math.max(12, cw * 0.035);
 
-    for (let xi = 0; xi < carImg.width; xi++) {
-      if (bottomProfile[xi] === 0) continue;
-      if (xi < xContactMin || xi > xContactMax) continue;
-      const heightAbove = (groundFrac - bottomProfile[xi]) / groundFrac;
-      const alpha = Math.max(0, 1 - heightAbove / 0.45);
-      if (alpha < 0.01) continue;
-      const xCanvas = carX + xi * colW;
-      // L'ombre est projetée AU SOL (groundY), pas à la hauteur du bas de caisse
-      const grad = psCtx.createLinearGradient(0, groundY, 0, groundY + shadowH);
-      grad.addColorStop(0,    `rgba(0,0,0,${(0.78 * alpha).toFixed(3)})`);
-      grad.addColorStop(0.40, `rgba(0,0,0,${(0.45 * alpha).toFixed(3)})`);
-      grad.addColorStop(1,    'rgba(0,0,0,0)');
-      psCtx.fillStyle = grad;
-      psCtx.fillRect(xCanvas, groundY, colW + 0.5, shadowH);
-    }
+    psCtx.save();
+    const sy2 = 0.10;
+    psCtx.transform(1, 0, 0, sy2, 0, groundY * (1 - sy2));
+    psCtx.filter = `blur(${Math.max(2, Math.round(cw * 0.004))}px)`;
+    psCtx.globalAlpha = 0.68;
+    psCtx.drawImage(silh, carX, carY, cw, ch);
+    psCtx.restore();
 
-    // Léger flou pour adoucir les colonnes
+    // Effacer tout ce qui dépasse l'intervalle roue-à-roue
+    const maskL = carX + xContactMin * (cw / carImg.width);
+    const maskR = carX + (xContactMax + 1) * (cw / carImg.width);
+    psCtx.globalCompositeOperation = 'destination-out';
+    psCtx.fillStyle = '#000';
+    if (maskL > 0) psCtx.fillRect(0, 0, maskL, H);
+    if (maskR < W) psCtx.fillRect(maskR, 0, W - maskR, H);
+
     ctx.save();
-    ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.005))}px)`;
-    ctx.globalAlpha = 0.92;
+    ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.006))}px)`;
+    ctx.globalAlpha = 0.90;
     ctx.drawImage(profShadow, 0, 0);
     ctx.restore();
 
