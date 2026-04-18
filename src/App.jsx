@@ -3004,7 +3004,7 @@ export default function AutoCache() {
             <div style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
               {[
                 { icon: "✉", label: "E-mail", value: "contact.asgs29200@gmail.com", href: "mailto:contact.asgs29200@gmail.com" },
-                { icon: "📞", label: "Téléphone", value: "07 83 57 88 70", href: "tel:+33783578870" },
+                { icon: "📞", label: "Téléphone", value: "07 56 98 17 29", href: "tel:+33756981729" },
               ].map(({ icon, label, value, href }) => (
                 <a key={label} href={href}
                   style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: "#0a0a0a", border: "1px solid #1c1c1c", borderRadius: 4, textDecoration: "none", cursor: "pointer" }}>
