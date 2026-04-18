@@ -746,9 +746,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.drawImage(silh, carX, carY, cw, ch);
     ctx.restore();
 
-    // 2) Ombre de contact + bas de caisse — silhouette squashée clippée
-    // Le clip est basé sur la masse verticale par colonne :
-    // pare-chocs = fine bande (masse < 25 %), roues/carrosserie = colonne haute (masse ≥ 25 %)
+    // 2) Ombre de contact inclinée — polygone suivant le profil bas réel de la voiture
     const massThresh = 0.25;
     let xShadLeft = -1, xShadRight = -1;
     for (let x = 0; x < carImg.width; x++) {
@@ -759,42 +757,65 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     }
     if (xShadLeft === -1) { xShadLeft = 0; xShadRight = carImg.width - 1; }
 
-    const colScale  = cw / carImg.width;
-    const xClipL = carX + xShadLeft  * colScale;
-    const xClipR = carX + (xShadRight + 1) * colScale;
-
-    // Silhouette squashée sur canvas intermédiaire, puis clip soft
-    const contactCvs = document.createElement('canvas');
-    contactCvs.width = W; contactCvs.height = H;
-    const ccCtx = contactCvs.getContext('2d');
-    ccCtx.save();
-    ccCtx.transform(1, 0, 0, 0.13, 0, groundY * (1 - 0.13));
-    ccCtx.filter = `blur(${Math.max(3, Math.round(cw * 0.007))}px)`;
-    ccCtx.globalAlpha = 0.65;
-    ccCtx.drawImage(silh, carX, carY, cw, ch);
-    ccCtx.restore();
-
-    // Effacer les zones hors clip (pare-chocs, débordements)
-    const fade = Math.max(8, cw * 0.015);
-    ccCtx.globalCompositeOperation = 'destination-out';
-    // Gauche
-    if (xClipL > 0) {
-      const gL = ccCtx.createLinearGradient(xClipL - fade, 0, xClipL, 0);
-      gL.addColorStop(0, 'rgba(0,0,0,1)'); gL.addColorStop(1, 'rgba(0,0,0,0)');
-      ccCtx.fillStyle = '#000'; ccCtx.fillRect(0, 0, xClipL - fade, H);
-      ccCtx.fillStyle = gL;    ccCtx.fillRect(xClipL - fade, 0, fade, H);
+    // Lisser le profil bas (fenêtre glissante)
+    const kR = Math.max(1, Math.round(carImg.width * 0.025));
+    const smoothBP = new Float32Array(carImg.width);
+    for (let x = xShadLeft; x <= xShadRight; x++) {
+      let sum = 0, cnt = 0;
+      for (let dx = -kR; dx <= kR; dx++) {
+        const xx = x + dx;
+        if (xx >= xShadLeft && xx <= xShadRight) { sum += bottomProfile[xx]; cnt++; }
+      }
+      smoothBP[x] = cnt > 0 ? sum / cnt : bottomProfile[x];
     }
-    // Droite
-    if (xClipR < W) {
-      const gR = ccCtx.createLinearGradient(xClipR, 0, xClipR + fade, 0);
-      gR.addColorStop(0, 'rgba(0,0,0,0)'); gR.addColorStop(1, 'rgba(0,0,0,1)');
-      ccCtx.fillStyle = gR;    ccCtx.fillRect(xClipR, 0, fade, H);
-      ccCtx.fillStyle = '#000'; ccCtx.fillRect(xClipR + fade, 0, W - xClipR - fade, H);
+
+    // Ligne de sol inclinée : interpolation linéaire entre les deux extrémités
+    const bpL = smoothBP[xShadLeft];
+    const bpR = smoothBP[xShadRight];
+    const spanW = Math.max(1, xShadRight - xShadLeft);
+
+    // Profil effectif = max(bottomProfile, ligne de sol interpolée)
+    // → comble le creux entre roues avec la vraie projection au sol
+    const effBP = new Float32Array(carImg.width);
+    for (let x = xShadLeft; x <= xShadRight; x++) {
+      const t = (x - xShadLeft) / spanW;
+      effBP[x] = Math.max(smoothBP[x], bpL + (bpR - bpL) * t);
     }
+
+    const colScale = cw / carImg.width;
+    const shadowH  = Math.max(6, ch * 0.018); // hauteur de l'ombre sous la voiture (px)
+
+    // Dessiner le polygone d'ombre sur canvas intermédiaire
+    const shadowCvs = document.createElement('canvas');
+    shadowCvs.width = W; shadowCvs.height = H;
+    const shCtx = shadowCvs.getContext('2d');
+
+    shCtx.beginPath();
+    for (let x = xShadLeft; x <= xShadRight; x++) {
+      const px = carX + x * colScale;
+      const py = carY + effBP[x] * ch;
+      if (x === xShadLeft) shCtx.moveTo(px, py);
+      else shCtx.lineTo(px, py);
+    }
+    for (let x = xShadRight; x >= xShadLeft; x--) {
+      shCtx.lineTo(carX + x * colScale, carY + effBP[x] * ch + shadowH);
+    }
+    shCtx.closePath();
+
+    // Gradient : dense en haut (contact sol), transparent en bas
+    const midX  = Math.round((xShadLeft + xShadRight) / 2);
+    const topY2 = carY + effBP[midX] * ch;
+    const grad2 = shCtx.createLinearGradient(0, topY2, 0, topY2 + shadowH);
+    grad2.addColorStop(0,   'rgba(0,0,0,0.82)');
+    grad2.addColorStop(0.5, 'rgba(0,0,0,0.55)');
+    grad2.addColorStop(1,   'rgba(0,0,0,0.0)');
+    shCtx.fillStyle = grad2;
+    shCtx.fill();
 
     ctx.save();
-    ctx.globalAlpha = 0.92;
-    ctx.drawImage(contactCvs, 0, 0);
+    ctx.filter = `blur(${Math.max(2, Math.round(cw * 0.006))}px)`;
+    ctx.globalAlpha = 0.90;
+    ctx.drawImage(shadowCvs, 0, 0);
     ctx.restore();
 
   } catch (_) {
