@@ -713,41 +713,52 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     }
   } catch (_) {}
 
-  const shadowCX = carX + cw / 2;
-  const shadowCY = carY + groundFrac * ch;
+  const groundY = carY + groundFrac * ch;
 
-  // Couche 1 : halo ambiant large — s'étend bien au-delà de la voiture
-  {
-    const rx = cw * 0.58;
-    const sy = (cw * 0.052) / rx;
-    const g = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, rx);
-    g.addColorStop(0,    'rgba(0,0,0,0.28)');
-    g.addColorStop(0.35, 'rgba(0,0,0,0.16)');
-    g.addColorStop(0.65, 'rgba(0,0,0,0.06)');
-    g.addColorStop(1,    'rgba(0,0,0,0)');
+  // ─ Silhouette écrasée : suit le contour réel de la voiture (avant + arrière)
+  // en perspective 3/4, l'arrière de la voiture est plus haut dans l'image
+  // que l'avant — l'ombre doit donc couvrir les deux zones de contact
+  try {
+    const silh = document.createElement('canvas');
+    silh.width = carImg.width; silh.height = carImg.height;
+    const sCtx = silh.getContext('2d');
+    sCtx.drawImage(carImg, 0, 0);
+    // Remplacer tous les pixels opaques par du noir pur (garde l'alpha)
+    sCtx.globalCompositeOperation = 'source-in';
+    sCtx.fillStyle = '#000';
+    sCtx.fillRect(0, 0, silh.width, silh.height);
+
+    // 1) Ombre douce ambiante : silhouette écrasée + flou large
     ctx.save();
-    ctx.transform(1, 0, 0, sy, 0, shadowCY * (1 - sy));
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(shadowCX, shadowCY, rx, 0, Math.PI * 2);
-    ctx.fill();
+    const sy1 = 0.22;
+    ctx.transform(1, 0, 0, sy1, 0, groundY * (1 - sy1));
+    ctx.filter = `blur(${Math.max(6, Math.round(cw * 0.018))}px)`;
+    ctx.globalAlpha = 0.38;
+    ctx.drawImage(silh, carX, carY, cw, ch);
     ctx.restore();
-  }
 
-  // Couche 2 : ombre de contact étroite sous le châssis
-  {
-    const rx = cw * 0.40;
-    const sy = (cw * 0.016) / rx;
-    const g = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, rx);
-    g.addColorStop(0,    'rgba(0,0,0,0.58)');
-    g.addColorStop(0.30, 'rgba(0,0,0,0.32)');
-    g.addColorStop(0.65, 'rgba(0,0,0,0.10)');
-    g.addColorStop(1,    'rgba(0,0,0,0)');
+    // 2) Ombre de contact : silhouette encore plus écrasée + flou fin = ombre dense sous les pneus
     ctx.save();
-    ctx.transform(1, 0, 0, sy, 0, shadowCY * (1 - sy));
+    const sy2 = 0.08;
+    ctx.transform(1, 0, 0, sy2, 0, groundY * (1 - sy2));
+    ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.007))}px)`;
+    ctx.globalAlpha = 0.55;
+    ctx.drawImage(silh, carX, carY, cw, ch);
+    ctx.restore();
+  } catch (_) {
+    // Fallback : ellipse simple si la silhouette échoue (ex : CORS)
+    const shadowCX = carX + cw / 2;
+    const rx = cw * 0.50;
+    const sy = (cw * 0.040) / rx;
+    const g = ctx.createRadialGradient(shadowCX, groundY, 0, shadowCX, groundY, rx);
+    g.addColorStop(0, 'rgba(0,0,0,0.40)');
+    g.addColorStop(0.55, 'rgba(0,0,0,0.18)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.save();
+    ctx.transform(1, 0, 0, sy, 0, groundY * (1 - sy));
     ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(shadowCX, shadowCY, rx, 0, Math.PI * 2);
+    ctx.arc(shadowCX, groundY, rx, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
