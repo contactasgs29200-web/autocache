@@ -730,44 +730,61 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const groundY = carY + groundFrac * ch;
 
   try {
-    // Silhouette noire de la voiture
-    const silh = document.createElement('canvas');
-    silh.width = carImg.width; silh.height = carImg.height;
-    const sCtx = silh.getContext('2d');
-    sCtx.drawImage(carImg, 0, 0);
-    sCtx.globalCompositeOperation = 'source-in';
-    sCtx.fillStyle = '#000';
-    sCtx.fillRect(0, 0, silh.width, silh.height);
+    // Exclure les colonnes à faible masse (pare-chocs fins, antennes)
+    const massThresh = 0.22;
+    let xL = -1, xR = -1;
+    for (let x = 0; x < carImg.width; x++) {
+      if (columnMass[x] >= massThresh) { if (xL < 0) xL = x; xR = x; }
+    }
+    if (xL < 0) { xL = 0; xR = carImg.width - 1; }
 
-    // Ligne de sol inclinée : point le plus bas dans chaque moitié (≈ roue gauche / roue droite)
-    const halfW = Math.round(carImg.width / 2);
-    let bpL = groundFrac, bpR = groundFrac;
-    for (let x = 0; x < halfW; x++)           if (bottomProfile[x] > bpL) bpL = bottomProfile[x];
-    for (let x = halfW; x < carImg.width; x++) if (bottomProfile[x] > bpR) bpR = bottomProfile[x];
+    // Lisser bottomProfile sur la plage active
+    const kR = Math.max(2, Math.round(carImg.width * 0.025));
+    const sBP = new Float32Array(carImg.width);
+    for (let x = xL; x <= xR; x++) {
+      let s = 0, n = 0;
+      for (let d = -kR; d <= kR; d++) {
+        const xx = x + d;
+        if (xx >= xL && xx <= xR) { s += bottomProfile[xx]; n++; }
+      }
+      sBP[x] = s / n;
+    }
 
-    const gYL   = carY + bpL * ch;          // sol côté gauche
-    const gYR   = carY + bpR * ch;          // sol côté droit
-    const slope = (gYR - gYL) / cw;         // pente de la ligne de sol en px/px
+    // Polygone fin qui trace le bas réel de la voiture :
+    // bord supérieur = bottomProfile (contact avec le sol / bas de caisse)
+    // bord inférieur = + shadowH (s'estompe en transparence)
+    // La voiture dessinée par-dessus cache l'intérieur → seul le liseré visible
+    const csc     = cw / carImg.width;
+    const shadowH = Math.max(10, ch * 0.030);
 
-    // Squash incliné vers la ligne de sol en perspective :
-    // y' = sy·y + slope·(1-sy)·x + (1-sy)·(gYL - slope·carX)
-    // → point fixe à (carX, gYL) et (carX+cw, gYR)
-    const sy    = 0.07;
-    const bCoef = slope * (1 - sy);
-    const fCoef = (1 - sy) * (gYL - slope * carX);
+    const sCvs = document.createElement('canvas');
+    sCvs.width = W; sCvs.height = H;
+    const sCt  = sCvs.getContext('2d');
 
-    const shadowCvs = document.createElement('canvas');
-    shadowCvs.width = W; shadowCvs.height = H;
-    const shCtx = shadowCvs.getContext('2d');
-    shCtx.save();
-    shCtx.transform(1, bCoef, 0, sy, 0, fCoef);
-    shCtx.drawImage(silh, carX, carY, cw, ch);
-    shCtx.restore();
+    sCt.beginPath();
+    for (let x = xL; x <= xR; x++) {
+      const px = carX + x * csc;
+      const py = carY + sBP[x] * ch;
+      x === xL ? sCt.moveTo(px, py) : sCt.lineTo(px, py);
+    }
+    for (let x = xR; x >= xL; x--) {
+      sCt.lineTo(carX + x * csc, carY + sBP[x] * ch + shadowH);
+    }
+    sCt.closePath();
+
+    const midX = Math.round((xL + xR) / 2);
+    const gY0  = carY + sBP[midX] * ch;
+    const grad = sCt.createLinearGradient(0, gY0, 0, gY0 + shadowH);
+    grad.addColorStop(0,    'rgba(0,0,0,0.88)');
+    grad.addColorStop(0.55, 'rgba(0,0,0,0.42)');
+    grad.addColorStop(1,    'rgba(0,0,0,0.0)');
+    sCt.fillStyle = grad;
+    sCt.fill();
 
     ctx.save();
-    ctx.filter = `blur(${Math.max(4, Math.round(cw * 0.013))}px)`;
-    ctx.globalAlpha = 0.55;
-    ctx.drawImage(shadowCvs, 0, 0);
+    ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.009))}px)`;
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(sCvs, 0, 0);
     ctx.restore();
 
   } catch (_) {
