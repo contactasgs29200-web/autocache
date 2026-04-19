@@ -211,12 +211,9 @@ function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
   const tlx = plate.tl.x, trx = plate.tr.x;
   const brx = plate.br.x, blx = plate.bl.x;
 
-  // Centre Y par côté : capture l'inclinaison verticale de la plaque (voiture de 3/4)
-  const leftCY  = (plate.tl.y + plate.bl.y) / 2;
-  const rightCY = (plate.tr.y + plate.br.y) / 2;
-  // Override si GPT-4o a fourni un centre précis
-  const leftCYf  = plateCenter ? plateCenter.cy : leftCY;
-  const rightCYf = plateCenter ? plateCenter.cy : rightCY;
+  // Centre Y par côté depuis PlateRecognizer (position fiable)
+  const leftCYf  = (plate.tl.y + plate.bl.y) / 2;
+  const rightCYf = (plate.tr.y + plate.br.y) / 2;
 
   // Hauteur théorique via ratio 520×110mm (4.73:1)
   // On corrige le foreshortening horizontal : la largeur apparente = largeur_réelle × cos(angle),
