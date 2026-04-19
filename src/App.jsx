@@ -439,7 +439,7 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
     if (sat < 0.08 || lum < 20 || lum > 245) continue;
 
     // Intensité de correction proportionnelle au jaunissement
-    const blend = Math.min(0.82, warmth * 4.5 * Math.min(1.0, sat * 2.0));
+    const blend = Math.min(0.90, warmth * 4.95 * Math.min(1.0, sat * 2.0));
     if (blend < 0.06) continue;
 
     // Cible : gris neutre (correction de teinte uniquement, pas de blanchiment)
@@ -452,7 +452,7 @@ function correctHeadlightZone(ctx, x, y, zw, zh) {
     let nB = b + (tB - b) * blend;
 
     // Légère clarté uniquement sur pixels fortement jaunes (warmth élevé)
-    const clarity = Math.max(0, warmth - 0.08) * blend * 1.2;
+    const clarity = Math.max(0, warmth - 0.08) * blend * 1.32;
     nR += (255 - nR) * clarity;
     nG += (255 - nG) * clarity;
     nB += (255 - nB) * clarity;
