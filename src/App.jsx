@@ -3230,7 +3230,7 @@ export default function AutoCache() {
                     {
                       key: "essential",
                       name: "Essentiel",
-                      price: "14,90 €",
+                      price: "11,90 €",
                       badge: null,
                       features: [
                         { ok: true,  label: "Cache plaque personnalisé" },
@@ -3245,7 +3245,7 @@ export default function AutoCache() {
                     {
                       key: "pro",
                       name: "Pro",
-                      price: "24,90 €",
+                      price: "19,90 €",
                       badge: "Recommandé",
                       features: [
                         { ok: true, label: "Cache plaque personnalisé" },
@@ -3471,7 +3471,7 @@ export default function AutoCache() {
                 {
                   key: "essential",
                   name: "Essentiel",
-                  price: "14,90€",
+                  price: "11,90€",
                   badge: null,
                   features: [
                     { ok: true,  label: "200 photos / mois" },
@@ -3486,7 +3486,7 @@ export default function AutoCache() {
                 {
                   key: "pro",
                   name: "Pro",
-                  price: "24,90€",
+                  price: "19,90€",
                   badge: "Recommandé",
                   features: [
                     { ok: true, label: "250 photos / mois" },
