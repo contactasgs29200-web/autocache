@@ -693,7 +693,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const cw = carImg.width * scale;
   const ch = carImg.height * scale;
   const carX = (W - cw) / 2 + offsetX;
-  const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
+  const carY = H * 0.88 - ch + offsetY; // bas de la voiture ancré à 88 % de la hauteur
 
   // Trouver le bas réel de la voiture + profil bas + masse verticale par colonne
   let groundFrac = 1.0;
