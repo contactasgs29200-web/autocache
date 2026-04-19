@@ -210,13 +210,14 @@ function buildCorners(plate, near_side, angle_deg) {
   const tlx = plate.tl.x, trx = plate.tr.x;
   const brx = plate.br.x, blx = plate.bl.x;
 
-  // Centre Y depuis le bas du bbox PR : ancrage sur le bas de la plaque (plus fiable que le centre)
-  const botY    = (plate.bl.y + plate.br.y) / 2;
+  // Ancrage sur le HAUT du bbox PR : le bord haut de PR coïncide avec le haut de la plaque.
+  // Le bbox PR s'étend souvent plus bas (shadow/porte-plaque), donc ni centre ni bas ne sont fiables.
+  const topY    = (plate.tl.y + plate.tr.y) / 2;
   const avgW    = ((trx - tlx) + (brx - blx)) / 2;
   const theta   = angle_deg * Math.PI / 180;
   // Hauteur réelle = largeur_apparente / (4.73 × cos(angle))
   const ph      = avgW / (4.73 * Math.max(0.35, Math.cos(theta)));
-  const centerY = botY - ph * 0.5;
+  const centerY = topY + ph * 0.5;
 
   const PERSP  = 0.25;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
