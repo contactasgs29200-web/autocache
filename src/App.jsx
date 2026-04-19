@@ -219,13 +219,14 @@ function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
   const rightCYf = plateCenter ? plateCenter.cy : rightCY;
 
   // Hauteur théorique via ratio 520×110mm (4.73:1)
+  // On corrige le foreshortening horizontal : la largeur apparente = largeur_réelle × cos(angle),
+  // donc hauteur_réelle = largeur_apparente / (4.73 × cos(angle))
   const topW = trx - tlx;
   const botW = brx - blx;
   const avgW = (topW + botW) / 2;
-  const ph   = avgW / 4.73;
-
-  // Hauteur gauche/droite différente en perspective
   const theta  = angle_deg * Math.PI / 180;
+  const ph   = avgW / (4.73 * Math.max(0.4, Math.cos(theta)));
+
   const PERSP  = 0.32;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
   const farH   = ph * (1 - Math.sin(theta) * PERSP);
