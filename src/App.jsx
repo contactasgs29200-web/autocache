@@ -738,8 +738,8 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     }
     if (xL < 0) { xL = 0; xR = carImg.width - 1; }
 
-    // Lisser bottomProfile sur la plage active
-    const kR = Math.max(2, Math.round(carImg.width * 0.025));
+    // Lissage agressif du profil bas (fenêtre large → courbe douce)
+    const kR = Math.max(4, Math.round(carImg.width * 0.05));
     const sBP = new Float32Array(carImg.width);
     for (let x = xL; x <= xR; x++) {
       let s = 0, n = 0;
@@ -750,12 +750,9 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       sBP[x] = s / n;
     }
 
-    // Polygone fin qui trace le bas réel de la voiture :
-    // bord supérieur = bottomProfile (contact avec le sol / bas de caisse)
-    // bord inférieur = + shadowH (s'estompe en transparence)
-    // La voiture dessinée par-dessus cache l'intérieur → seul le liseré visible
+    // Polygone très fin → grand flou → fondu naturel sous la voiture
     const csc     = cw / carImg.width;
-    const shadowH = Math.max(10, ch * 0.030);
+    const shadowH = Math.max(4, ch * 0.012); // très mince
 
     const sCvs = document.createElement('canvas');
     sCvs.width = W; sCvs.height = H;
@@ -771,19 +768,13 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       sCt.lineTo(carX + x * csc, carY + sBP[x] * ch + shadowH);
     }
     sCt.closePath();
-
-    const midX = Math.round((xL + xR) / 2);
-    const gY0  = carY + sBP[midX] * ch;
-    const grad = sCt.createLinearGradient(0, gY0, 0, gY0 + shadowH);
-    grad.addColorStop(0,    'rgba(0,0,0,0.88)');
-    grad.addColorStop(0.55, 'rgba(0,0,0,0.42)');
-    grad.addColorStop(1,    'rgba(0,0,0,0.0)');
-    sCt.fillStyle = grad;
+    sCt.fillStyle = 'rgba(0,0,0,0.80)';
     sCt.fill();
 
+    // Grand flou → le trait épouse la forme et se fond progressivement
     ctx.save();
-    ctx.filter = `blur(${Math.max(3, Math.round(cw * 0.009))}px)`;
-    ctx.globalAlpha = 0.85;
+    ctx.filter = `blur(${Math.max(7, Math.round(cw * 0.022))}px)`;
+    ctx.globalAlpha = 0.75;
     ctx.drawImage(sCvs, 0, 0);
     ctx.restore();
 
