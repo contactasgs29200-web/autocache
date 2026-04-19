@@ -750,33 +750,37 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       sBP[x] = s / n;
     }
 
-    // Polygone très fin → grand flou → fondu naturel sous la voiture
-    const csc     = cw / carImg.width;
-    const shadowH = Math.max(4, ch * 0.012); // très mince
+    const csc = cw / carImg.width;
 
-    const sCvs = document.createElement('canvas');
-    sCvs.width = W; sCvs.height = H;
-    const sCt  = sCvs.getContext('2d');
+    // Deux passes : contact dense (flou faible) + halo doux (grand flou)
+    // → ombre réaliste : dense au contact, fondue progressivement
+    const drawShadowPass = (h, blurMult, alpha) => {
+      const cvs = document.createElement('canvas');
+      cvs.width = W; cvs.height = H;
+      const ct  = cvs.getContext('2d');
+      ct.beginPath();
+      for (let x = xL; x <= xR; x++) {
+        const px = carX + x * csc;
+        const py = carY + sBP[x] * ch;
+        x === xL ? ct.moveTo(px, py) : ct.lineTo(px, py);
+      }
+      for (let x = xR; x >= xL; x--) {
+        ct.lineTo(carX + x * csc, carY + sBP[x] * ch + h);
+      }
+      ct.closePath();
+      ct.fillStyle = 'rgba(0,0,0,0.90)';
+      ct.fill();
+      ctx.save();
+      ctx.filter = `blur(${Math.max(4, Math.round(cw * blurMult))}px)`;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(cvs, 0, 0);
+      ctx.restore();
+    };
 
-    sCt.beginPath();
-    for (let x = xL; x <= xR; x++) {
-      const px = carX + x * csc;
-      const py = carY + sBP[x] * ch;
-      x === xL ? sCt.moveTo(px, py) : sCt.lineTo(px, py);
-    }
-    for (let x = xR; x >= xL; x--) {
-      sCt.lineTo(carX + x * csc, carY + sBP[x] * ch + shadowH);
-    }
-    sCt.closePath();
-    sCt.fillStyle = 'rgba(0,0,0,0.80)';
-    sCt.fill();
-
-    // Grand flou → le trait épouse la forme et se fond progressivement
-    ctx.save();
-    ctx.filter = `blur(${Math.max(7, Math.round(cw * 0.022))}px)`;
-    ctx.globalAlpha = 0.75;
-    ctx.drawImage(sCvs, 0, 0);
-    ctx.restore();
+    // Pass 1 : contact (liseré fin, flou modéré, assez dense)
+    drawShadowPass(Math.max(3, ch * 0.008), 0.014, 0.60);
+    // Pass 2 : halo ambiant (légèrement plus large, grand flou, discret)
+    drawShadowPass(Math.max(6, ch * 0.016), 0.048, 0.35);
 
   } catch (_) {
     // Fallback : ellipse radiale
