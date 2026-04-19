@@ -203,24 +203,26 @@ function estimateAngleFromPosition(plate) {
 }
 
 // Build cover corners from PlateRecognizer bbox.
-// On utilise directement la hauteur détectée par PR + padding vertical de sécurité.
-// L'angle GPT-4o sert uniquement à différencier les hauteurs côté proche/loin.
+// Position X et centre Y : depuis PR (fiables).
+// Hauteur : calculée depuis la largeur PR via ratio 520×110mm corrigé de l'angle.
+// La hauteur PR est exclue car PR inclut souvent le porte-plaque (bbox trop grande).
 function buildCorners(plate, near_side, angle_deg) {
   const tlx = plate.tl.x, trx = plate.tr.x;
   const brx = plate.br.x, blx = plate.bl.x;
 
-  const centerY = (plate.tl.y + plate.bl.y + plate.tr.y + plate.br.y) / 4;
-  // Hauteur réelle mesurée par PlateRecognizer + 15% de marge de sécurité
-  const prH = ((plate.bl.y + plate.br.y) / 2) - ((plate.tl.y + plate.tr.y) / 2);
-  const baseH = prH * 1.15;
+  // Centre Y depuis le bas du bbox PR : ancrage sur le bas de la plaque (plus fiable que le centre)
+  const botY    = (plate.bl.y + plate.br.y) / 2;
+  const avgW    = ((trx - tlx) + (brx - blx)) / 2;
+  const theta   = angle_deg * Math.PI / 180;
+  // Hauteur réelle = largeur_apparente / (4.73 × cos(angle))
+  const ph      = avgW / (4.73 * Math.max(0.35, Math.cos(theta)));
+  const centerY = botY - ph * 0.5;
 
-  // Légère variation côté proche/loin selon l'angle (effet perspective)
-  const theta = angle_deg * Math.PI / 180;
-  const PERSP = 0.20;
-  const nearH = baseH * (1 + Math.sin(theta) * PERSP);
-  const farH  = baseH * (1 - Math.sin(theta) * PERSP);
-  const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : baseH;
-  const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : baseH;
+  const PERSP  = 0.25;
+  const nearH  = ph * (1 + Math.sin(theta) * PERSP);
+  const farH   = ph * (1 - Math.sin(theta) * PERSP);
+  const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
+  const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
 
   return {
     tl: { x: Math.max(0, tlx), y: Math.max(0, centerY - leftH  * 0.5) },
