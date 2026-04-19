@@ -664,6 +664,65 @@ async function removeBackground(dataUrl) {
   });
 }
 
+// ── Mode intérieur : détecte les vitres via GPT et remplace par le fond showroom ──────────
+async function processInteriorPhoto(photoFile, showroomBgDataUrl) {
+  // Charger la photo originale sur canvas
+  const objUrl = URL.createObjectURL(photoFile);
+  const img = await loadImg(objUrl);
+  URL.revokeObjectURL(objUrl);
+
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+
+  // Envoyer à /api/windshield pour détecter les coins des vitres
+  const b64 = c.toDataURL('image/jpeg', 0.85).split(',')[1];
+  const resp = await fetch('/api/windshield', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ b64 }),
+  });
+  const data = await resp.json();
+  const windows = data.windows ?? [];
+  console.log(`[Interior] ${windows.length} window(s) detected`, windows);
+
+  if (windows.length === 0) return null; // aucune vitre détectée
+
+  // Charger le fond showroom
+  const bgImg = await loadImg(showroomBgDataUrl);
+
+  // Pour chaque vitre : mapper le fond showroom en perspective
+  for (const win of windows) {
+    const tl = { x: win.tl.x * W, y: win.tl.y * H };
+    const tr = { x: win.tr.x * W, y: win.tr.y * H };
+    const br = { x: win.br.x * W, y: win.br.y * H };
+    const bl = { x: win.bl.x * W, y: win.bl.y * H };
+    ctx.save();
+    ctx.globalAlpha = 0.90; // légère transparence pour effet vitre
+    drawPerspective(ctx, bgImg, tl, tr, br, bl);
+    ctx.restore();
+
+    // Vignette subtile sur les bords de la vitre (encadrement)
+    const grad = ctx.createLinearGradient(tl.x, tl.y, bl.x, bl.y);
+    grad.addColorStop(0,    'rgba(0,0,0,0.18)');
+    grad.addColorStop(0.08, 'rgba(0,0,0,0.0)');
+    grad.addColorStop(0.92, 'rgba(0,0,0,0.0)');
+    grad.addColorStop(1,    'rgba(0,0,0,0.18)');
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(tl.x, tl.y); ctx.lineTo(tr.x, tr.y);
+    ctx.lineTo(br.x, br.y); ctx.lineTo(bl.x, bl.y);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  return { dataURL: c.toDataURL('image/jpeg', 0.95), windows };
+}
+
 // Composite : pose la voiture découpée sur le fond de showroom
 // logoImg + corners + bgColor permettent de redessiner le cache plaque en qualité native
 // offsetX / offsetY permettent de repositionner la voiture après génération (flèches)
@@ -1193,6 +1252,7 @@ export default function AutoCache() {
 
   // ── Showroom Setup (page principale) ──────────────────────────────────────
   const [showroomEnabled,      setShowroomEnabled]      = useState(false);
+  const [interiorMode,         setInteriorMode]         = useState(false); // photo intérieur → remplace vitres
   const [showroomSetupBg,      setShowroomSetupBg]      = useState(0);
   const [showroomSetupCustomBg, setShowroomSetupCustomBg] = useState(null);
   const showroomSetupUploadRef = useRef(null);
@@ -1387,21 +1447,30 @@ export default function AutoCache() {
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
-          // On envoie la photo propre (sans cache plaque) à remove.bg → meilleur détourage
-          const cutout = await removeBackground(r.baseDataURL);
-          // Cache plaque redessiné nativement sur le composite (pas de double compression)
-          const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.5, true, wOpts);
-          entry.cutoutDataURL     = cutout;
-          entry.showroomDataURL   = sr.dataURL;
-          entry.showroomBaseURL   = sr.baseURL;
-          entry.showroomTransform = sr.transform;
-          entry.showroomBgUrl     = showroomBgDataUrl;
-          entry.wallLogoSrc       = resolvedWallLogo;
-          entry.wallLogoPos       = { x: 0.5, y: 0.25 };
-          entry.wallLogoScale     = wallLogoScale;
-          entry.wallLogoOpacity   = wallLogoOpacity;
-          entry._wallLogoRatio    = wallLogoRatio;
+          if (interiorMode) {
+            // Mode intérieur : remplace les vitres par le fond showroom
+            const ir = await processInteriorPhoto(photosToProcess[i].file, showroomBgDataUrl);
+            if (ir) {
+              entry.showroomDataURL = ir.dataURL;
+              entry.showroomBgUrl   = showroomBgDataUrl;
+              entry.interiorWindows = ir.windows;
+            }
+          } else {
+            // Mode extérieur : détourage + composite classique
+            const cutout = await removeBackground(r.baseDataURL);
+            const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
+            const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.5, true, wOpts);
+            entry.cutoutDataURL     = cutout;
+            entry.showroomDataURL   = sr.dataURL;
+            entry.showroomBaseURL   = sr.baseURL;
+            entry.showroomTransform = sr.transform;
+            entry.showroomBgUrl     = showroomBgDataUrl;
+            entry.wallLogoSrc       = resolvedWallLogo;
+            entry.wallLogoPos       = { x: 0.5, y: 0.25 };
+            entry.wallLogoScale     = wallLogoScale;
+            entry.wallLogoOpacity   = wallLogoOpacity;
+            entry._wallLogoRatio    = wallLogoRatio;
+          }
         } catch(e) {
           console.error('Showroom processing error:', e);
           setError('Showroom : ' + (e?.message || String(e)));
@@ -2335,6 +2404,18 @@ export default function AutoCache() {
                       <p style={{ fontSize: 9, color: "#aaa", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7, margin: 0 }}>
                         Pour un détourage optimal, utilisez une photo où le véhicule est <span style={{ color: "#ddd5c8" }}>seul dans le cadre</span>. La présence d'autres véhicules à proximité peut perturber l'analyse de l'IA et affecter la qualité du détourage.
                       </p>
+                    </div>
+                    {/* Toggle Extérieur / Intérieur */}
+                    <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
+                      {[["ext", "🚗 Extérieur", false], ["int", "🪟 Intérieur", true]].map(([k, label, val]) => (
+                        <button key={k} onClick={() => setInteriorMode(val)}
+                          style={{ flex: 1, padding: "7px 0", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", borderRadius: 2,
+                            background: interiorMode === val ? "#f26522" : "#161616",
+                            color: interiorMode === val ? "#090909" : "#666",
+                            border: `1px solid ${interiorMode === val ? "#f26522" : "#2a2a2a"}`, fontWeight: 700 }}>
+                          {label}
+                        </button>
+                      ))}
                     </div>
                     <div style={{ fontSize: 9, letterSpacing: 2, color: "#888", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "stretch" }}>
