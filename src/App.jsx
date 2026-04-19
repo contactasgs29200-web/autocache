@@ -851,10 +851,9 @@ async function detectCarAngle(b64) {
       body: JSON.stringify({ b64 }),
     });
     const data = await r.json();
-    if (data.tl && data.tr && data.br && data.bl &&
-        typeof data.tl.x === 'number' && typeof data.tl.y === 'number') {
-      console.log(`%c[AutoCache] GPT-4o corners → TL(${data.tl.x.toFixed(3)},${data.tl.y.toFixed(3)}) TR(${data.tr.x.toFixed(3)},${data.tr.y.toFixed(3)}) BR(${data.br.x.toFixed(3)},${data.br.y.toFixed(3)}) BL(${data.bl.x.toFixed(3)},${data.bl.y.toFixed(3)})`, "color:cyan;font-weight:bold");
-      return { gptCorners: data };
+    if (typeof data.near_side === 'string' && typeof data.angle_deg === 'number') {
+      console.log(`%c[AutoCache] GPT-4o angle → near_side=${data.near_side} angle=${data.angle_deg}°`, "color:cyan;font-weight:bold");
+      return { near_side: data.near_side, angle_deg: data.angle_deg, plateCenter: data.plateCenter ?? null };
     }
     return null;
   } catch(e) {
@@ -926,13 +925,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
 
-    // Corners GPT-4o directs si disponibles, sinon fallback heuristique
-    if (angleData?.gptCorners) {
-      savedCorners = angleData.gptCorners;
-    } else {
-      const { near_side, angle_deg } = estimateAngleFromPosition(plate);
-      savedCorners = buildCorners(plate, near_side, angle_deg, null);
-    }
+    // GPT-4o angle si disponible, fallback heuristique si échec
+    const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
+    const plateCenter = angleData?.plateCenter ?? null;
+    savedCorners = buildCorners(plate, near_side, angle_deg, plateCenter);
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
