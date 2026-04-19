@@ -851,9 +851,10 @@ async function detectCarAngle(b64) {
       body: JSON.stringify({ b64 }),
     });
     const data = await r.json();
-    if (typeof data.near_side === 'string' && typeof data.angle_deg === 'number') {
-      console.log(`%c[AutoCache] GPT-4o angle → near_side=${data.near_side} angle=${data.angle_deg}°`, "color:cyan;font-weight:bold");
-      return { near_side: data.near_side, angle_deg: data.angle_deg };
+    if (data.tl && data.tr && data.br && data.bl &&
+        typeof data.tl.x === 'number' && typeof data.tl.y === 'number') {
+      console.log(`%c[AutoCache] GPT-4o corners → TL(${data.tl.x.toFixed(3)},${data.tl.y.toFixed(3)}) TR(${data.tr.x.toFixed(3)},${data.tr.y.toFixed(3)}) BR(${data.br.x.toFixed(3)},${data.br.y.toFixed(3)}) BL(${data.bl.x.toFixed(3)},${data.bl.y.toFixed(3)})`, "color:cyan;font-weight:bold");
+      return { gptCorners: data };
     }
     return null;
   } catch(e) {
@@ -884,7 +885,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Détection plaque + angle en parallèle
   const [plate, angleData] = await Promise.all([
     detectPlate(b64, imgW, imgH),
-    useGptAngle ? detectCarAngle(b64) : Promise.resolve(null),
+    detectCarAngle(b64),
   ]);
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
@@ -925,10 +926,13 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
 
-    // Angle + centre plaque via GPT-4o (corners.js), fallback heuristique si échec
-    const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-    const plateCenter = angleData?.plateCenter ?? null;
-    savedCorners = buildCorners(plate, near_side, angle_deg, plateCenter);
+    // Corners GPT-4o directs si disponibles, sinon fallback heuristique
+    if (angleData?.gptCorners) {
+      savedCorners = angleData.gptCorners;
+    } else {
+      const { near_side, angle_deg } = estimateAngleFromPosition(plate);
+      savedCorners = buildCorners(plate, near_side, angle_deg, null);
+    }
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
