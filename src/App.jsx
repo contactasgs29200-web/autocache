@@ -1519,16 +1519,21 @@ export default function AutoCache() {
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
   };
 
+  const cropEvtXY = e => e.touches ? [e.touches[0].clientX, e.touches[0].clientY]
+                                   : [e.clientX, e.clientY];
+
   const startCropDrag = (e, type) => {
     e.preventDefault(); e.stopPropagation();
-    setCropDrag({ type, startMx: e.clientX, startMy: e.clientY, startBox: { ...cropBox } });
+    const [mx, my] = cropEvtXY(e);
+    setCropDrag({ type, startMx: mx, startMy: my, startBox: { ...cropBox } });
   };
 
   const onCropMouseMove = (e) => {
     if (!cropDrag || !cropCanvasRef.current) return;
     const rect = cropCanvasRef.current.getBoundingClientRect();
-    const dx = (e.clientX - cropDrag.startMx) / rect.width;
-    const dy = (e.clientY - cropDrag.startMy) / rect.height;
+    const [cx, cy] = cropEvtXY(e);
+    const dx = (cx - cropDrag.startMx) / rect.width;
+    const dy = (cy - cropDrag.startMy) / rect.height;
     let { x, y, w, h } = cropDrag.startBox;
     const t = cropDrag.type;
     if (t === 'move')                { x += dx; y += dy; }
@@ -2588,8 +2593,8 @@ export default function AutoCache() {
         <div
           onClick={cropMode || adjustMode ? undefined : closeLightbox}
           onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
-          onTouchMove={e => { if (adjustMode) onAdjustTouchMove(e); else onLbTouchMove(e); }}
-          onTouchEnd={() => { adjustDragRef.current = null; setAdjustDrag(null); setLbPanDrag(null); pinchRef.current = null; }}
+          onTouchMove={e => { if (cropMode) onCropMouseMove(e); else if (adjustMode) onAdjustTouchMove(e); else onLbTouchMove(e); }}
+          onTouchEnd={() => { setCropDrag(null); adjustDragRef.current = null; setAdjustDrag(null); setLbPanDrag(null); pinchRef.current = null; }}
           onMouseUp={() => {
             setCropDrag(null);
             // Auto-sauvegarde dès qu'un coin est relâché
@@ -2976,7 +2981,8 @@ export default function AutoCache() {
                 {/* Rectangle de rognage (déplacer) */}
                 <div
                   onMouseDown={e => startCropDrag(e, "move")}
-                  style={{ position: "absolute", left: `${cropBox.x*100}%`, top: `${cropBox.y*100}%`, width: `${cropBox.w*100}%`, height: `${cropBox.h*100}%`, border: "2px solid #f26522", cursor: "move", boxSizing: "border-box" }}
+                  onTouchStart={e => startCropDrag(e, "move")}
+                  style={{ position: "absolute", left: `${cropBox.x*100}%`, top: `${cropBox.y*100}%`, width: `${cropBox.w*100}%`, height: `${cropBox.h*100}%`, border: "2px solid #f26522", cursor: "move", boxSizing: "border-box", touchAction: "none" }}
                 >
                   {/* Grille tiers */}
                   {[33.33, 66.66].map(p => (
@@ -2988,7 +2994,7 @@ export default function AutoCache() {
 
                   {/* Poignées de coin */}
                   {[["tl",0,0,"nwse-resize"],["tr","100%",0,"nesw-resize"],["br","100%","100%","nwse-resize"],["bl",0,"100%","nesw-resize"]].map(([type,left,top,cur]) => (
-                    <div key={type} onMouseDown={e => startCropDrag(e, type)} style={{ position: "absolute", left, top, width: 14, height: 14, background: "#f26522", transform: "translate(-50%,-50%)", cursor: cur, borderRadius: 2, zIndex: 2 }} />
+                    <div key={type} onMouseDown={e => startCropDrag(e, type)} onTouchStart={e => startCropDrag(e, type)} style={{ position: "absolute", left, top, width: 28, height: 28, background: "#f26522", transform: "translate(-50%,-50%)", cursor: cur, borderRadius: 4, zIndex: 2, touchAction: "none" }} />
                   ))}
                 </div>
               </div>
