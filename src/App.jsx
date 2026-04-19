@@ -1227,6 +1227,22 @@ export default function AutoCache() {
     const s = document.createElement("style");
     s.textContent = "@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}";
     document.head.appendChild(s);
+    // Restaurer les logos depuis localStorage (persistent même après déconnexion)
+    try {
+      const savedPreview = localStorage.getItem('ac_logo_preview');
+      if (savedPreview) {
+        const wasGenerated = localStorage.getItem('ac_logo_generated') === '1';
+        const savedBg = localStorage.getItem('ac_logo_bgcolor') || '#ffffff';
+        setLogo({ file: null, preview: savedPreview, generated: wasGenerated, bgColor: savedBg });
+        setLogoMode('import');
+      }
+      const savedWallMode = localStorage.getItem('ac_wall_logo_mode');
+      const savedWallLogo = localStorage.getItem('ac_wall_logo');
+      if (savedWallMode === 'image' && savedWallLogo) {
+        setWallLogoMode('image');
+        setWallLogo(savedWallLogo);
+      }
+    } catch(e) {}
     return () => document.head.removeChild(s);
   }, []);
 
@@ -1286,10 +1302,35 @@ export default function AutoCache() {
     setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, logoRadius * 5, genFont, genBorderWidth > 0 ? genBorderColor : null, genBorderWidth), generated: true, bgColor: genBg });
   }, [logoMode, genText, genBg, genFg, logoRadius, genFont, genBorderColor, genBorderWidth]);
 
+  // Persistance logo cache plaque → localStorage
+  useEffect(() => {
+    if (!logo?.preview || !logo.preview.startsWith('data:')) return;
+    try {
+      localStorage.setItem('ac_logo_preview', logo.preview);
+      localStorage.setItem('ac_logo_generated', logo.generated ? '1' : '0');
+      if (logo.bgColor) localStorage.setItem('ac_logo_bgcolor', logo.bgColor);
+    } catch(e) {}
+  }, [logo]);
+
+  // Persistance logo mural → localStorage
+  useEffect(() => {
+    try {
+      if (wallLogoMode === 'image' && wallLogo) {
+        localStorage.setItem('ac_wall_logo_mode', 'image');
+        localStorage.setItem('ac_wall_logo', wallLogo);
+      } else if (wallLogoMode !== 'image') {
+        localStorage.setItem('ac_wall_logo_mode', wallLogoMode);
+      }
+    } catch(e) {}
+  }, [wallLogo, wallLogoMode]);
+
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
     setLogoMode("import");
-    setLogo({ file: f, preview: URL.createObjectURL(f) });
+    // FileReader → data URL persistable (contrairement à createObjectURL)
+    const reader = new FileReader();
+    reader.onload = ev => setLogo({ file: f, preview: ev.target.result });
+    reader.readAsDataURL(f);
   };
 
   const handlePhotoFiles = files => {
