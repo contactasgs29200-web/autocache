@@ -925,6 +925,11 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
     console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
+    // DEBUG: bordure rouge = bbox brute de PlateRecognizer
+    const prTL = toPixel(plate.tl), prTR = toPixel(plate.tr), prBR = toPixel(plate.br), prBL = toPixel(plate.bl);
+    ctx.save(); ctx.strokeStyle = 'red'; ctx.lineWidth = 6;
+    ctx.strokeRect(prTL.x, prTL.y, prBR.x - prTL.x, prBR.y - prTL.y);
+    ctx.restore();
     // Interpolation haute qualité pour le logo (important : logo 3120px → ~300px sur la photo)
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
