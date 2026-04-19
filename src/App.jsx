@@ -202,39 +202,31 @@ function estimateAngleFromPosition(plate) {
   return { near_side, angle_deg };
 }
 
-// Build trapezoid corners from PR bounding box.
-// Stratégie : conserve les X réels de PR (perspective déjà encodée) et le centre Y
-// par côté (capture l'inclinaison verticale sur les voitures de 3/4).
-// Seule la hauteur est recalculée via le ratio 520×110mm pour corriger PR.
-function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
-  // Positions X réelles de chaque coin — PR les a déjà en perspective, on les garde
+// Build cover corners from PlateRecognizer bbox.
+// On utilise directement la hauteur détectée par PR + padding vertical de sécurité.
+// L'angle GPT-4o sert uniquement à différencier les hauteurs côté proche/loin.
+function buildCorners(plate, near_side, angle_deg) {
   const tlx = plate.tl.x, trx = plate.tr.x;
   const brx = plate.br.x, blx = plate.bl.x;
 
-  // Centre Y par côté depuis PlateRecognizer (position fiable)
-  const leftCYf  = (plate.tl.y + plate.bl.y) / 2;
-  const rightCYf = (plate.tr.y + plate.br.y) / 2;
+  const centerY = (plate.tl.y + plate.bl.y + plate.tr.y + plate.br.y) / 4;
+  // Hauteur réelle mesurée par PlateRecognizer + 15% de marge de sécurité
+  const prH = ((plate.bl.y + plate.br.y) / 2) - ((plate.tl.y + plate.tr.y) / 2);
+  const baseH = prH * 1.15;
 
-  // Hauteur théorique via ratio 520×110mm (4.73:1)
-  // On corrige le foreshortening horizontal : la largeur apparente = largeur_réelle × cos(angle),
-  // donc hauteur_réelle = largeur_apparente / (4.73 × cos(angle))
-  const topW = trx - tlx;
-  const botW = brx - blx;
-  const avgW = (topW + botW) / 2;
-  const theta  = angle_deg * Math.PI / 180;
-  const ph   = avgW / (4.73 * Math.max(0.4, Math.cos(theta)));
-
-  const PERSP  = 0.32;
-  const nearH  = ph * (1 + Math.sin(theta) * PERSP);
-  const farH   = ph * (1 - Math.sin(theta) * PERSP);
-  const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : ph;
-  const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : ph;
+  // Légère variation côté proche/loin selon l'angle (effet perspective)
+  const theta = angle_deg * Math.PI / 180;
+  const PERSP = 0.20;
+  const nearH = baseH * (1 + Math.sin(theta) * PERSP);
+  const farH  = baseH * (1 - Math.sin(theta) * PERSP);
+  const leftH  = near_side === "left"  ? nearH : near_side === "right" ? farH : baseH;
+  const rightH = near_side === "right" ? nearH : near_side === "left"  ? farH : baseH;
 
   return {
-    tl: { x: Math.max(0, tlx), y: Math.max(0, leftCYf  - leftH  * 0.5) },
-    tr: { x: Math.min(1, trx), y: Math.max(0, rightCYf - rightH * 0.5) },
-    br: { x: Math.min(1, brx), y: Math.min(1, rightCYf + rightH * 0.5) },
-    bl: { x: Math.max(0, blx), y: Math.min(1, leftCYf  + leftH  * 0.5) },
+    tl: { x: Math.max(0, tlx), y: Math.max(0, centerY - leftH  * 0.5) },
+    tr: { x: Math.min(1, trx), y: Math.max(0, centerY - rightH * 0.5) },
+    br: { x: Math.min(1, brx), y: Math.min(1, centerY + rightH * 0.5) },
+    bl: { x: Math.max(0, blx), y: Math.min(1, centerY + leftH  * 0.5) },
   };
 }
 
@@ -924,8 +916,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
 
     // GPT-4o angle si disponible, fallback heuristique si échec
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-    const plateCenter = angleData?.plateCenter ?? null;
-    savedCorners = buildCorners(plate, near_side, angle_deg, plateCenter);
+    savedCorners = buildCorners(plate, near_side, angle_deg);
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
