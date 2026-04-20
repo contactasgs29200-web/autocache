@@ -941,11 +941,22 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
     console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
-    // DEBUG: bordure rouge = bbox brute de PlateRecognizer
+    // DEBUG rouge = bbox PlateRecognizer brute
     const prTL = toPixel(plate.tl), prTR = toPixel(plate.tr), prBR = toPixel(plate.br), prBL = toPixel(plate.bl);
     ctx.save(); ctx.strokeStyle = 'red'; ctx.lineWidth = 6;
     ctx.strokeRect(prTL.x, prTL.y, prBR.x - prTL.x, prBR.y - prTL.y);
     ctx.restore();
+    // DEBUG vert = coins GPT-4o (si disponibles)
+    if (gptCorners) {
+      const gTL = toPixel(gptCorners.tl), gTR = toPixel(gptCorners.tr);
+      const gBR = toPixel(gptCorners.br), gBL = toPixel(gptCorners.bl);
+      ctx.save(); ctx.strokeStyle = 'lime'; ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(gTL.x, gTL.y); ctx.lineTo(gTR.x, gTR.y);
+      ctx.lineTo(gBR.x, gBR.y); ctx.lineTo(gBL.x, gBL.y);
+      ctx.closePath(); ctx.stroke();
+      ctx.restore();
+    }
     // Interpolation haute qualité pour le logo (important : logo 3120px → ~300px sur la photo)
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
