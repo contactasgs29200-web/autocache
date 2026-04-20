@@ -921,48 +921,55 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Save photo without plate for later re-rendering in "Ajuster" mode
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
   const baseDataURL = c.toDataURL("image/jpeg", 0.97);
-  // Étape 2 : si PR a trouvé une plaque, crop + GPT-4o zoomé pour coins précis
+  // Étape 2 : si PR a trouvé une plaque, crop sur photoImg + GPT-4o zoomé pour coins précis
+  // photoImg est déjà chargé (ligne 892) — pas besoin de recharger depuis b64
   let zoomedCorners = null;
   if (plate.found) {
     try {
-      const PAD = 0.7; // 70% padding de chaque côté du bbox PR
+      const PAD = 0.8; // 80% padding de chaque côté → la plaque occupe ~40% du crop
       const bboxW = plate.tr.x - plate.tl.x;
       const bboxH = plate.bl.y - plate.tl.y;
       const x0 = Math.max(0, plate.tl.x - bboxW * PAD);
       const y0 = Math.max(0, plate.tl.y - bboxH * PAD);
       const x1 = Math.min(1, plate.tr.x + bboxW * PAD);
       const y1 = Math.min(1, plate.bl.y + bboxH * PAD);
-      const cropW = Math.round((x1 - x0) * imgW);
-      const cropH = Math.round((y1 - y0) * imgH);
+      // Dimensions crop en pixels (sur photoImg = résolution originale)
+      const srcW = photoImg.naturalWidth, srcH = photoImg.naturalHeight;
+      const cx0 = Math.round(x0 * srcW), cy0 = Math.round(y0 * srcH);
+      const cw  = Math.round((x1 - x0) * srcW);
+      const ch  = Math.round((y1 - y0) * srcH);
+      // Limiter la taille du crop envoyé à GPT-4o (max 1200px côté long)
+      const scale = Math.min(1, 1200 / Math.max(cw, ch));
+      const outW = Math.round(cw * scale), outH = Math.round(ch * scale);
 
-      // Crop de l'image originale autour de la plaque
       const cropCanvas = document.createElement('canvas');
-      cropCanvas.width = cropW; cropCanvas.height = cropH;
-      const cropCtx = cropCanvas.getContext('2d');
-      const origImg = await loadImg(`data:image/jpeg;base64,${b64}`);
-      cropCtx.drawImage(origImg, Math.round(x0 * imgW), Math.round(y0 * imgH), cropW, cropH, 0, 0, cropW, cropH);
+      cropCanvas.width = outW; cropCanvas.height = outH;
+      cropCanvas.getContext('2d').drawImage(photoImg, cx0, cy0, cw, ch, 0, 0, outW, outH);
       const cropB64 = cropCanvas.toDataURL('image/jpeg', 0.92).split(',')[1];
 
-      console.log(`%c[AutoCache] Crop plaque → x0=${x0.toFixed(3)} y0=${y0.toFixed(3)} ${cropW}×${cropH}px`, "color:cyan");
+      console.log(`%c[AutoCache] Crop plaque → (${x0.toFixed(3)},${y0.toFixed(3)})→(${x1.toFixed(3)},${y1.toFixed(3)}) = ${outW}×${outH}px envoyé à GPT-4o`, "color:cyan;font-weight:bold");
       const r = await fetch("/api/corners-zoomed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ b64: cropB64 }),
       });
       const zd = await r.json();
+      console.log("[AutoCache] corners-zoomed réponse:", zd);
       if (zd.tl && zd.tr && zd.br && zd.bl) {
         // Reconvertir coins crop (0-1) → image complète (0-1)
-        const cw = x1 - x0, ch = y1 - y0;
+        const nw = x1 - x0, nh = y1 - y0;
         zoomedCorners = {
-          tl: { x: x0 + zd.tl.x * cw, y: y0 + zd.tl.y * ch },
-          tr: { x: x0 + zd.tr.x * cw, y: y0 + zd.tr.y * ch },
-          br: { x: x0 + zd.br.x * cw, y: y0 + zd.br.y * ch },
-          bl: { x: x0 + zd.bl.x * cw, y: y0 + zd.bl.y * ch },
+          tl: { x: x0 + zd.tl.x * nw, y: y0 + zd.tl.y * nh },
+          tr: { x: x0 + zd.tr.x * nw, y: y0 + zd.tr.y * nh },
+          br: { x: x0 + zd.br.x * nw, y: y0 + zd.br.y * nh },
+          bl: { x: x0 + zd.bl.x * nw, y: y0 + zd.bl.y * nh },
         };
-        console.log(`%c[AutoCache] Coins zoomés reconvertis → TL(${zoomedCorners.tl.x.toFixed(3)},${zoomedCorners.tl.y.toFixed(3)}) BR(${zoomedCorners.br.x.toFixed(3)},${zoomedCorners.br.y.toFixed(3)})`, "color:lime;font-weight:bold");
+        console.log(`%c[AutoCache] Coins zoomés OK → TL(${zoomedCorners.tl.x.toFixed(3)},${zoomedCorners.tl.y.toFixed(3)}) TR(${zoomedCorners.tr.x.toFixed(3)},${zoomedCorners.tr.y.toFixed(3)}) BR(${zoomedCorners.br.x.toFixed(3)},${zoomedCorners.br.y.toFixed(3)}) BL(${zoomedCorners.bl.x.toFixed(3)},${zoomedCorners.bl.y.toFixed(3)})`, "color:lime;font-weight:bold");
+      } else {
+        console.error("[AutoCache] corners-zoomed : réponse invalide", zd);
       }
     } catch(e) {
-      console.warn("[AutoCache] corners-zoomed échoué, fallback PR", e);
+      console.error("[AutoCache] corners-zoomed échoué, fallback PR:", e.message ?? e);
     }
   }
 
