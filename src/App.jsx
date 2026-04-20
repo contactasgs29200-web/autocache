@@ -883,7 +883,7 @@ async function detectPlate(b64, imgW, imgH) {
 
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
-  // Détection plaque + angle en parallèle
+  // Étape 1 : détection PR + angle GPT-4o en parallèle (rapide)
   const [plate, angleData] = await Promise.all([
     detectPlate(b64, imgW, imgH),
     detectCarAngle(b64),
@@ -921,35 +921,75 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Save photo without plate for later re-rendering in "Ajuster" mode
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
   const baseDataURL = c.toDataURL("image/jpeg", 0.97);
+  // Étape 2 : si PR a trouvé une plaque, crop + GPT-4o zoomé pour coins précis
+  let zoomedCorners = null;
+  if (plate.found) {
+    try {
+      const PAD = 0.7; // 70% padding de chaque côté du bbox PR
+      const bboxW = plate.tr.x - plate.tl.x;
+      const bboxH = plate.bl.y - plate.tl.y;
+      const x0 = Math.max(0, plate.tl.x - bboxW * PAD);
+      const y0 = Math.max(0, plate.tl.y - bboxH * PAD);
+      const x1 = Math.min(1, plate.tr.x + bboxW * PAD);
+      const y1 = Math.min(1, plate.bl.y + bboxH * PAD);
+      const cropW = Math.round((x1 - x0) * imgW);
+      const cropH = Math.round((y1 - y0) * imgH);
+
+      // Crop de l'image originale autour de la plaque
+      const cropCanvas = document.createElement('canvas');
+      cropCanvas.width = cropW; cropCanvas.height = cropH;
+      const cropCtx = cropCanvas.getContext('2d');
+      const origImg = await loadImg(`data:image/jpeg;base64,${b64}`);
+      cropCtx.drawImage(origImg, Math.round(x0 * imgW), Math.round(y0 * imgH), cropW, cropH, 0, 0, cropW, cropH);
+      const cropB64 = cropCanvas.toDataURL('image/jpeg', 0.92).split(',')[1];
+
+      console.log(`%c[AutoCache] Crop plaque → x0=${x0.toFixed(3)} y0=${y0.toFixed(3)} ${cropW}×${cropH}px`, "color:cyan");
+      const r = await fetch("/api/corners-zoomed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ b64: cropB64 }),
+      });
+      const zd = await r.json();
+      if (zd.tl && zd.tr && zd.br && zd.bl) {
+        // Reconvertir coins crop (0-1) → image complète (0-1)
+        const cw = x1 - x0, ch = y1 - y0;
+        zoomedCorners = {
+          tl: { x: x0 + zd.tl.x * cw, y: y0 + zd.tl.y * ch },
+          tr: { x: x0 + zd.tr.x * cw, y: y0 + zd.tr.y * ch },
+          br: { x: x0 + zd.br.x * cw, y: y0 + zd.br.y * ch },
+          bl: { x: x0 + zd.bl.x * cw, y: y0 + zd.bl.y * ch },
+        };
+        console.log(`%c[AutoCache] Coins zoomés reconvertis → TL(${zoomedCorners.tl.x.toFixed(3)},${zoomedCorners.tl.y.toFixed(3)}) BR(${zoomedCorners.br.x.toFixed(3)},${zoomedCorners.br.y.toFixed(3)})`, "color:lime;font-weight:bold");
+      }
+    } catch(e) {
+      console.warn("[AutoCache] corners-zoomed échoué, fallback PR", e);
+    }
+  }
+
   let plateFound = false;
   let savedCorners = null;
   if (plate.found && logoImg) {
     plateFound = true;
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
 
-    // GPT-4o : coins exacts si disponibles, sinon fallback calcul depuis bbox PR
-    const { near_side, angle_deg, corners: gptCorners } = angleData ?? estimateAngleFromPosition(plate);
-    if (gptCorners) {
-      console.log(`%c[AutoCache] GPT-4o corners utilisés directement`, "color:lime;font-weight:bold");
-    } else {
-      console.warn("[AutoCache] GPT-4o corners indisponibles → fallback bbox PR");
-    }
-    savedCorners = buildCorners(plate, near_side, angle_deg, gptCorners ?? null);
+    const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
+    savedCorners = buildCorners(plate, near_side, angle_deg, zoomedCorners ?? null);
+    console.log(`%c[AutoCache] Source coins: ${zoomedCorners ? 'GPT-4o zoomé ✓' : 'fallback PR bbox'}`, zoomedCorners ? "color:lime;font-weight:bold" : "color:orange;font-weight:bold");
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
     console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
-    // DEBUG rouge = bbox PlateRecognizer brute
+    // DEBUG rouge = bbox brute PlateRecognizer
     const prTL = toPixel(plate.tl), prTR = toPixel(plate.tr), prBR = toPixel(plate.br), prBL = toPixel(plate.bl);
     ctx.save(); ctx.strokeStyle = 'red'; ctx.lineWidth = 6;
     ctx.strokeRect(prTL.x, prTL.y, prBR.x - prTL.x, prBR.y - prTL.y);
     ctx.restore();
-    // DEBUG vert = coins GPT-4o (si disponibles)
-    if (gptCorners) {
-      const gTL = toPixel(gptCorners.tl), gTR = toPixel(gptCorners.tr);
-      const gBR = toPixel(gptCorners.br), gBL = toPixel(gptCorners.bl);
+    // DEBUG vert = coins GPT-4o zoomés (si disponibles)
+    if (zoomedCorners) {
+      const gTL = toPixel(zoomedCorners.tl), gTR = toPixel(zoomedCorners.tr);
+      const gBR = toPixel(zoomedCorners.br), gBL = toPixel(zoomedCorners.bl);
       ctx.save(); ctx.strokeStyle = 'lime'; ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.moveTo(gTL.x, gTL.y); ctx.lineTo(gTR.x, gTR.y);
