@@ -202,11 +202,11 @@ function estimateAngleFromPosition(plate) {
   return { near_side, angle_deg };
 }
 
-// Build cover corners from PlateRecognizer bbox.
-// Position X et centre Y : depuis PR (fiables).
+// Build cover corners.
+// X : bbox PlateRecognizer (fiable).
+// Y : centre GPT-4o si disponible (précis sur la plaque elle-même) ; sinon centre du bbox PR.
 // Hauteur : calculée depuis la largeur PR via ratio 520×110mm corrigé de l'angle.
-// La hauteur PR est exclue car PR inclut souvent le porte-plaque (bbox trop grande).
-function buildCorners(plate, near_side, angle_deg) {
+function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
   const tlx = plate.tl.x, trx = plate.tr.x;
   const brx = plate.br.x, blx = plate.bl.x;
 
@@ -216,9 +216,11 @@ function buildCorners(plate, near_side, angle_deg) {
   const theta   = angle_deg * Math.PI / 180;
   // Hauteur réelle = largeur_apparente / (4.73 × cos(angle))
   const ph      = avgW / (4.73 * Math.max(0.35, Math.cos(theta)));
-  // Centre du bbox PR comme ancre verticale : fiable quelle que soit l'orientation.
-  // Les corrections de perspective (nearH/farH) gèrent la déformation trapézoïdale séparément.
-  const centerY = (topY + botY) / 2;
+  // GPT-4o fournit le centre précis de la plaque (pas du bbox PR).
+  // Fallback : centre du bbox PR (approximatif, bbox souvent trop grand verticalement).
+  const centerY = (plateCenter && typeof plateCenter.cy === 'number')
+    ? plateCenter.cy
+    : (topY + botY) / 2;
 
   const PERSP  = 0.25;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
@@ -917,10 +919,14 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (plate.found && logoImg) {
     plateFound = true;
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
+    if (angleData?.plateCenter) {
+      const pc = angleData.plateCenter;
+      console.log(`%c[AutoCache] GPT-4o plateCenter → cx=${pc.cx.toFixed(3)} cy=${pc.cy.toFixed(3)} w=${pc.w.toFixed(3)} h=${pc.h.toFixed(3)}`, "color:lime;font-weight:bold");
+    }
 
     // GPT-4o angle si disponible, fallback heuristique si échec
-    const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-    savedCorners = buildCorners(plate, near_side, angle_deg);
+    const { near_side, angle_deg, plateCenter } = angleData ?? estimateAngleFromPosition(plate);
+    savedCorners = buildCorners(plate, near_side, angle_deg, plateCenter ?? null);
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
