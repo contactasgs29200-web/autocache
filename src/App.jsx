@@ -216,11 +216,9 @@ function buildCorners(plate, near_side, angle_deg) {
   const theta   = angle_deg * Math.PI / 180;
   // Hauteur réelle = largeur_apparente / (4.73 × cos(angle))
   const ph      = avgW / (4.73 * Math.max(0.35, Math.cos(theta)));
-  // Vue frontale (angle < 10°) : bbox PR symétrique autour de la plaque → centre fiable.
-  // Vue de côté (angle ≥ 10°) : bas de PR pollué par le porte-plaque → ancrage sur le haut.
-  const centerY = angle_deg < 10
-    ? (topY + botY) / 2
-    : topY + ph * 0.5;
+  // Centre du bbox PR comme ancre verticale : fiable quelle que soit l'orientation.
+  // Les corrections de perspective (nearH/farH) gèrent la déformation trapézoïdale séparément.
+  const centerY = (topY + botY) / 2;
 
   const PERSP  = 0.25;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
