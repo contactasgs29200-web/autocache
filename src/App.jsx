@@ -203,24 +203,27 @@ function estimateAngleFromPosition(plate) {
 }
 
 // Build cover corners.
-// X : bbox PlateRecognizer (fiable).
-// Y : centre GPT-4o si disponible (précis sur la plaque elle-même) ; sinon centre du bbox PR.
-// Hauteur : calculée depuis la largeur PR via ratio 520×110mm corrigé de l'angle.
-function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
+// Si GPT-4o a retourné les 4 coins exacts → on les utilise directement.
+// Sinon fallback : X depuis bbox PR, Y depuis centre bbox PR, H calculée via ratio 520×110mm.
+function buildCorners(plate, near_side, angle_deg, gptCorners = null) {
+  if (gptCorners) {
+    return {
+      tl: { x: Math.max(0, Math.min(1, gptCorners.tl.x)), y: Math.max(0, Math.min(1, gptCorners.tl.y)) },
+      tr: { x: Math.max(0, Math.min(1, gptCorners.tr.x)), y: Math.max(0, Math.min(1, gptCorners.tr.y)) },
+      br: { x: Math.max(0, Math.min(1, gptCorners.br.x)), y: Math.max(0, Math.min(1, gptCorners.br.y)) },
+      bl: { x: Math.max(0, Math.min(1, gptCorners.bl.x)), y: Math.max(0, Math.min(1, gptCorners.bl.y)) },
+    };
+  }
+
+  // Fallback PlateRecognizer
   const tlx = plate.tl.x, trx = plate.tr.x;
   const brx = plate.br.x, blx = plate.bl.x;
-
   const topY    = (plate.tl.y + plate.tr.y) / 2;
   const botY    = (plate.bl.y + plate.br.y) / 2;
   const avgW    = ((trx - tlx) + (brx - blx)) / 2;
   const theta   = angle_deg * Math.PI / 180;
-  // Hauteur réelle = largeur_apparente / (4.73 × cos(angle))
   const ph      = avgW / (4.73 * Math.max(0.35, Math.cos(theta)));
-  // GPT-4o fournit le centre précis de la plaque (pas du bbox PR).
-  // Fallback : centre du bbox PR (approximatif, bbox souvent trop grand verticalement).
-  const centerY = (plateCenter && typeof plateCenter.cy === 'number')
-    ? plateCenter.cy
-    : (topY + botY) / 2;
+  const centerY = (topY + botY) / 2;
 
   const PERSP  = 0.25;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
@@ -848,7 +851,11 @@ async function detectCarAngle(b64) {
     const data = await r.json();
     if (typeof data.near_side === 'string' && typeof data.angle_deg === 'number') {
       console.log(`%c[AutoCache] GPT-4o angle → near_side=${data.near_side} angle=${data.angle_deg}°`, "color:cyan;font-weight:bold");
-      return { near_side: data.near_side, angle_deg: data.angle_deg, plateCenter: data.plateCenter ?? null };
+      if (data.corners) {
+        const c = data.corners;
+        console.log(`%c[AutoCache] GPT-4o corners → TL(${c.tl.x.toFixed(3)},${c.tl.y.toFixed(3)}) TR(${c.tr.x.toFixed(3)},${c.tr.y.toFixed(3)}) BR(${c.br.x.toFixed(3)},${c.br.y.toFixed(3)}) BL(${c.bl.x.toFixed(3)},${c.bl.y.toFixed(3)})`, "color:lime;font-weight:bold");
+      }
+      return { near_side: data.near_side, angle_deg: data.angle_deg, corners: data.corners ?? null };
     }
     return null;
   } catch(e) {
@@ -919,14 +926,15 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (plate.found && logoImg) {
     plateFound = true;
     console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
-    if (angleData?.plateCenter) {
-      const pc = angleData.plateCenter;
-      console.log(`%c[AutoCache] GPT-4o plateCenter → cx=${pc.cx.toFixed(3)} cy=${pc.cy.toFixed(3)} w=${pc.w.toFixed(3)} h=${pc.h.toFixed(3)}`, "color:lime;font-weight:bold");
-    }
 
-    // GPT-4o angle si disponible, fallback heuristique si échec
-    const { near_side, angle_deg, plateCenter } = angleData ?? estimateAngleFromPosition(plate);
-    savedCorners = buildCorners(plate, near_side, angle_deg, plateCenter ?? null);
+    // GPT-4o : coins exacts si disponibles, sinon fallback calcul depuis bbox PR
+    const { near_side, angle_deg, corners: gptCorners } = angleData ?? estimateAngleFromPosition(plate);
+    if (gptCorners) {
+      console.log(`%c[AutoCache] GPT-4o corners utilisés directement`, "color:lime;font-weight:bold");
+    } else {
+      console.warn("[AutoCache] GPT-4o corners indisponibles → fallback bbox PR");
+    }
+    savedCorners = buildCorners(plate, near_side, angle_deg, gptCorners ?? null);
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });

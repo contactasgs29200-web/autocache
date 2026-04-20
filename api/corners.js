@@ -1,5 +1,5 @@
 // /api/corners.js
-// Uses GPT-4o Vision to detect car angle and plate center.
+// Uses GPT-4o Vision to detect the exact 4 corners of the license plate + car angle.
 // Requires OPENAI_API_KEY in Vercel environment variables.
 
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
@@ -16,6 +16,11 @@ function extractJSON(txt) {
   return null;
 }
 
+function isValidCorner(c) {
+  return c && typeof c.x === 'number' && typeof c.y === 'number'
+    && c.x >= 0 && c.x <= 1 && c.y >= 0 && c.y <= 1;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -25,31 +30,26 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set in environment' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64 image' });
 
-  const prompt = `Look at this car photo. Answer 3 questions:
+  const prompt = `Look at this car photo and find the license plate (the rectangular plate with letters/numbers).
 
-QUESTION 1 — License plate center position (normalized 0.0–1.0):
-Find the rectangular license plate (the plate with letters/numbers, NOT the plastic holder or bumper).
-Return its CENTER coordinates and size:
-- cx: horizontal center (0.0 = left edge of image, 1.0 = right edge)
-- cy: vertical center (0.0 = top edge of image, 1.0 = bottom edge)
-- w:  width of the plate only
-- h:  height of the plate only
-Be precise — measure the plate itself, not the surrounding plastic frame or bumper recess.
+Return the EXACT normalized coordinates (0.0 to 1.0) of the 4 corners of the license plate surface:
+- tl: top-left corner
+- tr: top-right corner
+- br: bottom-right corner
+- bl: bottom-left corner
 
-QUESTION 2 — Car orientation (hood/headlights direction):
-- "right" = the car's front/nose points toward the RIGHT side of the image
-- "left"  = the car's front/nose points toward the LEFT side of the image
-- "none"  = the car faces straight toward the camera (symmetric front view)
+CRITICAL RULES:
+1. Measure the PLATE SURFACE ONLY — not the plastic holder, not the bumper recess, not the mounting screws.
+2. The plate seen from an angle will appear as a trapezoid/parallelogram — give the actual visible corners.
+3. x=0.0 is the LEFT edge of the image, x=1.0 is the RIGHT edge.
+4. y=0.0 is the TOP edge of the image, y=1.0 is the BOTTOM edge.
 
-QUESTION 3 — Angle estimate:
-- 0  = perfectly straight-on (symmetric front face)
-- 15 = slight 3/4 angle
-- 25 = typical dealer 3/4 angle
-- 35 = strong 3/4 angle
-- 45 = almost side-on
+Also return:
+- hood_points: direction the car's nose/hood faces ("left", "right", or "none" for straight-on)
+- angle_deg: viewing angle (0=straight-on, 15=slight 3/4, 25=typical dealer angle, 35=strong 3/4, 45=side view)
 
-Return ONLY this JSON (no explanation):
-{"plate":{"cx":0.65,"cy":0.74,"w":0.18,"h":0.04},"hood_points":"left","angle_deg":25}`;
+Return ONLY this JSON (no explanation, no markdown):
+{"tl":{"x":0.30,"y":0.71},"tr":{"x":0.55,"y":0.70},"br":{"x":0.55,"y":0.76},"bl":{"x":0.30,"y":0.77},"hood_points":"left","angle_deg":25}`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -60,16 +60,13 @@ Return ONLY this JSON (no explanation):
       },
       body: JSON.stringify({
         model: 'gpt-4o',
-        max_tokens: 200,
+        max_tokens: 300,
         messages: [{
           role: 'user',
           content: [
             {
               type: 'image_url',
-              image_url: {
-                url: `data:image/jpeg;base64,${b64}`,
-                detail: 'high',
-              },
+              image_url: { url: `data:image/jpeg;base64,${b64}`, detail: 'high' },
             },
             { type: 'text', text: prompt },
           ],
@@ -91,8 +88,9 @@ Return ONLY this JSON (no explanation):
     if (!raw) return res.status(500).json({ error: 'No JSON in GPT-4o response', text });
 
     const gpt = JSON.parse(raw);
+
     if (typeof gpt.hood_points !== 'string' || typeof gpt.angle_deg !== 'number') {
-      return res.status(500).json({ error: 'Invalid angle response from GPT-4o', gpt });
+      return res.status(500).json({ error: 'Invalid GPT-4o response', gpt });
     }
 
     const near_side = gpt.hood_points === 'right' ? 'left'
@@ -100,14 +98,14 @@ Return ONLY this JSON (no explanation):
                     : 'none';
     const angle_deg = gpt.angle_deg;
 
-    const p = gpt.plate;
-    const plateCenter = (p && typeof p.cx === 'number' && typeof p.cy === 'number' &&
-                         typeof p.w  === 'number' && typeof p.h  === 'number')
-      ? { cx: p.cx, cy: p.cy, w: p.w, h: p.h }
+    // Exact plate corners from GPT-4o
+    const corners = (isValidCorner(gpt.tl) && isValidCorner(gpt.tr) &&
+                     isValidCorner(gpt.br) && isValidCorner(gpt.bl))
+      ? { tl: gpt.tl, tr: gpt.tr, br: gpt.br, bl: gpt.bl }
       : null;
 
-    console.log('GPT-4o result:', JSON.stringify({ hood_points: gpt.hood_points, near_side, angle_deg, plateCenter }));
-    return res.json({ near_side, angle_deg, plateCenter });
+    console.log('GPT-4o result:', JSON.stringify({ near_side, angle_deg, corners }));
+    return res.json({ near_side, angle_deg, corners });
 
   } catch (e) {
     console.error('corners.js error:', e);
