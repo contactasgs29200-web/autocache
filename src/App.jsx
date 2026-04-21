@@ -986,29 +986,6 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
-    // DEBUG : label statut visible sur l'image
-    const statusLabel = zoomedCorners ? 'GPT4o-CROP' : angleData?.corners ? 'GPT4o-FULL' : 'PR-FALLBACK';
-    ctx.save();
-    ctx.font = `bold ${Math.round(c.width * 0.018)}px monospace`;
-    ctx.fillStyle = zoomedCorners ? 'lime' : angleData?.corners ? 'cyan' : 'red';
-    ctx.fillText(statusLabel, 10, Math.round(c.height * 0.03));
-    ctx.restore();
-    // DEBUG rouge = bbox brute PlateRecognizer
-    const prTL = toPixel(plate.tl), prTR = toPixel(plate.tr), prBR = toPixel(plate.br), prBL = toPixel(plate.bl);
-    ctx.save(); ctx.strokeStyle = 'red'; ctx.lineWidth = 6;
-    ctx.strokeRect(prTL.x, prTL.y, prBR.x - prTL.x, prBR.y - prTL.y);
-    ctx.restore();
-    // DEBUG vert = meilleurs coins disponibles (crop ou pleine image)
-    if (bestCorners) {
-      const gTL = toPixel(bestCorners.tl), gTR = toPixel(bestCorners.tr);
-      const gBR = toPixel(bestCorners.br), gBL = toPixel(bestCorners.bl);
-      ctx.save(); ctx.strokeStyle = 'lime'; ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(gTL.x, gTL.y); ctx.lineTo(gTR.x, gTR.y);
-      ctx.lineTo(gBR.x, gBR.y); ctx.lineTo(gBL.x, gBL.y);
-      ctx.closePath(); ctx.stroke();
-      ctx.restore();
-    }
     // Interpolation haute qualité pour le logo (important : logo 3120px → ~300px sur la photo)
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
