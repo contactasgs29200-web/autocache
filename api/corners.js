@@ -89,21 +89,23 @@ Return ONLY this JSON (no explanation, no markdown):
 
     const gpt = JSON.parse(raw);
 
-    if (typeof gpt.hood_points !== 'string' || typeof gpt.angle_deg !== 'number') {
-      return res.status(500).json({ error: 'Invalid GPT-4o response', gpt });
-    }
-
+    // hood_points est optionnel (absent pour les crops de plaque seule)
     const near_side = gpt.hood_points === 'right' ? 'left'
                     : gpt.hood_points === 'left'  ? 'right'
                     : 'none';
-    const angle_deg = gpt.angle_deg;
+    const angle_deg = typeof gpt.angle_deg === 'number' ? gpt.angle_deg : 0;
 
-    // Exact plate corners from GPT-4o
-    const corners = (isValidCorner(gpt.tl) && isValidCorner(gpt.tr) &&
-                     isValidCorner(gpt.br) && isValidCorner(gpt.bl))
+    // Coins : valider et accepter des valeurs légèrement hors [0,1] (clampées ensuite côté client)
+    const isCornerOk = c => c && typeof c.x === 'number' && typeof c.y === 'number'
+      && c.x >= -0.05 && c.x <= 1.05 && c.y >= -0.05 && c.y <= 1.05;
+    const corners = (isCornerOk(gpt.tl) && isCornerOk(gpt.tr) &&
+                     isCornerOk(gpt.br) && isCornerOk(gpt.bl))
       ? { tl: gpt.tl, tr: gpt.tr, br: gpt.br, bl: gpt.bl }
       : null;
 
+    if (!corners) {
+      console.warn('GPT-4o coins invalides ou absents:', JSON.stringify(gpt));
+    }
     console.log('GPT-4o result:', JSON.stringify({ near_side, angle_deg, corners }));
     return res.json({ near_side, angle_deg, corners });
 
