@@ -934,9 +934,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
 
     savedCorners = zoomedCorners ?? buildCorners(plate, near_side, angle_deg, null);
     console.log('%c[AutoCache] savedCorners', 'color:cyan', savedCorners);
+  }
 
   if (savedCorners && logoImg) {
-
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
@@ -949,10 +949,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
     ctx.closePath(); ctx.stroke(); ctx.restore();
 
-    // Interpolation haute qualité pour le logo (important : logo 3120px → ~300px sur la photo)
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    // Remplir le trapèze avec bgColor : comble les micro-écarts entre bandes et sert de fond aux coins arrondis
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(ptl.x, ptl.y);
@@ -964,7 +962,6 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.fill();
     ctx.restore();
     drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
-    // Boost saturation + contraste sur la zone plaque via canvas temporaire
     const tmp = document.createElement('canvas');
     tmp.width = c.width; tmp.height = c.height;
     const tCtx = tmp.getContext('2d');
