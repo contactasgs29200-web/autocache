@@ -872,22 +872,64 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Save photo without plate for later re-rendering in "Ajuster" mode
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
   const baseDataURL = c.toDataURL("image/jpeg", 0.97);
+
+  // Étape 2 : crop autour du bbox PR → GPT-4o sur image zoomée → 4 coins précis
+  let zoomedCorners = null;
+  if (plate.found) {
+    try {
+      const PAD = 0.8;
+      const bw = plate.tr.x - plate.tl.x, bh = plate.bl.y - plate.tl.y;
+      const x0 = Math.max(0, plate.tl.x - bw * PAD), y0 = Math.max(0, plate.tl.y - bh * PAD);
+      const x1 = Math.min(1, plate.tr.x + bw * PAD), y1 = Math.min(1, plate.bl.y + bh * PAD);
+      const srcX = Math.round(x0 * c.width),  srcY = Math.round(y0 * c.height);
+      const srcW = Math.round((x1 - x0) * c.width), srcH = Math.round((y1 - y0) * c.height);
+      const sc = Math.min(1, 1200 / Math.max(srcW, srcH));
+      const outW = Math.round(srcW * sc), outH = Math.round(srcH * sc);
+      const cc = document.createElement('canvas');
+      cc.width = outW; cc.height = outH;
+      cc.getContext('2d').drawImage(c, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
+      const cropB64 = cc.toDataURL('image/jpeg', 0.92).split(',')[1];
+      const r = await fetch('/api/corners', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ b64: cropB64 }),
+      });
+      const zd = await r.json();
+      const fc = zd.corners;
+      if (fc?.tl && fc?.tr && fc?.br && fc?.bl) {
+        const nw = x1 - x0, nh = y1 - y0;
+        zoomedCorners = {
+          tl: { x: x0 + fc.tl.x * nw, y: y0 + fc.tl.y * nh },
+          tr: { x: x0 + fc.tr.x * nw, y: y0 + fc.tr.y * nh },
+          br: { x: x0 + fc.br.x * nw, y: y0 + fc.br.y * nh },
+          bl: { x: x0 + fc.bl.x * nw, y: y0 + fc.bl.y * nh },
+        };
+      }
+    } catch(e) { console.error('crop+corners:', e.message); }
+  }
+
   let plateFound = false;
   let savedCorners = null;
   if (plate.found && logoImg) {
     plateFound = true;
-    console.log(`PR detected: TL(${plate.tl.x.toFixed(3)},${plate.tl.y.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${plate.tr.y.toFixed(3)}) plateText="${plate.plateText}"`);
 
-    // Angle + centre plaque via GPT-4o (corners.js), fallback heuristique si échec
+    // Angle via GPT-4o pleine image, fallback heuristique
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
     const plateCenter = angleData?.plateCenter ?? null;
-    savedCorners = buildCorners(plate, near_side, angle_deg, plateCenter);
+    // Coins : zoomés GPT-4o si disponibles, sinon calcul depuis bbox PR
+    savedCorners = zoomedCorners ?? buildCorners(plate, near_side, angle_deg, plateCenter);
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
-    console.log(`Drawing: TL(${Math.round(ptl.x)},${Math.round(ptl.y)}) TR(${Math.round(ptr.x)},${Math.round(ptr.y)}) BR(${Math.round(pbr.x)},${Math.round(pbr.y)}) BL(${Math.round(pbl.x)},${Math.round(pbl.y)})`);
+
+    // DEBUG : quadrilatère vert sur les 4 coins détectés
+    ctx.save(); ctx.strokeStyle = 'lime'; ctx.lineWidth = Math.max(3, c.width * 0.003);
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath(); ctx.stroke(); ctx.restore();
+
     // Interpolation haute qualité pour le logo (important : logo 3120px → ~300px sur la photo)
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
