@@ -805,8 +805,8 @@ async function detectCarAngle(b64) {
     });
     const data = await r.json();
     if (typeof data.near_side === 'string' && typeof data.angle_deg === 'number') {
-      console.log(`%c[AutoCache] GPT-4o angle → near_side=${data.near_side} angle=${data.angle_deg}°`, "color:cyan;font-weight:bold");
-      return { near_side: data.near_side, angle_deg: data.angle_deg };
+      console.log(`%c[AutoCache] GPT-4o angle → near_side=${data.near_side} angle=${data.angle_deg}° corners=${JSON.stringify(data.corners)}`, "color:cyan;font-weight:bold");
+      return { near_side: data.near_side, angle_deg: data.angle_deg, corners: data.corners ?? null };
     }
     return null;
   } catch(e) {
@@ -873,22 +873,26 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
   const baseDataURL = c.toDataURL("image/jpeg", 0.97);
 
-  // Étape 2 : crop centré sur plateCenter GPT-4o (fiable) → GPT-4o zoomé → 4 coins précis
-  // On utilise plateCenter de GPT-4o plutôt que le bbox PR qui peut détecter le mauvais élément
-  const gptCenter = angleData?.plateCenter ?? null;
+  // Étape 2 : crop centré sur les coins GPT-4o pleine image → GPT-4o zoomé → 4 coins précis
+  // On utilise les corners de GPT-4o plutôt que le bbox PR qui peut détecter le mauvais élément
+  const gptCorners = angleData?.corners ?? null;
   let zoomedCorners = null;
-  if (gptCenter || plate.found) {
+  if (gptCorners || plate.found) {
     try {
-      // Région de crop : centrée sur GPT-4o si disponible, sinon bbox PR
+      // Région de crop : centrée sur coins GPT-4o si disponibles, sinon bbox PR
       let x0, y0, x1, y1;
-      if (gptCenter) {
-        const PAD = 1.2; // large padding autour du centre GPT-4o
-        const hw = Math.max(gptCenter.w * PAD, 0.12);
-        const hh = Math.max(gptCenter.h * PAD * 3, 0.08); // hauteur plus généreuse
-        x0 = Math.max(0, gptCenter.cx - hw);
-        y0 = Math.max(0, gptCenter.cy - hh);
-        x1 = Math.min(1, gptCenter.cx + hw);
-        y1 = Math.min(1, gptCenter.cy + hh);
+      if (gptCorners) {
+        // Bounding box des 4 coins GPT-4o
+        const xs = [gptCorners.tl.x, gptCorners.tr.x, gptCorners.br.x, gptCorners.bl.x];
+        const ys = [gptCorners.tl.y, gptCorners.tr.y, gptCorners.br.y, gptCorners.bl.y];
+        const gx0 = Math.min(...xs), gx1 = Math.max(...xs);
+        const gy0 = Math.min(...ys), gy1 = Math.max(...ys);
+        const gw = gx1 - gx0, gh = gy1 - gy0;
+        const PAD = 1.0; // padding autour de la bbox des coins
+        x0 = Math.max(0, gx0 - gw * PAD);
+        y0 = Math.max(0, gy0 - gh * PAD * 2);
+        x1 = Math.min(1, gx1 + gw * PAD);
+        y1 = Math.min(1, gy1 + gh * PAD * 2);
       } else {
         const PAD = 0.8;
         const bw = plate.tr.x - plate.tl.x, bh = plate.bl.y - plate.tl.y;
@@ -928,9 +932,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
 
     // Angle via GPT-4o pleine image, fallback heuristique
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-    const plateCenter = angleData?.plateCenter ?? null;
     // Coins : zoomés GPT-4o si disponibles, sinon calcul depuis bbox PR
-    savedCorners = zoomedCorners ?? buildCorners(plate, near_side, angle_deg, plateCenter);
+    savedCorners = zoomedCorners ?? buildCorners(plate, near_side, angle_deg, null);
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
@@ -1344,7 +1347,7 @@ export default function AutoCache() {
       : null;
 
     for (let i = 0; i < photosToProcess.length; i++) {
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, showroomEnabled, floorClean, enhancePro, bodyPolish);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
