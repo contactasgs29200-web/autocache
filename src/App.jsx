@@ -805,12 +805,10 @@ async function detectCarAngle(b64) {
     });
     const data = await r.json();
     if (typeof data.near_side === 'string' && typeof data.angle_deg === 'number') {
-      console.log(`%c[AutoCache] GPT-4o angle → near_side=${data.near_side} angle=${data.angle_deg}° corners=${JSON.stringify(data.corners)}`, "color:cyan;font-weight:bold");
-      return { near_side: data.near_side, angle_deg: data.angle_deg, corners: data.corners ?? null };
+      return { near_side: data.near_side, angle_deg: data.angle_deg };
     }
     return null;
   } catch(e) {
-    console.error("detectCarAngle error:", e);
     return null;
   }
 }
@@ -879,75 +877,13 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (plate.found && logoImg) {
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-
-    // Crop centré sur la bbox PR (PR localise la plaque avec précision)
-    // → GPT-4o sur ce crop donne les 4 coins en perspective réelle
-    let zoomedCorners = null;
-    try {
-      const bw = plate.tr.x - plate.tl.x;
-      const bh = plate.bl.y - plate.tl.y;
-      const PAD_X = 0.7, PAD_Y = 1.2;
-      const x0 = Math.max(0, plate.tl.x - bw * PAD_X);
-      const y0 = Math.max(0, plate.tl.y - bh * PAD_Y);
-      const x1 = Math.min(1, plate.tr.x + bw * PAD_X);
-      const y1 = Math.min(1, plate.bl.y + bh * PAD_Y);
-
-      const srcX = Math.round(x0 * c.width), srcY = Math.round(y0 * c.height);
-      const srcW = Math.round((x1 - x0) * c.width), srcH = Math.round((y1 - y0) * c.height);
-      if (srcW > 10 && srcH > 10) {
-        const sc = Math.min(1, 1200 / Math.max(srcW, srcH));
-        const outW = Math.round(srcW * sc), outH = Math.round(srcH * sc);
-        const cc = document.createElement('canvas');
-        cc.width = outW; cc.height = outH;
-        cc.getContext('2d').drawImage(c, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
-        const cropB64 = cc.toDataURL('image/jpeg', 0.93).split(',')[1];
-        const r = await fetch('/api/corners', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ b64: cropB64 }),
-        });
-        const zd = await r.json();
-        const fc = zd.corners;
-        if (fc?.tl && fc?.tr && fc?.br && fc?.bl) {
-          const nw = x1 - x0, nh = y1 - y0;
-          const raw = {
-            tl: { x: x0 + fc.tl.x * nw, y: y0 + fc.tl.y * nh },
-            tr: { x: x0 + fc.tr.x * nw, y: y0 + fc.tr.y * nh },
-            br: { x: x0 + fc.br.x * nw, y: y0 + fc.br.y * nh },
-            bl: { x: x0 + fc.bl.x * nw, y: y0 + fc.bl.y * nh },
-          };
-          // Sanity check : le centre des coins GPT-4o doit être proche du centre PR
-          const prCx = (plate.tl.x + plate.br.x) / 2;
-          const prCy = (plate.tl.y + plate.br.y) / 2;
-          const gCx = (raw.tl.x + raw.tr.x + raw.br.x + raw.bl.x) / 4;
-          const gCy = (raw.tl.y + raw.tr.y + raw.br.y + raw.bl.y) / 4;
-          const dist = Math.sqrt((gCx - prCx) ** 2 + (gCy - prCy) ** 2);
-          const prW = plate.tr.x - plate.tl.x;
-          if (dist < prW * 1.5) {
-            zoomedCorners = raw;
-            console.log('%c[AutoCache] Coins GPT-4o crop OK', 'color:lime', raw);
-          } else {
-            console.warn('[AutoCache] Coins GPT-4o crop rejetés (trop loin du PR)', dist, prW);
-          }
-        }
-      }
-    } catch(e) { console.error('zoomed corners:', e.message); }
-
-    savedCorners = zoomedCorners ?? buildCorners(plate, near_side, angle_deg, null);
-    console.log('%c[AutoCache] savedCorners', 'color:cyan', savedCorners);
+    savedCorners = buildCorners(plate, near_side, angle_deg, null);
   }
 
   if (savedCorners && logoImg) {
-    // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
-
-    // DEBUG : quadrilatère vert sur les 4 coins détectés
-    ctx.save(); ctx.strokeStyle = 'lime'; ctx.lineWidth = Math.max(3, c.width * 0.003);
-    ctx.beginPath();
-    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-    ctx.closePath(); ctx.stroke(); ctx.restore();
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
