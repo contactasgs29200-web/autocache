@@ -873,15 +873,29 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
   const baseDataURL = c.toDataURL("image/jpeg", 0.97);
 
-  // Étape 2 : crop autour du bbox PR → GPT-4o sur image zoomée → 4 coins précis
+  // Étape 2 : crop centré sur plateCenter GPT-4o (fiable) → GPT-4o zoomé → 4 coins précis
+  // On utilise plateCenter de GPT-4o plutôt que le bbox PR qui peut détecter le mauvais élément
+  const gptCenter = angleData?.plateCenter ?? null;
   let zoomedCorners = null;
-  if (plate.found) {
+  if (gptCenter || plate.found) {
     try {
-      const PAD = 0.8;
-      const bw = plate.tr.x - plate.tl.x, bh = plate.bl.y - plate.tl.y;
-      const x0 = Math.max(0, plate.tl.x - bw * PAD), y0 = Math.max(0, plate.tl.y - bh * PAD);
-      const x1 = Math.min(1, plate.tr.x + bw * PAD), y1 = Math.min(1, plate.bl.y + bh * PAD);
-      const srcX = Math.round(x0 * c.width),  srcY = Math.round(y0 * c.height);
+      // Région de crop : centrée sur GPT-4o si disponible, sinon bbox PR
+      let x0, y0, x1, y1;
+      if (gptCenter) {
+        const PAD = 1.2; // large padding autour du centre GPT-4o
+        const hw = Math.max(gptCenter.w * PAD, 0.12);
+        const hh = Math.max(gptCenter.h * PAD * 3, 0.08); // hauteur plus généreuse
+        x0 = Math.max(0, gptCenter.cx - hw);
+        y0 = Math.max(0, gptCenter.cy - hh);
+        x1 = Math.min(1, gptCenter.cx + hw);
+        y1 = Math.min(1, gptCenter.cy + hh);
+      } else {
+        const PAD = 0.8;
+        const bw = plate.tr.x - plate.tl.x, bh = plate.bl.y - plate.tl.y;
+        x0 = Math.max(0, plate.tl.x - bw * PAD); y0 = Math.max(0, plate.tl.y - bh * PAD);
+        x1 = Math.min(1, plate.tr.x + bw * PAD); y1 = Math.min(1, plate.bl.y + bh * PAD);
+      }
+      const srcX = Math.round(x0 * c.width), srcY = Math.round(y0 * c.height);
       const srcW = Math.round((x1 - x0) * c.width), srcH = Math.round((y1 - y0) * c.height);
       const sc = Math.min(1, 1200 / Math.max(srcW, srcH));
       const outW = Math.round(srcW * sc), outH = Math.round(srcH * sc);
