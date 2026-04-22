@@ -873,67 +873,26 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Qualité 0.97 : moins d'artefacts JPEG envoyés à remove.bg → détourage + net
   const baseDataURL = c.toDataURL("image/jpeg", 0.97);
 
-  // Étape 2 : crop centré sur les coins GPT-4o pleine image → GPT-4o zoomé → 4 coins précis
-  // On utilise les corners de GPT-4o plutôt que le bbox PR qui peut détecter le mauvais élément
+  // Coins GPT-4o pleine image (detail:high) — utilisés directement, pas de second crop
   const gptCorners = angleData?.corners ?? null;
-  let zoomedCorners = null;
-  if (gptCorners || plate.found) {
-    try {
-      // Région de crop : centrée sur coins GPT-4o si disponibles, sinon bbox PR
-      let x0, y0, x1, y1;
-      if (gptCorners) {
-        // Bounding box des 4 coins GPT-4o
-        const xs = [gptCorners.tl.x, gptCorners.tr.x, gptCorners.br.x, gptCorners.bl.x];
-        const ys = [gptCorners.tl.y, gptCorners.tr.y, gptCorners.br.y, gptCorners.bl.y];
-        const gx0 = Math.min(...xs), gx1 = Math.max(...xs);
-        const gy0 = Math.min(...ys), gy1 = Math.max(...ys);
-        const gw = gx1 - gx0, gh = gy1 - gy0;
-        const PAD = 1.0; // padding autour de la bbox des coins
-        x0 = Math.max(0, gx0 - gw * PAD);
-        y0 = Math.max(0, gy0 - gh * PAD * 2);
-        x1 = Math.min(1, gx1 + gw * PAD);
-        y1 = Math.min(1, gy1 + gh * PAD * 2);
-      } else {
-        const PAD = 0.8;
-        const bw = plate.tr.x - plate.tl.x, bh = plate.bl.y - plate.tl.y;
-        x0 = Math.max(0, plate.tl.x - bw * PAD); y0 = Math.max(0, plate.tl.y - bh * PAD);
-        x1 = Math.min(1, plate.tr.x + bw * PAD); y1 = Math.min(1, plate.bl.y + bh * PAD);
-      }
-      const srcX = Math.round(x0 * c.width), srcY = Math.round(y0 * c.height);
-      const srcW = Math.round((x1 - x0) * c.width), srcH = Math.round((y1 - y0) * c.height);
-      const sc = Math.min(1, 1200 / Math.max(srcW, srcH));
-      const outW = Math.round(srcW * sc), outH = Math.round(srcH * sc);
-      const cc = document.createElement('canvas');
-      cc.width = outW; cc.height = outH;
-      cc.getContext('2d').drawImage(c, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
-      const cropB64 = cc.toDataURL('image/jpeg', 0.92).split(',')[1];
-      const r = await fetch('/api/corners', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ b64: cropB64 }),
-      });
-      const zd = await r.json();
-      const fc = zd.corners;
-      if (fc?.tl && fc?.tr && fc?.br && fc?.bl) {
-        const nw = x1 - x0, nh = y1 - y0;
-        zoomedCorners = {
-          tl: { x: x0 + fc.tl.x * nw, y: y0 + fc.tl.y * nh },
-          tr: { x: x0 + fc.tr.x * nw, y: y0 + fc.tr.y * nh },
-          br: { x: x0 + fc.br.x * nw, y: y0 + fc.br.y * nh },
-          bl: { x: x0 + fc.bl.x * nw, y: y0 + fc.bl.y * nh },
-        };
-      }
-    } catch(e) { console.error('crop+corners:', e.message); }
-  }
 
   let plateFound = false;
   let savedCorners = null;
-  if (plate.found && logoImg) {
-    plateFound = true;
 
+  // Priorité : coins GPT-4o (perspective réelle) → bbox PR + calcul → rien
+  if (gptCorners && logoImg) {
+    plateFound = true;
+    savedCorners = gptCorners;
+    console.log('%c[AutoCache] Coins GPT-4o utilisés directement', 'color:lime;font-weight:bold', gptCorners);
+  } else if (plate.found && logoImg) {
+    plateFound = true;
     // Angle via GPT-4o pleine image, fallback heuristique
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-    // Coins : zoomés GPT-4o si disponibles, sinon calcul depuis bbox PR
-    savedCorners = zoomedCorners ?? buildCorners(plate, near_side, angle_deg, null);
+    savedCorners = buildCorners(plate, near_side, angle_deg, null);
+    console.log('%c[AutoCache] Fallback buildCorners (PR bbox)', 'color:orange;font-weight:bold', savedCorners);
+  }
+
+  if (savedCorners && logoImg) {
 
     // Convert to canvas pixels and draw
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
@@ -1235,6 +1194,47 @@ export default function AutoCache() {
   const [recoveryErr, setRecoveryErr] = useState("");
   const [recoveryLoading, setRecoveryLoading] = useState(false);
 
+  // Restaurer logos depuis localStorage au démarrage (persistent même après déconnexion)
+  useEffect(() => {
+    try {
+      const savedPreview = localStorage.getItem('ac_logo_preview');
+      if (savedPreview) {
+        const wasGenerated = localStorage.getItem('ac_logo_generated') === '1';
+        const savedBg = localStorage.getItem('ac_logo_bgcolor') || '#ffffff';
+        setLogo({ file: null, preview: savedPreview, generated: wasGenerated, bgColor: savedBg });
+        setLogoMode('import');
+      }
+      const savedWallMode = localStorage.getItem('ac_wall_logo_mode');
+      const savedWallLogo = localStorage.getItem('ac_wall_logo');
+      if (savedWallMode === 'image' && savedWallLogo) {
+        setWallLogoMode('image');
+        setWallLogo(savedWallLogo);
+      }
+    } catch(e) {}
+  }, []);
+
+  // Sauvegarder logo cache plaque → localStorage
+  useEffect(() => {
+    if (!logo?.preview || !logo.preview.startsWith('data:')) return;
+    try {
+      localStorage.setItem('ac_logo_preview', logo.preview);
+      localStorage.setItem('ac_logo_generated', logo.generated ? '1' : '0');
+      if (logo.bgColor) localStorage.setItem('ac_logo_bgcolor', logo.bgColor);
+    } catch(e) {}
+  }, [logo]);
+
+  // Sauvegarder logo mural → localStorage
+  useEffect(() => {
+    try {
+      if (wallLogoMode === 'image' && wallLogo) {
+        localStorage.setItem('ac_wall_logo_mode', 'image');
+        localStorage.setItem('ac_wall_logo', wallLogo);
+      } else if (wallLogoMode !== 'image') {
+        localStorage.setItem('ac_wall_logo_mode', wallLogoMode);
+      }
+    } catch(e) {}
+  }, [wallLogo, wallLogoMode]);
+
   useEffect(() => {
     // Retour depuis Stripe Checkout
     const params = new URLSearchParams(window.location.search);
@@ -1294,7 +1294,9 @@ export default function AutoCache() {
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
     setLogoMode("import");
-    setLogo({ file: f, preview: URL.createObjectURL(f) });
+    const reader = new FileReader();
+    reader.onload = (e) => setLogo({ file: f, preview: e.target.result, generated: false, bgColor: '#ffffff' });
+    reader.readAsDataURL(f);
   };
 
   const handlePhotoFiles = files => {
