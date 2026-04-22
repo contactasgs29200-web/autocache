@@ -30,7 +30,10 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set in environment' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64 image' });
 
-  const prompt = `Look at this car photo and find the license plate (the rectangular plate with letters/numbers).
+  const prompt = `Look at this car photo. Find the VEHICLE LICENSE PLATE — the flat metal/plastic plate with alphanumeric registration characters (e.g. "AB-123-CD" in France, numbers+letters on a white/yellow background).
+
+DO NOT confuse the license plate with: dealer stickers, plastic bumper trim, skid plates, mud flaps, parking sensors, tow hook covers, or any sign on a wall/floor.
+The license plate is ATTACHED TO THE CAR BODY (front bumper or rear bumper), not to the floor or wall.
 
 Return the EXACT normalized coordinates (0.0 to 1.0) of the 4 corners of the license plate surface:
 - tl: top-left corner
