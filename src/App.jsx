@@ -833,22 +833,10 @@ async function detectPlate(b64, imgW, imgH) {
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
-  // Détection plaque (PR) + angle (GPT-4o) + coins (Claude) en parallèle
-  async function detectPlateCorners(b64) {
-    try {
-      const r = await fetch('/api/plate-corners', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ b64 }),
-      });
-      const d = await r.json();
-      return (d.tl && d.tr && d.br && d.bl) ? d : null;
-    } catch(e) { return null; }
-  }
-
-  const [plate, angleData, claudeCorners] = await Promise.all([
+  // PR + angle en parallèle (Claude sur crop après, besoin du canvas)
+  const [plate, angleData] = await Promise.all([
     detectPlate(b64, imgW, imgH),
     useGptAngle ? detectCarAngle(b64) : Promise.resolve(null),
-    useGptAngle ? detectPlateCorners(b64) : Promise.resolve(null),
   ]);
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
@@ -887,16 +875,50 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   let plateFound = false;
   let savedCorners = null;
 
-  // Priorité : coins Claude (image complète, distingue plaque vs sticker)
-  // Fallback : PR bbox + buildCorners (angle GPT-4o)
-  if ((claudeCorners || plate.found) && logoImg) {
+  if (plate.found && logoImg) {
     plateFound = true;
-    if (claudeCorners) {
-      savedCorners = claudeCorners;
-    } else {
-      const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-      savedCorners = buildCorners(plate, near_side, angle_deg, null);
+    const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
+
+    // Crop contraint horizontalement (PR fiable en X) + étendu vers le haut (PR peut
+    // détecter un sticker sous la plaque → la vraie plaque est au-dessus)
+    let claudeCorners = null;
+    if (useGptAngle) {
+      try {
+        const bw = plate.tr.x - plate.tl.x;
+        const bh = plate.bl.y - plate.tl.y;
+        const x0 = Math.max(0, plate.tl.x - bw * 0.25);
+        const y0 = Math.max(0, plate.tl.y - bh * 3.5); // large extension vers le haut
+        const x1 = Math.min(1, plate.tr.x + bw * 0.25);
+        const y1 = Math.min(1, plate.bl.y + bh * 0.5);
+
+        const srcX = Math.round(x0 * c.width),  srcY = Math.round(y0 * c.height);
+        const srcW = Math.round((x1 - x0) * c.width), srcH = Math.round((y1 - y0) * c.height);
+        if (srcW > 20 && srcH > 10) {
+          const sc = Math.min(1, 1000 / Math.max(srcW, srcH));
+          const cc = document.createElement('canvas');
+          cc.width = Math.round(srcW * sc); cc.height = Math.round(srcH * sc);
+          cc.getContext('2d').drawImage(c, srcX, srcY, srcW, srcH, 0, 0, cc.width, cc.height);
+          const cropB64 = cc.toDataURL('image/jpeg', 0.93).split(',')[1];
+
+          const r = await fetch('/api/plate-corners', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ b64: cropB64 }),
+          });
+          const cd = await r.json();
+          if (cd.tl && cd.tr && cd.br && cd.bl) {
+            const nw = x1 - x0, nh = y1 - y0;
+            claudeCorners = {
+              tl: { x: x0 + cd.tl.x * nw, y: y0 + cd.tl.y * nh },
+              tr: { x: x0 + cd.tr.x * nw, y: y0 + cd.tr.y * nh },
+              br: { x: x0 + cd.br.x * nw, y: y0 + cd.br.y * nh },
+              bl: { x: x0 + cd.bl.x * nw, y: y0 + cd.bl.y * nh },
+            };
+          }
+        }
+      } catch(e) { console.error('plate-corners:', e.message); }
     }
+
+    savedCorners = claudeCorners ?? buildCorners(plate, near_side, angle_deg, null);
   }
 
   if (savedCorners && logoImg) {
