@@ -25,20 +25,19 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
-  const prompt = `This image is a crop of a car photo. It contains a vehicle LICENSE PLATE somewhere in it — find it.
+  const prompt = `This image is a crop of a car photo containing a vehicle license plate. Find the license plate and return the precise coordinates of its 4 corners.
 
-The license plate is a flat rectangular plate with alphanumeric registration characters (French format: "AB-123-CD" or "FJ-713-KZ" etc.), a blue EU strip on the left, and the letter F. It is mounted on the car bumper.
+The license plate is the white/grey flat plate with alphanumeric registration characters (French format like "FJ-713-KZ", "GA-700-JL", etc.) and a blue EU strip on the left side with the letter F.
 
-Return the exact normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom edge) of the 4 corners of that plate surface:
-- tl: top-left corner
-- tr: top-right corner
-- br: bottom-right corner
-- bl: bottom-left corner
-
-The plate may appear as a trapezoid if the car is at an angle. Give the actual visible corners, not a perfect rectangle.
+PRECISE MEASUREMENT RULES:
+1. Measure to the OUTER EDGE of the white plate surface — where the plate material begins and ends.
+2. Do NOT include the plastic mounting frame or border around the plate.
+3. If the plate is viewed at an angle, the 4 corners will NOT form a rectangle — measure the actual visible quadrilateral.
+4. x=0.0 is the LEFT edge of this image, x=1.0 is the RIGHT edge.
+5. y=0.0 is the TOP edge of this image, y=1.0 is the BOTTOM edge.
 
 Return ONLY this JSON (no markdown, no explanation):
-{"tl":{"x":0.10,"y":0.25},"tr":{"x":0.88,"y":0.22},"br":{"x":0.89,"y":0.75},"bl":{"x":0.09,"y":0.78}}`;
+{"tl":{"x":0.10,"y":0.30},"tr":{"x":0.90,"y":0.28},"br":{"x":0.91,"y":0.72},"bl":{"x":0.09,"y":0.74}}`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -49,7 +48,7 @@ Return ONLY this JSON (no markdown, no explanation):
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-sonnet-4-6',
         max_tokens: 200,
         messages: [{
           role: 'user',

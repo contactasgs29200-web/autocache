@@ -886,15 +886,15 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
       try {
         const bw = plate.tr.x - plate.tl.x;
         const bh = plate.bl.y - plate.tl.y;
-        const x0 = Math.max(0, plate.tl.x - bw * 0.25);
-        const y0 = Math.max(0, plate.tl.y - bh * 3.5); // large extension vers le haut
-        const x1 = Math.min(1, plate.tr.x + bw * 0.25);
-        const y1 = Math.min(1, plate.bl.y + bh * 0.5);
+        const x0 = Math.max(0, plate.tl.x - bw * 0.3);
+        const y0 = Math.max(0, plate.tl.y - bh * 2.5); // extension vers le haut pour capturer la vraie plaque
+        const x1 = Math.min(1, plate.tr.x + bw * 0.3);
+        const y1 = Math.min(1, plate.bl.y + bh * 0.4);
 
         const srcX = Math.round(x0 * c.width),  srcY = Math.round(y0 * c.height);
         const srcW = Math.round((x1 - x0) * c.width), srcH = Math.round((y1 - y0) * c.height);
         if (srcW > 20 && srcH > 10) {
-          const sc = Math.min(1, 1000 / Math.max(srcW, srcH));
+          const sc = Math.min(1, 1400 / Math.max(srcW, srcH)); // résolution plus haute pour Claude
           const cc = document.createElement('canvas');
           cc.width = Math.round(srcW * sc); cc.height = Math.round(srcH * sc);
           cc.getContext('2d').drawImage(c, srcX, srcY, srcW, srcH, 0, 0, cc.width, cc.height);
