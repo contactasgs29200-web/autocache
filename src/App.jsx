@@ -877,7 +877,49 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (plate.found && logoImg) {
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
-    savedCorners = buildCorners(plate, near_side, angle_deg, null);
+
+    // Crop serré (15% padding) autour du bbox PR → Claude Vision → 4 coins précis
+    let claudeCorners = null;
+    try {
+      const bw = plate.tr.x - plate.tl.x;
+      const bh = plate.bl.y - plate.tl.y;
+      const PAD = 0.15;
+      const x0 = Math.max(0, plate.tl.x - bw * PAD);
+      const y0 = Math.max(0, plate.tl.y - bh * PAD);
+      const x1 = Math.min(1, plate.tr.x + bw * PAD);
+      const y1 = Math.min(1, plate.bl.y + bh * PAD);
+
+      const srcX = Math.round(x0 * c.width),  srcY = Math.round(y0 * c.height);
+      const srcW = Math.round((x1 - x0) * c.width), srcH = Math.round((y1 - y0) * c.height);
+
+      if (srcW > 20 && srcH > 10) {
+        const sc = Math.min(1, 800 / Math.max(srcW, srcH));
+        const outW = Math.round(srcW * sc), outH = Math.round(srcH * sc);
+        const cc = document.createElement('canvas');
+        cc.width = outW; cc.height = outH;
+        cc.getContext('2d').drawImage(c, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
+        const cropB64 = cc.toDataURL('image/jpeg', 0.93).split(',')[1];
+
+        const r = await fetch('/api/plate-corners', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ b64: cropB64 }),
+        });
+        const cd = await r.json();
+
+        if (cd.tl && cd.tr && cd.br && cd.bl) {
+          const nw = x1 - x0, nh = y1 - y0;
+          claudeCorners = {
+            tl: { x: x0 + cd.tl.x * nw, y: y0 + cd.tl.y * nh },
+            tr: { x: x0 + cd.tr.x * nw, y: y0 + cd.tr.y * nh },
+            br: { x: x0 + cd.br.x * nw, y: y0 + cd.br.y * nh },
+            bl: { x: x0 + cd.bl.x * nw, y: y0 + cd.bl.y * nh },
+          };
+        }
+      }
+    } catch(e) { console.error('plate-corners:', e.message); }
+
+    savedCorners = claudeCorners ?? buildCorners(plate, near_side, angle_deg, null);
   }
 
   if (savedCorners && logoImg) {
