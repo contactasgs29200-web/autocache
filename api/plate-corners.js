@@ -1,6 +1,6 @@
 // /api/plate-corners.js
-// Claude Vision sur un crop serré centré sur la plaque (PR bbox + 15% padding)
-// Retourne les 4 coins exacts en perspective {tl, tr, br, bl} normalisés 0-1
+// Claude Haiku Vision sur l'image complète — détecte les 4 coins réels de la plaque
+// Claude distingue la plaque d'immatriculation des stickers concessionnaire, protections, etc.
 
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
@@ -25,9 +25,15 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
-  const prompt = `This image is a tight crop centered on a vehicle license plate. The plate fills most of the image.
+  const prompt = `Look at this car photo. Find the vehicle LICENSE PLATE — the official registration plate with alphanumeric characters (format like "GA-700-JL", "FJ-713-KZ", "CT-348-MT" etc. in France).
 
-Find the license plate surface — the flat plate with registration alphanumeric characters (e.g. "GA-700-JL" format in France). Do NOT include the plastic holder, mounting screws, or dealer stickers.
+IMPORTANT: Do NOT confuse the license plate with:
+- Dealer stickers or dealer frames (e.g. "FOREST AUTOMOBILES", "amplitude-auto.com", etc.)
+- Plastic bumper trim or skid plates
+- Parking sensors or tow hooks
+- Any text on walls or floors
+
+The license plate has the country identifier (F for France) and registration numbers. It is attached to the car bumper.
 
 Return the exact normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom edge) of the 4 corners of the plate surface:
 - tl: top-left
@@ -35,10 +41,10 @@ Return the exact normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom
 - br: bottom-right
 - bl: bottom-left
 
-If the plate is seen from an angle it will appear as a trapezoid — give the actual visible corners, not a perfect rectangle.
+If the plate is angled it will appear as a trapezoid — give actual corners, not a perfect rectangle.
 
 Return ONLY this JSON (no explanation):
-{"tl":{"x":0.04,"y":0.18},"tr":{"x":0.94,"y":0.16},"br":{"x":0.95,"y":0.82},"bl":{"x":0.03,"y":0.84}}`;
+{"tl":{"x":0.30,"y":0.62},"tr":{"x":0.58,"y":0.61},"br":{"x":0.58,"y":0.68},"bl":{"x":0.30,"y":0.69}}`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -80,6 +86,13 @@ Return ONLY this JSON (no explanation):
 
     if (!ok(c.tl) || !ok(c.tr) || !ok(c.br) || !ok(c.bl)) {
       return res.status(500).json({ error: 'Invalid corners', c });
+    }
+
+    // Validation : la plaque doit avoir un ratio largeur/hauteur raisonnable (2:1 à 8:1)
+    const w = Math.abs(c.tr.x - c.tl.x);
+    const h = Math.abs(c.bl.y - c.tl.y);
+    if (h > 0 && (w / h < 1.5 || w / h > 10)) {
+      return res.status(500).json({ error: 'Aspect ratio invalid', w, h });
     }
 
     console.log('plate-corners OK:', JSON.stringify(c));
