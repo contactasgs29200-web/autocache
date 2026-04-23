@@ -879,40 +879,70 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // Crop contraint horizontalement (PR fiable en X) + étendu vers le haut (PR peut
-    // détecter un sticker sous la plaque → la vraie plaque est au-dessus)
+    // Deux passes Claude pour une précision maximale :
+    // Passe 1 : crop large (PR bbox + extension) → localisation rough de la plaque
+    // Passe 2 : crop ultra-serré autour du résultat de la passe 1 → 4 coins exacts
     let claudeCorners = null;
     if (useGptAngle) {
       try {
-        const bw = plate.tr.x - plate.tl.x;
-        const bh = plate.bl.y - plate.tl.y;
-        const x0 = Math.max(0, plate.tl.x - bw * 0.3);
-        const y0 = Math.max(0, plate.tl.y - bh * 2.5); // extension vers le haut pour capturer la vraie plaque
-        const x1 = Math.min(1, plate.tr.x + bw * 0.3);
-        const y1 = Math.min(1, plate.bl.y + bh * 0.4);
-
-        const srcX = Math.round(x0 * c.width),  srcY = Math.round(y0 * c.height);
-        const srcW = Math.round((x1 - x0) * c.width), srcH = Math.round((y1 - y0) * c.height);
-        if (srcW > 20 && srcH > 10) {
-          const sc = Math.min(1, 1400 / Math.max(srcW, srcH)); // résolution plus haute pour Claude
+        const makeCrop = (ax0, ay0, ax1, ay1, maxPx) => {
+          const sx = Math.round(ax0 * c.width), sy = Math.round(ay0 * c.height);
+          const sw = Math.round((ax1 - ax0) * c.width), sh = Math.round((ay1 - ay0) * c.height);
+          if (sw < 10 || sh < 5) return null;
+          const sc = Math.min(1, maxPx / Math.max(sw, sh));
           const cc = document.createElement('canvas');
-          cc.width = Math.round(srcW * sc); cc.height = Math.round(srcH * sc);
-          cc.getContext('2d').drawImage(c, srcX, srcY, srcW, srcH, 0, 0, cc.width, cc.height);
-          const cropB64 = cc.toDataURL('image/jpeg', 0.93).split(',')[1];
+          cc.width = Math.round(sw * sc); cc.height = Math.round(sh * sc);
+          cc.getContext('2d').drawImage(c, sx, sy, sw, sh, 0, 0, cc.width, cc.height);
+          return cc.toDataURL('image/jpeg', 0.94).split(',')[1];
+        };
 
+        const callClaude = async (b64crop) => {
           const r = await fetch('/api/plate-corners', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ b64: cropB64 }),
+            body: JSON.stringify({ b64: b64crop }),
           });
-          const cd = await r.json();
-          if (cd.tl && cd.tr && cd.br && cd.bl) {
-            const nw = x1 - x0, nh = y1 - y0;
-            claudeCorners = {
-              tl: { x: x0 + cd.tl.x * nw, y: y0 + cd.tl.y * nh },
-              tr: { x: x0 + cd.tr.x * nw, y: y0 + cd.tr.y * nh },
-              br: { x: x0 + cd.br.x * nw, y: y0 + cd.br.y * nh },
-              bl: { x: x0 + cd.bl.x * nw, y: y0 + cd.bl.y * nh },
-            };
+          const d = await r.json();
+          return (d.tl && d.tr && d.br && d.bl) ? d : null;
+        };
+
+        const toFull = (d, rx0, ry0, rw, rh) => ({
+          tl: { x: rx0 + d.tl.x * rw, y: ry0 + d.tl.y * rh },
+          tr: { x: rx0 + d.tr.x * rw, y: ry0 + d.tr.y * rh },
+          br: { x: rx0 + d.br.x * rw, y: ry0 + d.br.y * rh },
+          bl: { x: rx0 + d.bl.x * rw, y: ry0 + d.bl.y * rh },
+        });
+
+        // Passe 1 : crop basé sur PR bbox (±30% en X, +2.5 bh vers le haut)
+        const bw = plate.tr.x - plate.tl.x, bh = plate.bl.y - plate.tl.y;
+        const p1x0 = Math.max(0, plate.tl.x - bw * 0.3);
+        const p1y0 = Math.max(0, plate.tl.y - bh * 2.5);
+        const p1x1 = Math.min(1, plate.tr.x + bw * 0.3);
+        const p1y1 = Math.min(1, plate.bl.y + bh * 0.4);
+        const crop1 = makeCrop(p1x0, p1y0, p1x1, p1y1, 1200);
+
+        if (crop1) {
+          const d1 = await callClaude(crop1);
+          if (d1) {
+            const rough = toFull(d1, p1x0, p1y0, p1x1 - p1x0, p1y1 - p1y0);
+
+            // Passe 2 : crop ultra-serré autour du résultat de la passe 1 (2% de marge)
+            const xs = [rough.tl.x, rough.tr.x, rough.br.x, rough.bl.x];
+            const ys = [rough.tl.y, rough.tr.y, rough.br.y, rough.bl.y];
+            const PAD2 = 0.02;
+            const p2x0 = Math.max(0, Math.min(...xs) - PAD2);
+            const p2y0 = Math.max(0, Math.min(...ys) - PAD2);
+            const p2x1 = Math.min(1, Math.max(...xs) + PAD2);
+            const p2y1 = Math.min(1, Math.max(...ys) + PAD2);
+            const crop2 = makeCrop(p2x0, p2y0, p2x1, p2y1, 1600);
+
+            if (crop2) {
+              const d2 = await callClaude(crop2);
+              claudeCorners = d2
+                ? toFull(d2, p2x0, p2y0, p2x1 - p2x0, p2y1 - p2y0)
+                : rough;
+            } else {
+              claudeCorners = rough;
+            }
           }
         }
       } catch(e) { console.error('plate-corners:', e.message); }
