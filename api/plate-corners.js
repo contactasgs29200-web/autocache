@@ -25,26 +25,20 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
-  const prompt = `Look at this car photo. Find the vehicle LICENSE PLATE — the official registration plate with alphanumeric characters (format like "GA-700-JL", "FJ-713-KZ", "CT-348-MT" etc. in France).
+  const prompt = `This image is a crop of a car photo. It contains a vehicle LICENSE PLATE somewhere in it — find it.
 
-IMPORTANT: Do NOT confuse the license plate with:
-- Dealer stickers or dealer frames (e.g. "FOREST AUTOMOBILES", "amplitude-auto.com", etc.)
-- Plastic bumper trim or skid plates
-- Parking sensors or tow hooks
-- Any text on walls or floors
+The license plate is a flat rectangular plate with alphanumeric registration characters (French format: "AB-123-CD" or "FJ-713-KZ" etc.), a blue EU strip on the left, and the letter F. It is mounted on the car bumper.
 
-The license plate has the country identifier (F for France) and registration numbers. It is attached to the car bumper.
+Return the exact normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom edge) of the 4 corners of that plate surface:
+- tl: top-left corner
+- tr: top-right corner
+- br: bottom-right corner
+- bl: bottom-left corner
 
-Return the exact normalized coordinates (0.0 = left/top edge, 1.0 = right/bottom edge) of the 4 corners of the plate surface:
-- tl: top-left
-- tr: top-right
-- br: bottom-right
-- bl: bottom-left
+The plate may appear as a trapezoid if the car is at an angle. Give the actual visible corners, not a perfect rectangle.
 
-If the plate is angled it will appear as a trapezoid — give actual corners, not a perfect rectangle.
-
-Return ONLY this JSON (no explanation):
-{"tl":{"x":0.30,"y":0.62},"tr":{"x":0.58,"y":0.61},"br":{"x":0.58,"y":0.68},"bl":{"x":0.30,"y":0.69}}`;
+Return ONLY this JSON (no markdown, no explanation):
+{"tl":{"x":0.10,"y":0.25},"tr":{"x":0.88,"y":0.22},"br":{"x":0.89,"y":0.75},"bl":{"x":0.09,"y":0.78}}`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
