@@ -912,38 +912,44 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
           bl: { x: rx0 + d.bl.x * rw, y: ry0 + d.bl.y * rh },
         });
 
-        // Passe 1 : crop basé sur PR bbox (±30% en X, +2.5 bh vers le haut)
+        // Passe 1 : crop serré autour du PR bbox (±20%)
+        // → la plaque occupe ~71% du crop → Claude peut mesurer précisément les bords
         const bw = plate.tr.x - plate.tl.x, bh = plate.bl.y - plate.tl.y;
-        const p1x0 = Math.max(0, plate.tl.x - bw * 0.3);
-        const p1y0 = Math.max(0, plate.tl.y - bh * 2.5);
-        const p1x1 = Math.min(1, plate.tr.x + bw * 0.3);
-        const p1y1 = Math.min(1, plate.bl.y + bh * 0.4);
-        const crop1 = makeCrop(p1x0, p1y0, p1x1, p1y1, 1200);
+        const p1x0 = Math.max(0, plate.tl.x - bw * 0.20);
+        const p1y0 = Math.max(0, plate.tl.y - bh * 0.25);
+        const p1x1 = Math.min(1, plate.tr.x + bw * 0.20);
+        const p1y1 = Math.min(1, plate.bl.y + bh * 0.25);
+        const crop1 = makeCrop(p1x0, p1y0, p1x1, p1y1, 1600);
 
         if (crop1) {
           const d1 = await callClaude(crop1);
           if (d1) {
             const rough = toFull(d1, p1x0, p1y0, p1x1 - p1x0, p1y1 - p1y0);
 
-            // Passe 2 : padding proportionnel à la taille rough de la plaque
-            // 20% largeur + 30% hauteur → plaque visible à ~70% dans le crop
+            // Sanity check : si la hauteur détectée > 2× la hauteur PR, Claude a probablement
+            // inclus le cadre/recess. Dans ce cas, on utilise rough tel quel sans passe 2.
             const xs = [rough.tl.x, rough.tr.x, rough.br.x, rough.bl.x];
             const ys = [rough.tl.y, rough.tr.y, rough.br.y, rough.bl.y];
-            const roughW = Math.max(...xs) - Math.min(...xs);
             const roughH = Math.max(...ys) - Math.min(...ys);
-            const p2x0 = Math.max(0, Math.min(...xs) - roughW * 0.20);
-            const p2y0 = Math.max(0, Math.min(...ys) - roughH * 0.30);
-            const p2x1 = Math.min(1, Math.max(...xs) + roughW * 0.20);
-            const p2y1 = Math.min(1, Math.max(...ys) + roughH * 0.30);
-            const crop2 = makeCrop(p2x0, p2y0, p2x1, p2y1, 1600);
-
-            if (crop2) {
-              const d2 = await callClaude(crop2);
-              claudeCorners = d2
-                ? toFull(d2, p2x0, p2y0, p2x1 - p2x0, p2y1 - p2y0)
-                : rough;
+            if (roughH > bh * 2.0) {
+              claudeCorners = null; // rejet → buildCorners
             } else {
-              claudeCorners = rough;
+              // Passe 2 : crop ultra-serré (±10%) → plaque à ~83%
+              const roughW = Math.max(...xs) - Math.min(...xs);
+              const p2x0 = Math.max(0, Math.min(...xs) - roughW * 0.10);
+              const p2y0 = Math.max(0, Math.min(...ys) - roughH * 0.10);
+              const p2x1 = Math.min(1, Math.max(...xs) + roughW * 0.10);
+              const p2y1 = Math.min(1, Math.max(...ys) + roughH * 0.10);
+              const crop2 = makeCrop(p2x0, p2y0, p2x1, p2y1, 1600);
+
+              if (crop2) {
+                const d2 = await callClaude(crop2);
+                claudeCorners = d2
+                  ? toFull(d2, p2x0, p2y0, p2x1 - p2x0, p2y1 - p2y0)
+                  : rough;
+              } else {
+                claudeCorners = rough;
+              }
             }
           }
         }
