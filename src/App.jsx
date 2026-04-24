@@ -925,14 +925,16 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
           if (d1) {
             const rough = toFull(d1, p1x0, p1y0, p1x1 - p1x0, p1y1 - p1y0);
 
-            // Passe 2 : crop ultra-serré autour du résultat de la passe 1 (2% de marge)
+            // Passe 2 : padding proportionnel à la taille rough de la plaque
+            // 20% largeur + 30% hauteur → plaque visible à ~70% dans le crop
             const xs = [rough.tl.x, rough.tr.x, rough.br.x, rough.bl.x];
             const ys = [rough.tl.y, rough.tr.y, rough.br.y, rough.bl.y];
-            const PAD2 = 0.02;
-            const p2x0 = Math.max(0, Math.min(...xs) - PAD2);
-            const p2y0 = Math.max(0, Math.min(...ys) - PAD2);
-            const p2x1 = Math.min(1, Math.max(...xs) + PAD2);
-            const p2y1 = Math.min(1, Math.max(...ys) + PAD2);
+            const roughW = Math.max(...xs) - Math.min(...xs);
+            const roughH = Math.max(...ys) - Math.min(...ys);
+            const p2x0 = Math.max(0, Math.min(...xs) - roughW * 0.20);
+            const p2y0 = Math.max(0, Math.min(...ys) - roughH * 0.30);
+            const p2x1 = Math.min(1, Math.max(...xs) + roughW * 0.20);
+            const p2y1 = Math.min(1, Math.max(...ys) + roughH * 0.30);
             const crop2 = makeCrop(p2x0, p2y0, p2x1, p2y1, 1600);
 
             if (crop2) {
