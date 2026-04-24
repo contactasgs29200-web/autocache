@@ -223,22 +223,33 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
   };
 
-  // Scan vers le bas → bord supérieur de la plaque blanche
+  // Lignes de départ : 10% à l'intérieur du PR bbox (zone blanche, pas de texte)
+  // On part de l'INTÉRIEUR de la plaque et on scanne vers l'extérieur.
+  // Ainsi le chrome de la grille AU-DESSUS ne peut pas déclencher de faux positif.
+  const prTopRow = Math.round(plate.tl.y * imgH - sy);
+  const prBotRow = Math.round(plate.bl.y * imgH - sy);
+  const prHpx    = Math.max(1, prBotRow - prTopRow);
+  const topStart = Math.min(sh - 1, prTopRow + Math.round(prHpx * 0.10));
+  const botStart = Math.max(0,      prBotRow - Math.round(prHpx * 0.10));
+
+  // Scan vers le HAUT depuis l'intérieur → bord supérieur réel de la plaque
   const findTop = (relX) => {
     const col = Math.min(sw - 1, Math.round(relX * sw));
-    for (let row = 0; row < sh; row++) {
-      if (getBright(col, row) > 160) return (sy + row) / imgH;
+    if (getBright(col, topStart) < 120) return null; // pas dans la plaque ici
+    for (let row = topStart; row >= 0; row--) {
+      if (getBright(col, row) < 120) return (sy + row + 1) / imgH;
     }
-    return null;
+    return sy / imgH;
   };
 
-  // Scan vers le haut → bord inférieur
+  // Scan vers le BAS depuis l'intérieur → bord inférieur réel
   const findBot = (relX) => {
     const col = Math.min(sw - 1, Math.round(relX * sw));
-    for (let row = sh - 1; row >= 0; row--) {
-      if (getBright(col, row) > 160) return (sy + row) / imgH;
+    if (getBright(col, botStart) < 120) return null;
+    for (let row = botStart; row < sh; row++) {
+      if (getBright(col, row) < 120) return (sy + row) / imgH;
     }
-    return null;
+    return (sy + sh) / imgH;
   };
 
   // 3 colonnes côté gauche (évite EU strip 0-8%), 3 côté droit (évite sticker ~92-100%)
