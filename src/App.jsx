@@ -3554,7 +3554,7 @@ export default function AutoCache() {
       {/* ── Overlay chargement ── */}
       {processing && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.88)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
-          <span style={{ width: 48, height: 48, border: "4px solid #2a2a2a", borderTopColor: "#f26522", borderRadius: "50%", display: "inline-block", animation: "spin 0.8s linear infinite" }} />
+          <span style={{ width: 52, height: 52, borderTop: "5px solid #f26522", borderRight: "5px solid #f26522", borderBottom: "5px solid #f26522", borderLeft: "5px solid transparent", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
           <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
             Traitement {progress.n} / {progress.total}
           </div>
