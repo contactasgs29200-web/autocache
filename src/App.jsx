@@ -1988,6 +1988,9 @@ export default function AutoCache() {
           input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#f26522;border:none;}
           button,select{min-height:40px;}
         }
+        @keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        @-webkit-keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        .ac-spinner{animation:ac-spin 0.7s linear infinite;-webkit-animation:ac-spin 0.7s linear infinite;}
       `}</style>
       <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#1c1c1c", minHeight: "100vh", color: "#e0dbd4", overflowX: "hidden", maxWidth: "100vw" }}>
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: isMobile ? "0 12px" : "0 28px", height: 56, borderBottom: "1px solid #1e1e1e", position: "sticky", top: 0, background: "#1c1c1c", zIndex: 10 }}>
@@ -3554,7 +3557,7 @@ export default function AutoCache() {
       {/* ── Overlay chargement ── */}
       {processing && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.88)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
-          <span style={{ width: 52, height: 52, borderTop: "5px solid #f26522", borderRight: "5px solid #f26522", borderBottom: "5px solid #f26522", borderLeft: "5px solid transparent", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
+          <span className="ac-spinner" style={{ width: 52, height: 52, borderTop: "5px solid #f26522", borderRight: "5px solid #f26522", borderBottom: "5px solid #f26522", borderLeft: "5px solid transparent", borderRadius: "50%", display: "inline-block" }} />
           <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
             Traitement {progress.n} / {progress.total}
           </div>
