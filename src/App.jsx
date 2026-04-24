@@ -202,18 +202,47 @@ function estimateAngleFromPosition(plate) {
   return { near_side, angle_deg };
 }
 
-// Détecte l'inclinaison réelle de la plaque en lisant les pixels du canvas.
-// Scan vertical à gauche et à droite du PR bbox : trouve où la plaque blanche commence.
-// Plus fiable que l'estimation d'angle car lit directement les données image.
+// Détecte les 4 coins réels de la plaque par analyse des pixels du canvas.
+// Corrige le PR bbox si trop étroit (bandelette EU souvent manquée),
+// puis détecte l'inclinaison réelle par scan vertical gauche/droite.
 function refineCornersByPixels(ctx, plate, imgW, imgH) {
-  const pw = plate.tr.x - plate.tl.x;
+  const prW = plate.tr.x - plate.tl.x;
+  const prH = plate.bl.y - plate.tl.y;
+
+  // Étape 1 : corriger le bord gauche si PR est trop étroit pour 4.73:1.
+  // PR manque souvent la bandelette EU bleue (côté gauche).
+  const expectedW = prH * 4.73;
+  let tlx = plate.tl.x, trx = plate.tr.x;
+  if (prW < expectedW * 0.82) {
+    // Étendre majoritairement à gauche (bandelette EU), légèrement à droite
+    const missing = expectedW - prW;
+    tlx = Math.max(0, plate.tl.x - missing * 0.80);
+    trx = Math.min(1, plate.tr.x + missing * 0.20);
+  }
+  const pw = trx - tlx;
   const phApprox = pw / 4.73;
 
-  // Zone de scan : du dessus du PR bbox (- 25% hauteur plaque) jusqu'en bas
-  const sx = Math.max(0, Math.round(plate.tl.x * imgW));
-  const sy = Math.max(0, Math.round((plate.tl.y - phApprox * 0.25) * imgH));
-  const sw = Math.min(imgW - sx, Math.round(pw * imgW));
-  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + phApprox * 0.15) * imgH) - sy);
+  // Étape 2 : affiner le bord gauche exact par scan horizontal au centre de la plaque.
+  // Seuil 50 : attrape la bandelette EU bleue (luminosité ~65) mais pas le pare-chocs (~20).
+  const centerY = Math.round(((plate.tl.y + plate.bl.y) / 2) * imgH);
+  const scanLeft = () => {
+    const x0 = Math.max(0, Math.round(tlx * imgW) - Math.round(pw * imgW * 0.10));
+    for (let x = x0; x < Math.round(trx * imgW); x++) {
+      const d = ctx.getImageData(x, centerY, 1, 1).data;
+      if ((d[0] + d[1] + d[2]) / 3 > 50) return x / imgW;
+    }
+    return tlx;
+  };
+  const actualLeft = scanLeft();
+  // Recalculer la largeur réelle depuis le bord gauche pixel détecté
+  const finalW = trx - actualLeft;
+  const ph = finalW / 4.73;
+
+  // Étape 3 : détecter l'inclinaison réelle via scan vertical à 6 colonnes.
+  const sx = Math.max(0, Math.round(actualLeft * imgW));
+  const sy = Math.max(0, Math.round((plate.tl.y - phApprox * 0.30) * imgH));
+  const sw = Math.min(imgW - sx, Math.round(finalW * imgW));
+  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + phApprox * 0.20) * imgH) - sy);
   if (sw < 10 || sh < 5) return null;
 
   const pixels = ctx.getImageData(sx, sy, sw, sh).data;
@@ -222,7 +251,6 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     const i = (row * sw + col) * 4;
     return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
   };
-
   const findTopEdge = (relX) => {
     const col = Math.round(relX * sw);
     for (let row = 0; row < sh; row++) {
@@ -231,25 +259,23 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     return null;
   };
 
-  // 3 échantillons côté gauche (évite la bandelette EU 0-8%)
-  // 3 échantillons côté droit (évite le sticker inspection ~92-100%)
-  const leftYs  = [0.12, 0.18, 0.25].map(r => findTopEdge(r)).filter(v => v !== null);
-  const rightYs = [0.75, 0.82, 0.88].map(r => findTopEdge(r)).filter(v => v !== null);
+  // Éviter la bandelette EU (0-8%) et le sticker inspection (~92-100%)
+  const leftYs  = [0.12, 0.19, 0.27].map(r => findTopEdge(r)).filter(v => v !== null);
+  const rightYs = [0.73, 0.81, 0.88].map(r => findTopEdge(r)).filter(v => v !== null);
   if (!leftYs.length || !rightYs.length) return null;
 
   const tlY = leftYs.reduce((a, b) => a + b) / leftYs.length;
   const trY = rightYs.reduce((a, b) => a + b) / rightYs.length;
 
-  // Sanity : inclinaison max 15% de la largeur, et position proche du PR bbox
-  if (Math.abs(tlY - trY) > pw * 0.15) return null;
-  if (Math.abs(tlY - plate.tl.y) > phApprox * 0.6) return null;
+  // Sanity : inclinaison max 12% de la largeur, position proche du PR bbox
+  if (Math.abs(tlY - trY) > finalW * 0.12) return null;
+  if (Math.abs(tlY - plate.tl.y) > phApprox * 0.7) return null;
 
-  const ph = pw / 4.73;
   return {
-    tl: { x: plate.tl.x, y: Math.max(0, tlY) },
-    tr: { x: plate.tr.x, y: Math.max(0, trY) },
-    br: { x: plate.tr.x, y: Math.min(1, trY + ph) },
-    bl: { x: plate.tl.x, y: Math.min(1, tlY + ph) },
+    tl: { x: Math.max(0, actualLeft), y: Math.max(0, tlY) },
+    tr: { x: Math.min(1, trx),        y: Math.max(0, trY) },
+    br: { x: Math.min(1, trx),        y: Math.min(1, trY + ph) },
+    bl: { x: Math.max(0, actualLeft), y: Math.min(1, tlY + ph) },
   };
 }
 
