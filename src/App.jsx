@@ -223,21 +223,24 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
   };
 
-  // Lignes de départ : 10% à l'intérieur du PR bbox (zone blanche, pas de texte)
+  // Lignes de départ : 20% à l'intérieur du PR bbox (zone blanche garantie)
   // On part de l'INTÉRIEUR de la plaque et on scanne vers l'extérieur.
-  // Ainsi le chrome de la grille AU-DESSUS ne peut pas déclencher de faux positif.
+  // Seuil ADAPTATIF : 70% de la luminosité de départ → s'arrête au cadre/carrosserie
+  // sans être trompé par le chrome ou les reflets (qui sont < 70% du blanc de plaque).
   const prTopRow = Math.round(plate.tl.y * imgH - sy);
   const prBotRow = Math.round(plate.bl.y * imgH - sy);
   const prHpx    = Math.max(1, prBotRow - prTopRow);
-  const topStart = Math.min(sh - 1, prTopRow + Math.round(prHpx * 0.10));
-  const botStart = Math.max(0,      prBotRow - Math.round(prHpx * 0.10));
+  const topStart = Math.min(sh - 1, prTopRow + Math.round(prHpx * 0.20));
+  const botStart = Math.max(0,      prBotRow - Math.round(prHpx * 0.20));
 
   // Scan vers le HAUT depuis l'intérieur → bord supérieur réel de la plaque
   const findTop = (relX) => {
     const col = Math.min(sw - 1, Math.round(relX * sw));
-    if (getBright(col, topStart) < 120) return null; // pas dans la plaque ici
+    const s = getBright(col, topStart);
+    if (s < 120) return null; // pas dans la zone blanche de la plaque
+    const thresh = s * 0.70; // seuil adaptatif : s'arrête au cadre/carrosserie
     for (let row = topStart; row >= 0; row--) {
-      if (getBright(col, row) < 120) return (sy + row + 1) / imgH;
+      if (getBright(col, row) < thresh) return (sy + row + 1) / imgH;
     }
     return sy / imgH;
   };
@@ -245,9 +248,11 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
   // Scan vers le BAS depuis l'intérieur → bord inférieur réel
   const findBot = (relX) => {
     const col = Math.min(sw - 1, Math.round(relX * sw));
-    if (getBright(col, botStart) < 120) return null;
+    const s = getBright(col, botStart);
+    if (s < 120) return null;
+    const thresh = s * 0.70;
     for (let row = botStart; row < sh; row++) {
-      if (getBright(col, row) < 120) return (sy + row) / imgH;
+      if (getBright(col, row) < thresh) return (sy + row) / imgH;
     }
     return (sy + sh) / imgH;
   };
