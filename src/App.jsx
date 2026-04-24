@@ -952,7 +952,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   let plateFound = false;
   let savedCorners = null;
 
-  if (plate.found && logoImg) {
+  if (plate.found) {
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
@@ -962,7 +962,25 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     savedCorners = pixelCorners ?? buildCorners(plate, near_side, angle_deg, null);
   }
 
-  if (savedCorners && logoImg) {
+  // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)
+  if (savedCorners) {
+    const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
+    const corners = [savedCorners.tl, savedCorners.tr, savedCorners.br, savedCorners.bl].map(toPixel);
+    const r = Math.max(8, Math.round(c.width * 0.012));
+    corners.forEach(pt => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'red';
+      ctx.fill();
+      ctx.lineWidth = Math.max(2, r * 0.3);
+      ctx.strokeStyle = 'white';
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
+
+  if (false && savedCorners && logoImg) {
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
