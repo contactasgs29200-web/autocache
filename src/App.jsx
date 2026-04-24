@@ -202,6 +202,57 @@ function estimateAngleFromPosition(plate) {
   return { near_side, angle_deg };
 }
 
+// Détecte l'inclinaison réelle de la plaque en lisant les pixels du canvas.
+// Scan vertical à gauche et à droite du PR bbox : trouve où la plaque blanche commence.
+// Plus fiable que l'estimation d'angle car lit directement les données image.
+function refineCornersByPixels(ctx, plate, imgW, imgH) {
+  const pw = plate.tr.x - plate.tl.x;
+  const phApprox = pw / 4.73;
+
+  // Zone de scan : du dessus du PR bbox (- 25% hauteur plaque) jusqu'en bas
+  const sx = Math.max(0, Math.round(plate.tl.x * imgW));
+  const sy = Math.max(0, Math.round((plate.tl.y - phApprox * 0.25) * imgH));
+  const sw = Math.min(imgW - sx, Math.round(pw * imgW));
+  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + phApprox * 0.15) * imgH) - sy);
+  if (sw < 10 || sh < 5) return null;
+
+  const pixels = ctx.getImageData(sx, sy, sw, sh).data;
+  const getBright = (col, row) => {
+    if (col < 0 || col >= sw || row < 0 || row >= sh) return 0;
+    const i = (row * sw + col) * 4;
+    return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+  };
+
+  const findTopEdge = (relX) => {
+    const col = Math.round(relX * sw);
+    for (let row = 0; row < sh; row++) {
+      if (getBright(col, row) > 165) return (sy + row) / imgH;
+    }
+    return null;
+  };
+
+  // 3 échantillons côté gauche (évite la bandelette EU 0-8%)
+  // 3 échantillons côté droit (évite le sticker inspection ~92-100%)
+  const leftYs  = [0.12, 0.18, 0.25].map(r => findTopEdge(r)).filter(v => v !== null);
+  const rightYs = [0.75, 0.82, 0.88].map(r => findTopEdge(r)).filter(v => v !== null);
+  if (!leftYs.length || !rightYs.length) return null;
+
+  const tlY = leftYs.reduce((a, b) => a + b) / leftYs.length;
+  const trY = rightYs.reduce((a, b) => a + b) / rightYs.length;
+
+  // Sanity : inclinaison max 15% de la largeur, et position proche du PR bbox
+  if (Math.abs(tlY - trY) > pw * 0.15) return null;
+  if (Math.abs(tlY - plate.tl.y) > phApprox * 0.6) return null;
+
+  const ph = pw / 4.73;
+  return {
+    tl: { x: plate.tl.x, y: Math.max(0, tlY) },
+    tr: { x: plate.tr.x, y: Math.max(0, trY) },
+    br: { x: plate.tr.x, y: Math.min(1, trY + ph) },
+    bl: { x: plate.tl.x, y: Math.min(1, tlY + ph) },
+  };
+}
+
 // Build trapezoid corners from PR bounding box.
 // Stratégie : conserve les X réels de PR (perspective déjà encodée) et le centre Y
 // par côté (capture l'inclinaison verticale sur les voitures de 3/4).
@@ -879,7 +930,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    savedCorners = buildCorners(plate, near_side, angle_deg, null);
+    // Détecte l'inclinaison réelle via pixels (plaque blanche sur pare-chocs sombre).
+    // Fallback sur buildCorners si l'analyse pixels échoue (image trop sombre, etc.)
+    const pixelCorners = refineCornersByPixels(ctx, plate, c.width, c.height);
+    savedCorners = pixelCorners ?? buildCorners(plate, near_side, angle_deg, null);
   }
 
   if (savedCorners && logoImg) {
