@@ -985,7 +985,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (savedCorners) {
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const corners = [savedCorners.tl, savedCorners.tr, savedCorners.br, savedCorners.bl].map(toPixel);
-    const r = Math.max(8, Math.round(c.width * 0.012));
+    const r = Math.max(3, Math.round(c.width * 0.004));
     corners.forEach(pt => {
       ctx.save();
       ctx.beginPath();
