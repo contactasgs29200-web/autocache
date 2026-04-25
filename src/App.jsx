@@ -203,17 +203,19 @@ function estimateAngleFromPosition(plate) {
 }
 
 // Détecte les bords supérieur et inférieur réels de la plaque par scan pixel.
-// Les X viennent de PR (fiables). Seuls les Y sont affinés pour capturer l'inclinaison.
-// Scan dans un crop serré autour du PR bbox pour éviter les faux positifs (phares, chrome).
+// Les X viennent de PR (fiables). Seuls les Y sont affinés.
+// Stratégie : pour chaque colonne, on cherche la PLUS GRANDE zone continue blanche.
+// Robuste aux plaques inclinées (un côté au milieu du PR bbox) et aux cadres chrome
+// (zones fines < corps de plaque → naturellement ignorées).
 function refineCornersByPixels(ctx, plate, imgW, imgH) {
   const pw  = plate.tr.x - plate.tl.x;
   const prH = plate.bl.y - plate.tl.y;
 
-  // Crop = PR bbox étendu de ±40% en Y seulement (X inchangé = évite phares et chrome)
+  // Crop = PR bbox étendu de ±60% en Y pour capturer les plaques très inclinées
   const sx = Math.max(0, Math.round(plate.tl.x * imgW));
-  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.40) * imgH));
+  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.60) * imgH));
   const sw = Math.min(imgW - sx, Math.round(pw * imgW));
-  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.40) * imgH) - sy);
+  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.60) * imgH) - sy);
   if (sw < 10 || sh < 5) return null;
 
   const pixels = ctx.getImageData(sx, sy, sw, sh).data;
@@ -223,58 +225,56 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
   };
 
-  // Lignes de départ : 20% à l'intérieur du PR bbox (zone blanche garantie)
-  // On part de l'INTÉRIEUR de la plaque et on scanne vers l'extérieur.
-  // Seuil ADAPTATIF : 70% de la luminosité de départ → s'arrête au cadre/carrosserie
-  // sans être trompé par le chrome ou les reflets (qui sont < 70% du blanc de plaque).
-  const prTopRow = Math.round(plate.tl.y * imgH - sy);
-  const prBotRow = Math.round(plate.bl.y * imgH - sy);
-  const prHpx    = Math.max(1, prBotRow - prTopRow);
-  const topStart = Math.min(sh - 1, prTopRow + Math.round(prHpx * 0.20));
-  const botStart = Math.max(0,      prBotRow - Math.round(prHpx * 0.20));
-
-  // Scan vers le HAUT depuis l'intérieur → bord supérieur réel de la plaque
-  const findTop = (relX) => {
+  // Pour chaque colonne : plus longue zone continue ≥ 78% du pic = corps de plaque.
+  // Résultat = {top, bot} en coords normalisées 0-1.
+  const findEdges = (relX) => {
     const col = Math.min(sw - 1, Math.round(relX * sw));
-    const s = getBright(col, topStart);
-    if (s < 120) return null; // pas dans la zone blanche de la plaque
-    const thresh = s * 0.70; // seuil adaptatif : s'arrête au cadre/carrosserie
-    for (let row = topStart; row >= 0; row--) {
-      if (getBright(col, row) < thresh) return (sy + row + 1) / imgH;
-    }
-    return sy / imgH;
-  };
+    const minRow = Math.round(sh * 0.04);
+    const maxRow = Math.max(minRow + 1, Math.round(sh * 0.96));
 
-  // Scan vers le BAS depuis l'intérieur → bord inférieur réel
-  const findBot = (relX) => {
-    const col = Math.min(sw - 1, Math.round(relX * sw));
-    const s = getBright(col, botStart);
-    if (s < 120) return null;
-    const thresh = s * 0.70;
-    for (let row = botStart; row < sh; row++) {
-      if (getBright(col, row) < thresh) return (sy + row) / imgH;
+    let maxBright = 0;
+    for (let row = minRow; row < maxRow; row++) {
+      const b = getBright(col, row);
+      if (b > maxBright) maxBright = b;
     }
-    return (sy + sh) / imgH;
+    if (maxBright < 150) return null;
+
+    const whiteThresh = maxBright * 0.78;
+    let bestStart = -1, bestLen = 0;
+    let curStart = -1, curLen = 0;
+    for (let row = minRow; row < maxRow; row++) {
+      if (getBright(col, row) >= whiteThresh) {
+        if (curStart < 0) { curStart = row; curLen = 1; }
+        else curLen++;
+      } else {
+        if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+        curStart = -1; curLen = 0;
+      }
+    }
+    if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+    if (bestLen < 4) return null;
+
+    return {
+      top: (sy + bestStart) / imgH,
+      bot: (sy + bestStart + bestLen) / imgH,
+    };
   };
 
   // 3 colonnes côté gauche (évite EU strip 0-8%), 3 côté droit (évite sticker ~92-100%)
   const LC = [0.14, 0.22, 0.30];
   const RC = [0.70, 0.78, 0.86];
+  const avg = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
 
-  const avg = a => a.reduce((s, v) => s + v) / a.length;
-  const lTop = LC.map(findTop).filter(v => v !== null);
-  const rTop = RC.map(findTop).filter(v => v !== null);
-  const lBot = LC.map(findBot).filter(v => v !== null);
-  const rBot = RC.map(findBot).filter(v => v !== null);
+  const lEdges = LC.map(findEdges).filter(Boolean);
+  const rEdges = RC.map(findEdges).filter(Boolean);
+  if (!lEdges.length || !rEdges.length) return null;
 
-  if (!lTop.length || !rTop.length || !lBot.length || !rBot.length) return null;
+  const tlY = avg(lEdges.map(e => e.top));
+  const blY = avg(lEdges.map(e => e.bot));
+  const trY = avg(rEdges.map(e => e.top));
+  const brY = avg(rEdges.map(e => e.bot));
 
-  const tlY = avg(lTop), trY = avg(rTop);
-  const blY = avg(lBot), brY = avg(rBot);
-
-  // Sanity : haut < bas, inclinaison < 15% de la largeur, hauteur cohérente
   if (tlY >= blY || trY >= brY) return null;
-  if (Math.abs(tlY - trY) > pw * 0.15) return null;
   const detH = ((blY - tlY) + (brY - trY)) / 2;
   if (detH < prH * 0.3 || detH > prH * 2.5) return null;
 
