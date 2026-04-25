@@ -211,11 +211,11 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
   const pw  = plate.tr.x - plate.tl.x;
   const prH = plate.bl.y - plate.tl.y;
 
-  // Crop serré : PR bbox ± 15 % en Y (les vrais coins sont toujours dans le PR bbox)
+  // Crop serré : PR bbox ± 20 % en Y (les vrais coins sont toujours dans le PR bbox)
   const sx = Math.max(0, Math.round(plate.tl.x * imgW));
-  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.15) * imgH));
+  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.20) * imgH));
   const sw = Math.min(imgW - sx, Math.round(pw * imgW));
-  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.15) * imgH) - sy);
+  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.20) * imgH) - sy);
   if (sw < 10 || sh < 5) return null;
 
   const pixels = ctx.getImageData(sx, sy, sw, sh).data;
@@ -259,8 +259,8 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     }
     if (topEdge < 0) return null;
 
-    // Bord inférieur : dernière ligne ≥ thresh, borné par hauteur théorique × 1.3
-    const botLimit = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 1.30));
+    // Bord inférieur : dernière ligne ≥ thresh, borné par hauteur théorique × 1.5
+    const botLimit = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 1.50));
     let botEdge = -1;
     for (let i = botLimit; i > topEdge + 1; i--) {
       if (rowAvg[i] >= thresh) { botEdge = i; break; }
@@ -271,9 +271,9 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     return { top: (sy + topEdge) / imgH, bot: (sy + botEdge) / imgH };
   };
 
-  // Bande gauche : 13–45 % (évite EU strip). Bande droite : 55–87 % (évite sticker)
-  const lEdges = edgesForBand(0.13, 0.45);
-  const rEdges = edgesForBand(0.55, 0.87);
+  // Bande gauche : 28–50 % (évite EU strip 0–20 % et zone de transition). Bande droite : 50–78 % (évite sticker ~88 %)
+  const lEdges = edgesForBand(0.28, 0.50);
+  const rEdges = edgesForBand(0.50, 0.78);
   if (!lEdges || !rEdges) return null;
 
   const tlY = lEdges.top, blY = lEdges.bot;
