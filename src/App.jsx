@@ -262,10 +262,15 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     }
     if (topEdge < 0) return null;
 
-    // Bord inférieur : dernière ligne blanche (peut traverser le texte sombre)
+    // Bord inférieur : cherche dans [topEdge, topEdge + hauteur_théorique × 1.35].
+    // Borné pour ne pas capturer le sol lumineux sous le pare-choc.
+    // Hauteur théorique = largeur_plaque / 4.73 (ratio 520×110 mm).
+    const expectedHpx = Math.round((pw * imgW) / 4.73);
+    const scanLimit = Math.min(maxRow - 1, topEdge + Math.round(expectedHpx * 1.35));
     let botEdge = -1;
-    for (let i = nRows - 1; i >= 0; i--) {
-      if (rowAvg[i] >= thresh) { botEdge = minRow + i; break; }
+    for (let row = scanLimit; row >= topEdge + 2; row--) {
+      const i = row - minRow;
+      if (i >= 0 && i < nRows && rowAvg[i] >= thresh) { botEdge = row; break; }
     }
     if (botEdge < 0 || botEdge <= topEdge + 2) return null;
     if ((botEdge - topEdge) < prH * imgH * 0.30) return null;
