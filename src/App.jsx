@@ -204,18 +204,20 @@ function estimateAngleFromPosition(plate) {
 
 // Détecte les bords supérieur et inférieur réels de la plaque par scan pixel.
 // Les X viennent de PR (fiables). Seuls les Y sont affinés.
-// Stratégie : pour chaque colonne, on cherche la PLUS GRANDE zone continue blanche.
-// Robuste aux plaques inclinées (un côté au milieu du PR bbox) et aux cadres chrome
-// (zones fines < corps de plaque → naturellement ignorées).
+// Stratégie : luminosité MOYENNE PAR LIGNE sur une bande de 30% de largeur.
+// Un scan colonne unique tombe sur les caractères sombres (G, A, 7…) et échoue.
+// La moyenne par ligne dilue les caractères : les lignes de bordure blanche
+// (marge supérieure et inférieure de la plaque, au-dessus/en-dessous du texte)
+// ressortent clairement même si le texte occupe 70-80% de la hauteur.
 function refineCornersByPixels(ctx, plate, imgW, imgH) {
   const pw  = plate.tr.x - plate.tl.x;
   const prH = plate.bl.y - plate.tl.y;
 
-  // Crop = PR bbox étendu de ±60% en Y pour capturer les plaques très inclinées
+  // Crop = PR bbox étendu de ±70% en Y pour capturer les plaques très inclinées
   const sx = Math.max(0, Math.round(plate.tl.x * imgW));
-  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.60) * imgH));
+  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.70) * imgH));
   const sw = Math.min(imgW - sx, Math.round(pw * imgW));
-  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.60) * imgH) - sy);
+  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.70) * imgH) - sy);
   if (sw < 10 || sh < 5) return null;
 
   const pixels = ctx.getImageData(sx, sy, sw, sh).data;
@@ -225,54 +227,59 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
   };
 
-  // Pour chaque colonne : plus longue zone continue ≥ 78% du pic = corps de plaque.
-  // Résultat = {top, bot} en coords normalisées 0-1.
-  const findEdges = (relX) => {
-    const col = Math.min(sw - 1, Math.round(relX * sw));
+  // Calcule la luminosité moyenne par ligne sur la bande [relA, relB].
+  // Trouve ensuite :
+  //   topEdge = début du 1er run de 2+ lignes blanches (filtre les reflets 1px)
+  //   botEdge = dernière ligne blanche (bord inférieur de la plaque)
+  const edgesForBand = (relA, relB) => {
+    const c0 = Math.round(relA * sw);
+    const c1 = Math.max(c0 + 1, Math.round(relB * sw));
     const minRow = Math.round(sh * 0.04);
     const maxRow = Math.max(minRow + 1, Math.round(sh * 0.96));
+    const nRows = maxRow - minRow;
 
-    let maxBright = 0;
-    for (let row = minRow; row < maxRow; row++) {
-      const b = getBright(col, row);
-      if (b > maxBright) maxBright = b;
+    const rowAvg = new Float32Array(nRows);
+    for (let r = 0; r < nRows; r++) {
+      let sum = 0;
+      for (let col = c0; col < c1; col++) sum += getBright(col, minRow + r);
+      rowAvg[r] = sum / (c1 - c0);
     }
-    if (maxBright < 150) return null;
 
-    const whiteThresh = maxBright * 0.78;
-    let bestStart = -1, bestLen = 0;
-    let curStart = -1, curLen = 0;
-    for (let row = minRow; row < maxRow; row++) {
-      if (getBright(col, row) >= whiteThresh) {
-        if (curStart < 0) { curStart = row; curLen = 1; }
-        else curLen++;
-      } else {
-        if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
-        curStart = -1; curLen = 0;
-      }
+    let maxAvg = 0;
+    for (let i = 0; i < nRows; i++) if (rowAvg[i] > maxAvg) maxAvg = rowAvg[i];
+    if (maxAvg < 150) return null;
+
+    const thresh = maxAvg * 0.78;
+
+    // Bord supérieur : 1er run de 2+ lignes consécutives ≥ thresh
+    let topEdge = -1, consec = 0, runStart = -1;
+    for (let i = 0; i < nRows; i++) {
+      if (rowAvg[i] >= thresh) {
+        if (consec === 0) runStart = minRow + i;
+        consec++;
+        if (consec >= 2 && topEdge < 0) topEdge = runStart;
+      } else { consec = 0; runStart = -1; }
     }
-    if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
-    if (bestLen < 4) return null;
+    if (topEdge < 0) return null;
 
-    return {
-      top: (sy + bestStart) / imgH,
-      bot: (sy + bestStart + bestLen) / imgH,
-    };
+    // Bord inférieur : dernière ligne blanche (peut traverser le texte sombre)
+    let botEdge = -1;
+    for (let i = nRows - 1; i >= 0; i--) {
+      if (rowAvg[i] >= thresh) { botEdge = minRow + i; break; }
+    }
+    if (botEdge < 0 || botEdge <= topEdge + 2) return null;
+    if ((botEdge - topEdge) < prH * imgH * 0.30) return null;
+
+    return { top: (sy + topEdge) / imgH, bot: (sy + botEdge + 1) / imgH };
   };
 
-  // 3 colonnes côté gauche (évite EU strip 0-8%), 3 côté droit (évite sticker ~92-100%)
-  const LC = [0.14, 0.22, 0.30];
-  const RC = [0.70, 0.78, 0.86];
-  const avg = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
+  // Bande gauche (12-42%, évite EU strip) et bande droite (58-88%, évite sticker)
+  const lEdges = edgesForBand(0.12, 0.42);
+  const rEdges = edgesForBand(0.58, 0.88);
+  if (!lEdges || !rEdges) return null;
 
-  const lEdges = LC.map(findEdges).filter(Boolean);
-  const rEdges = RC.map(findEdges).filter(Boolean);
-  if (!lEdges.length || !rEdges.length) return null;
-
-  const tlY = avg(lEdges.map(e => e.top));
-  const blY = avg(lEdges.map(e => e.bot));
-  const trY = avg(rEdges.map(e => e.top));
-  const brY = avg(rEdges.map(e => e.bot));
+  const tlY = lEdges.top, blY = lEdges.bot;
+  const trY = rEdges.top, brY = rEdges.bot;
 
   if (tlY >= blY || trY >= brY) return null;
   const detH = ((blY - tlY) + (brY - trY)) / 2;
