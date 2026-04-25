@@ -228,20 +228,25 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
   };
 
   // Calcule la luminosité moyenne par ligne sur la bande [relA, relB].
-  // Trouve ensuite :
-  //   topEdge = début du 1er run de 2+ lignes blanches (filtre les reflets 1px)
-  //   botEdge = dernière ligne blanche (bord inférieur de la plaque)
+  // Zone de scan bornée au PR bbox ± 20% : les vrais coins sont par définition DANS
+  // le PR bbox, donc cette marge suffit et exclut le sol et le chrome distant.
+  const prTopRow = Math.max(0, Math.round(plate.tl.y * imgH - sy));
+  const prBotRow = Math.min(sh - 1, Math.round(plate.bl.y * imgH - sy));
+  const prHpx   = Math.max(1, prBotRow - prTopRow);
+
   const edgesForBand = (relA, relB) => {
     const c0 = Math.round(relA * sw);
     const c1 = Math.max(c0 + 1, Math.round(relB * sw));
-    const minRow = Math.round(sh * 0.04);
-    const maxRow = Math.max(minRow + 1, Math.round(sh * 0.96));
-    const nRows = maxRow - minRow;
+
+    const scanFrom = Math.max(0,      prTopRow - Math.round(prHpx * 0.20));
+    const scanTo   = Math.min(sh - 1, prBotRow + Math.round(prHpx * 0.20));
+    const nRows = scanTo - scanFrom;
+    if (nRows < 4) return null;
 
     const rowAvg = new Float32Array(nRows);
     for (let r = 0; r < nRows; r++) {
       let sum = 0;
-      for (let col = c0; col < c1; col++) sum += getBright(col, minRow + r);
+      for (let col = c0; col < c1; col++) sum += getBright(col, scanFrom + r);
       rowAvg[r] = sum / (c1 - c0);
     }
 
@@ -251,29 +256,27 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
 
     const thresh = maxAvg * 0.78;
 
-    // Bord supérieur : 1er run de 2+ lignes consécutives ≥ thresh
+    // Bord supérieur : 1er run de 3+ lignes consécutives ≥ thresh (filtre chrome ≤ 2px)
     let topEdge = -1, consec = 0, runStart = -1;
     for (let i = 0; i < nRows; i++) {
       if (rowAvg[i] >= thresh) {
-        if (consec === 0) runStart = minRow + i;
+        if (consec === 0) runStart = scanFrom + i;
         consec++;
-        if (consec >= 2 && topEdge < 0) topEdge = runStart;
+        if (consec >= 3 && topEdge < 0) topEdge = runStart;
       } else { consec = 0; runStart = -1; }
     }
     if (topEdge < 0) return null;
 
-    // Bord inférieur : cherche dans [topEdge, topEdge + hauteur_théorique × 1.35].
-    // Borné pour ne pas capturer le sol lumineux sous le pare-choc.
-    // Hauteur théorique = largeur_plaque / 4.73 (ratio 520×110 mm).
+    // Bord inférieur : borné à [topEdge + 2, topEdge + largeur/4.73 × 1.3]
     const expectedHpx = Math.round((pw * imgW) / 4.73);
-    const scanLimit = Math.min(maxRow - 1, topEdge + Math.round(expectedHpx * 1.35));
+    const botLimit = Math.min(scanTo, topEdge + Math.round(expectedHpx * 1.30));
     let botEdge = -1;
-    for (let row = scanLimit; row >= topEdge + 2; row--) {
-      const i = row - minRow;
+    for (let row = botLimit; row >= topEdge + 2; row--) {
+      const i = row - scanFrom;
       if (i >= 0 && i < nRows && rowAvg[i] >= thresh) { botEdge = row; break; }
     }
     if (botEdge < 0 || botEdge <= topEdge + 2) return null;
-    if ((botEdge - topEdge) < prH * imgH * 0.30) return null;
+    if ((botEdge - topEdge) < prHpx * 0.30) return null;
 
     return { top: (sy + topEdge) / imgH, bot: (sy + botEdge + 1) / imgH };
   };
