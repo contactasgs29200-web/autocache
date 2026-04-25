@@ -202,20 +202,17 @@ function estimateAngleFromPosition(plate) {
   return { near_side, angle_deg };
 }
 
-// Détecte les bords de la plaque par crop ultra-serré + seuil de luminosité.
-// Crop = PR bbox ± 15% en Y seulement : dans cette zone, les seules lignes
-// lumineuses sont les bordures blanches de la plaque (au-dessus et en-dessous
-// du texte). Pas de confusion avec le sol, le chrome lointain ou les phares.
-// Bandes gauche/droite séparées pour capturer l'inclinaison.
+// Détecte les bords de la plaque par gradient de luminosité par ligne.
+// Le vrai bord est la plus grande transition sombre→clair (pare-chocs→plaque),
+// bien plus forte que les contrastes internes (lettres, bandeau EU, sticker).
 function refineCornersByPixels(ctx, plate, imgW, imgH) {
   const pw  = plate.tr.x - plate.tl.x;
   const prH = plate.bl.y - plate.tl.y;
 
-  // Crop serré : PR bbox ± 20 % en Y (les vrais coins sont toujours dans le PR bbox)
   const sx = Math.max(0, Math.round(plate.tl.x * imgW));
-  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.20) * imgH));
+  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.25) * imgH));
   const sw = Math.min(imgW - sx, Math.round(pw * imgW));
-  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.20) * imgH) - sy);
+  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.25) * imgH) - sy);
   if (sw < 10 || sh < 5) return null;
 
   const pixels = ctx.getImageData(sx, sy, sw, sh).data;
@@ -242,28 +239,29 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
       rowAvg[r] = sum / (c1 - c0);
     }
 
-    // Pic de luminosité = blanc de la plaque
-    let maxAvg = 0;
-    for (let i = 0; i < sh; i++) if (rowAvg[i] > maxAvg) maxAvg = rowAvg[i];
-    if (maxAvg < 130) return null;
+    // Lissage 3 lignes pour réduire le bruit 1px
+    const smooth = new Float32Array(sh);
+    for (let r = 0; r < sh; r++) {
+      smooth[r] = (rowAvg[Math.max(0, r-1)] + rowAvg[r] + rowAvg[Math.min(sh-1, r+1)]) / 3;
+    }
 
-    const thresh = maxAvg * 0.75; // 75 % du pic = zone blanche de plaque
+    // Gradient ligne par ligne : +élevé = entrée plaque, -élevé = sortie plaque
+    const grad = new Float32Array(sh);
+    for (let r = 1; r < sh; r++) grad[r] = smooth[r] - smooth[r - 1];
 
-    // Bord supérieur : premier run de 2+ lignes consécutives ≥ thresh (filtre le chrome 1px)
-    let topEdge = -1, consec = 0, runStart = -1;
-    for (let i = 0; i < sh; i++) {
-      if (rowAvg[i] >= thresh) {
-        if (consec === 0) runStart = i;
-        if (++consec >= 2 && topEdge < 0) topEdge = runStart;
-      } else { consec = 0; }
+    // Bord supérieur : plus grand gradient positif (pare-chocs sombre → plaque claire)
+    let topEdge = -1, maxG = 10;
+    for (let r = 0; r < sh; r++) {
+      if (grad[r] > maxG) { maxG = grad[r]; topEdge = r; }
     }
     if (topEdge < 0) return null;
 
-    // Bord inférieur : dernière ligne ≥ thresh, borné par hauteur théorique × 1.5
-    const botLimit = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 1.50));
-    let botEdge = -1;
-    for (let i = botLimit; i > topEdge + 1; i--) {
-      if (rowAvg[i] >= thresh) { botEdge = i; break; }
+    // Bord inférieur : plus grand gradient négatif, borné par le ratio d'aspect
+    const botMin = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 0.70));
+    const botMax = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 1.50));
+    let botEdge = -1, minG = -10;
+    for (let r = botMin; r <= botMax; r++) {
+      if (grad[r] < minG) { minG = grad[r]; botEdge = r; }
     }
     if (botEdge < 0) return null;
     if ((botEdge - topEdge) < prHpx * 0.25) return null;
@@ -271,9 +269,9 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     return { top: (sy + topEdge) / imgH, bot: (sy + botEdge) / imgH };
   };
 
-  // Bande gauche : 28–50 % (évite EU strip 0–20 % et zone de transition). Bande droite : 50–78 % (évite sticker ~88 %)
-  const lEdges = edgesForBand(0.28, 0.50);
-  const rEdges = edgesForBand(0.50, 0.78);
+  // Bandes centrées sur zones blanches : évite bandeau EU (0–12 %) et sticker (~88–100 %)
+  const lEdges = edgesForBand(0.18, 0.48);
+  const rEdges = edgesForBand(0.52, 0.82);
   if (!lEdges || !rEdges) return null;
 
   const tlY = lEdges.top, blY = lEdges.bot;
