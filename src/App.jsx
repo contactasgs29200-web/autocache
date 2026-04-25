@@ -202,23 +202,20 @@ function estimateAngleFromPosition(plate) {
   return { near_side, angle_deg };
 }
 
-// Détecte les bords supérieur et inférieur de la plaque par GRADIENT de luminosité.
-// Stratégie : pour chaque bande horizontale (gauche / droite), calculer la luminosité
-// moyenne par ligne, puis son gradient (différence centrée ±2 lignes).
-//   grad > 0  →  transition sombre→clair  =  bord SUPÉRIEUR de la plaque
-//   grad < 0  →  transition clair→sombre  =  bord INFÉRIEUR de la plaque
-// Le pic de gradient est robuste au chrome (transition faible), au sol (hors zone),
-// et aux caractères sombres (dilués dans la moyenne de bande).
+// Détecte les bords de la plaque par crop ultra-serré + seuil de luminosité.
+// Crop = PR bbox ± 15% en Y seulement : dans cette zone, les seules lignes
+// lumineuses sont les bordures blanches de la plaque (au-dessus et en-dessous
+// du texte). Pas de confusion avec le sol, le chrome lointain ou les phares.
+// Bandes gauche/droite séparées pour capturer l'inclinaison.
 function refineCornersByPixels(ctx, plate, imgW, imgH) {
   const pw  = plate.tr.x - plate.tl.x;
   const prH = plate.bl.y - plate.tl.y;
 
-  // Crop = PR bbox ± 40% en Y (assez large pour plaques inclinées, assez serré pour
-  // exclure le sol et les phares)
+  // Crop serré : PR bbox ± 15 % en Y (les vrais coins sont toujours dans le PR bbox)
   const sx = Math.max(0, Math.round(plate.tl.x * imgW));
-  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.40) * imgH));
+  const sy = Math.max(0, Math.round((plate.tl.y - prH * 0.15) * imgH));
   const sw = Math.min(imgW - sx, Math.round(pw * imgW));
-  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.40) * imgH) - sy);
+  const sh = Math.min(imgH - sy, Math.round((plate.bl.y + prH * 0.15) * imgH) - sy);
   if (sw < 10 || sh < 5) return null;
 
   const pixels = ctx.getImageData(sx, sy, sw, sh).data;
@@ -228,69 +225,59 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
   };
 
-  // PR bbox dans le crop (coords absolues)
   const prTopRow = Math.max(0,      Math.round(plate.tl.y * imgH - sy));
   const prBotRow = Math.min(sh - 1, Math.round(plate.bl.y * imgH - sy));
   const prHpx    = Math.max(1, prBotRow - prTopRow);
-  // Hauteur théorique de plaque française (520×110 mm → ratio 4.73:1)
-  const expectedHpx = Math.round((pw * imgW) / 4.73);
+  const expectedHpx = Math.round((pw * imgW) / 4.73); // ratio 520×110 mm
 
-  // Détecte les bords d'une bande horizontale [relA, relB] (coords relatives 0-1).
   const edgesForBand = (relA, relB) => {
     const c0 = Math.round(relA * sw);
     const c1 = Math.max(c0 + 1, Math.round(relB * sw));
 
-    // Scan borné au PR bbox ± 30% — les vrais coins sont dedans par définition
-    const scanFrom = Math.max(0,      prTopRow - Math.round(prHpx * 0.30));
-    const scanTo   = Math.min(sh - 1, prBotRow + Math.round(prHpx * 0.30));
-    const nRows = scanTo - scanFrom;
-    if (nRows < 6) return null;
-
-    // Luminosité moyenne par ligne dans la bande
-    const rowAvg = new Float32Array(nRows);
-    for (let r = 0; r < nRows; r++) {
+    // Moyenne de luminosité par ligne dans la bande
+    const rowAvg = new Float32Array(sh);
+    for (let r = 0; r < sh; r++) {
       let sum = 0;
-      for (let col = c0; col < c1; col++) sum += getBright(col, scanFrom + r);
+      for (let col = c0; col < c1; col++) sum += getBright(col, r);
       rowAvg[r] = sum / (c1 - c0);
     }
 
-    // Gradient centré ±2 lignes — robuste au bruit pixel par pixel
-    const grad = new Float32Array(nRows);
-    for (let i = 2; i < nRows - 2; i++) grad[i] = rowAvg[i + 2] - rowAvg[i - 2];
+    // Pic de luminosité = blanc de la plaque
+    let maxAvg = 0;
+    for (let i = 0; i < sh; i++) if (rowAvg[i] > maxAvg) maxAvg = rowAvg[i];
+    if (maxAvg < 130) return null;
 
-    // Bord supérieur : pic de gradient POSITIF le plus fort (sombre → clair)
-    let topIdx = -1, maxG = 12;
-    for (let i = 0; i < nRows; i++) {
-      if (grad[i] > maxG) { maxG = grad[i]; topIdx = i; }
+    const thresh = maxAvg * 0.75; // 75 % du pic = zone blanche de plaque
+
+    // Bord supérieur : premier run de 2+ lignes consécutives ≥ thresh (filtre le chrome 1px)
+    let topEdge = -1, consec = 0, runStart = -1;
+    for (let i = 0; i < sh; i++) {
+      if (rowAvg[i] >= thresh) {
+        if (consec === 0) runStart = i;
+        if (++consec >= 2 && topEdge < 0) topEdge = runStart;
+      } else { consec = 0; }
     }
-    if (topIdx < 0) return null;
+    if (topEdge < 0) return null;
 
-    // Bord inférieur : pic de gradient NÉGATIF le plus fort sous topIdx
-    // borné par la hauteur théorique × 1.2 pour éviter le sol
-    const botEnd = Math.min(nRows - 1, topIdx + Math.round(expectedHpx * 1.20));
-    let botIdx = -1, minG = -12;
-    for (let i = topIdx + 1; i <= botEnd; i++) {
-      if (grad[i] < minG) { minG = grad[i]; botIdx = i; }
+    // Bord inférieur : dernière ligne ≥ thresh, borné par hauteur théorique × 1.3
+    const botLimit = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 1.30));
+    let botEdge = -1;
+    for (let i = botLimit; i > topEdge + 1; i--) {
+      if (rowAvg[i] >= thresh) { botEdge = i; break; }
     }
-    if (botIdx < 0 || botIdx <= topIdx) return null;
+    if (botEdge < 0) return null;
+    if ((botEdge - topEdge) < prHpx * 0.25) return null;
 
-    const detH = botIdx - topIdx;
-    if (detH < prHpx * 0.25 || detH > prHpx * 2.0) return null;
-
-    return {
-      top: (sy + scanFrom + topIdx) / imgH,
-      bot: (sy + scanFrom + botIdx) / imgH,
-    };
+    return { top: (sy + topEdge) / imgH, bot: (sy + botEdge) / imgH };
   };
 
-  // Bande gauche (évite EU strip ~0-12%) — bande droite (évite sticker ~88-100%)
+  // Bande gauche : 13–45 % (évite EU strip). Bande droite : 55–87 % (évite sticker)
   const lEdges = edgesForBand(0.13, 0.45);
   const rEdges = edgesForBand(0.55, 0.87);
   if (!lEdges || !rEdges) return null;
 
   const tlY = lEdges.top, blY = lEdges.bot;
   const trY = rEdges.top, brY = rEdges.bot;
-
   if (tlY >= blY || trY >= brY) return null;
 
   return {
