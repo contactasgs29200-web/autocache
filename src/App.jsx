@@ -311,11 +311,14 @@ function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
   const leftCYf  = plateCenter ? plateCenter.cy : leftCY;
   const rightCYf = plateCenter ? plateCenter.cy : rightCY;
 
-  // Hauteur théorique via ratio 520×110mm (4.73:1)
+  // Hauteur : max entre ratio 520×110mm et bbox PR.
+  // Pour les voitures de côté la largeur apparente est raccourcie par la perspective,
+  // donc avgW/4.73 sous-estime ; la bbox PR donne la vraie hauteur dans ce cas.
   const topW = trx - tlx;
   const botW = brx - blx;
   const avgW = (topW + botW) / 2;
-  const ph   = avgW / 4.73;
+  const prH  = plate.bl.y - plate.tl.y;
+  const ph   = Math.max(avgW / 4.73, prH);
 
   // Hauteur gauche/droite différente en perspective
   const theta  = angle_deg * Math.PI / 180;
@@ -972,10 +975,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // Détecte l'inclinaison réelle via pixels (plaque blanche sur pare-chocs sombre).
-    // Fallback sur buildCorners si l'analyse pixels échoue (image trop sombre, etc.)
-    const pixelCorners = refineCornersByPixels(ctx, plate, c.width, c.height);
-    savedCorners = pixelCorners ?? buildCorners(plate, near_side, angle_deg, null);
+    // Approche mathématique pure : plus fiable que la détection pixel
+    // qui échoue sur les voitures de côté (perspective) et les fonds complexes.
+    savedCorners = buildCorners(plate, near_side, angle_deg, null);
   }
 
   // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)
