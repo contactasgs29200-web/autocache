@@ -257,15 +257,16 @@ function refineCornersByPixels(ctx, plate, imgW, imgH) {
     if (topEdge < 0) return null;
 
     // Luminosité de référence = milieu de plaque (position connue grâce à topEdge)
-    const midRow = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 0.50));
+    // Ancre = max(prHpx, expectedHpx) : pour une voiture de côté, pw est raccourci par
+    // la perspective donc expectedHpx sous-estime la hauteur réelle ; prHpx corrige ça.
+    const anchorHpx = Math.max(prHpx, expectedHpx);
+    const midRow = Math.min(sh - 1, topEdge + Math.round(anchorHpx * 0.50));
     const refBright = smooth[midRow];
     if (refBright < 100) return null; // intérieur trop sombre → topEdge probablement faux
 
-    // Bord inférieur : dernier pixel encore lumineux dans fenêtre serrée ±15 % autour
-    // de la position théorique (topEdge + expectedHpx). La fenêtre serrée empêche de
-    // dériver sur les rainures du pare-chocs qui peuvent avoir un gradient plus fort.
-    const botMin = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 0.85));
-    const botMax = Math.min(sh - 1, topEdge + Math.round(expectedHpx * 1.15));
+    // Bord inférieur : dernier pixel encore lumineux dans fenêtre ±20 % autour de anchorHpx
+    const botMin = Math.min(sh - 1, topEdge + Math.round(anchorHpx * 0.80));
+    const botMax = Math.min(sh - 1, topEdge + Math.round(anchorHpx * 1.20));
     const thresh = refBright * 0.65;
     let botEdge = -1;
     for (let r = botMax; r >= botMin; r--) {
