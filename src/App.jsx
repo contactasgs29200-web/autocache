@@ -918,7 +918,7 @@ async function detectGptData(b64) {
 async function detectGptCropCorners(ctx, plate, imgW, imgH) {
   const pw = plate.tr.x - plate.tl.x;
   const ph = plate.bl.y - plate.tl.y;
-  const mg = 0.30; // marge 30%
+  const mg = 0.20; // marge 20% (plaque remplit ~71% du crop)
 
   const cx = Math.max(0, Math.round((plate.tl.x - pw * mg) * imgW));
   const cy = Math.max(0, Math.round((plate.tl.y - ph * mg) * imgH));

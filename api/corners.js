@@ -33,18 +33,16 @@ export default async function handler(req, res) {
   const { cropMode } = req.body;
 
   const prompt = cropMode
-    ? `This image is a tight crop showing ONLY a vehicle license plate.
-The plate fills most of this image. Find the exact 4 corners of the plate's registration surface (the flat panel with text/numbers — white or yellow background).
+    ? `This image shows a vehicle license plate centered in the frame. There is visible car body/bumper margin around the plate — the plate does NOT fill the entire image.
 
-Rules:
-- tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left
-- x=0.0 is the LEFT edge of THIS image, x=1.0 is the RIGHT edge
-- y=0.0 is the TOP edge of THIS image, y=1.0 is the BOTTOM edge
-- The plate may appear as a trapezoid if viewed at an angle — return actual corner positions
-- Use 3 decimal places for precision
+Find the 4 corners of the plate's registration surface (white or yellow panel with alphanumeric text). Account for perspective — an angled plate will appear as a trapezoid.
 
-Return ONLY this JSON (no markdown, no explanation):
-{"tl":{"x":0.030,"y":0.050},"tr":{"x":0.970,"y":0.045},"br":{"x":0.968,"y":0.955},"bl":{"x":0.032,"y":0.950}}`
+Coordinate system: x=0.0 is LEFT edge, x=1.0 is RIGHT edge, y=0.0 is TOP, y=1.0 is BOTTOM of this image.
+
+The plate corners are somewhere in the interior of the image, NOT at the edges. Typical range: x between 0.10–0.90, y between 0.10–0.90.
+
+Use 3 decimal places. Return ONLY this JSON with no explanation:
+{"tl":{"x":0.143,"y":0.167},"tr":{"x":0.857,"y":0.160},"br":{"x":0.860,"y":0.840},"bl":{"x":0.140,"y":0.833}}`
     : `Look at this car photo. Find the VEHICLE LICENSE PLATE — the flat metal/plastic plate with alphanumeric registration characters (e.g. "AB-123-CD" in France, numbers+letters on a white/yellow background).
 
 DO NOT confuse the license plate with: dealer stickers, plastic bumper trim, skid plates, mud flaps, parking sensors, tow hook covers, or any sign on a wall/floor.
