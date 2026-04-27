@@ -1022,6 +1022,67 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
+// Détecte les bords de la plaque en scannant depuis l'EXTÉRIEUR du crop vers l'intérieur.
+// Principe : le crop (PR bbox ± 12 %) contient du pare-chocs (sombre) autour de la plaque
+// (blanche). En partant du bord du crop et en avançant vers le centre, le premier pixel
+// lumineux trouvé EST le bord de la plaque — impossible de démarrer à l'intérieur.
+// Seuil = 65 % de la luminosité du centre du crop (toujours blanc = référence fiable).
+function scanPlateEdgesFromCrop(ctx, plate, imgW, imgH) {
+  const pw = plate.tr.x - plate.tl.x;
+  const ph = plate.bl.y - plate.tl.y;
+  const mg = 0.12;
+
+  const cx = Math.max(0, Math.round((plate.tl.x - pw * mg) * imgW));
+  const cy = Math.max(0, Math.round((plate.tl.y - ph * mg) * imgH));
+  const cw = Math.min(imgW - cx, Math.round(pw * (1 + 2 * mg) * imgW));
+  const ch = Math.min(imgH - cy, Math.round(ph * (1 + 2 * mg) * imgH));
+  if (cw < 10 || ch < 5) return null;
+
+  const pixels = ctx.getImageData(cx, cy, cw, ch).data;
+  const bright = (col, row) => {
+    const i = (row * cw + col) * 4;
+    return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+  };
+
+  const edgesForBand = (c0f, c1f) => {
+    const c0 = Math.round(c0f * cw), c1 = Math.max(c0 + 1, Math.round(c1f * cw));
+    const avg = new Float32Array(ch);
+    for (let r = 0; r < ch; r++) {
+      let s = 0;
+      for (let c = c0; c < c1; c++) s += bright(c, r);
+      avg[r] = s / (c1 - c0);
+    }
+    // Seuil basé sur le centre du crop (toujours à l'intérieur de la plaque blanche)
+    const mid = Math.round(ch / 2);
+    const ref = avg[mid];
+    if (ref < 140) return null;
+    const thresh = ref * 0.65;
+
+    // Haut : depuis le bord supérieur du crop vers le centre
+    let top = -1;
+    for (let r = 0; r < ch; r++) { if (avg[r] >= thresh) { top = r; break; } }
+    // Bas : depuis le bord inférieur du crop vers le centre
+    let bot = -1;
+    for (let r = ch - 1; r >= 0; r--) { if (avg[r] >= thresh) { bot = r; break; } }
+
+    if (top < 0 || bot < 0 || bot <= top) return null;
+    return { top: (cy + top) / imgH, bot: (cy + bot) / imgH };
+  };
+
+  // Bande gauche 20-45 % du crop (évite bandeau EU ~0-20 %)
+  // Bande droite 55-80 % du crop (évite sticker ~80-100 %)
+  const lEdges = edgesForBand(0.20, 0.45);
+  const rEdges = edgesForBand(0.55, 0.80);
+  if (!lEdges || !rEdges) return null;
+
+  return {
+    tl: { x: plate.tl.x, y: Math.max(0, lEdges.top) },
+    tr: { x: plate.tr.x, y: Math.max(0, rEdges.top) },
+    br: { x: plate.tr.x, y: Math.min(1, rEdges.bot) },
+    bl: { x: plate.tl.x, y: Math.min(1, lEdges.bot) },
+  };
+}
+
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
@@ -1071,13 +1132,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // GPT crop → coins rough. Puis refinement local par pixels (fenêtre ±28% hauteur)
-    // pour corriger les petits décalages GPT sans risque de dériver loin de la plaque.
-    const cropCorners = await detectGptCropCorners(ctx, plate, c.width, c.height);
-    const roughCorners = cropCorners ?? buildCorners(plate, near_side, angle_deg, null);
-    savedCorners = roughCorners
-      ? locallyRefineCorners(roughCorners, ctx, plate, c.width, c.height)
-      : null;
+    // Scan pixel depuis l'extérieur du crop vers l'intérieur.
+    // Fallback buildCorners si scan échoue (plaque trop sombre, etc.)
+    const scanned = scanPlateEdgesFromCrop(ctx, plate, c.width, c.height);
+    savedCorners = scanned ?? buildCorners(plate, near_side, angle_deg, null);
   }
 
   // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)
