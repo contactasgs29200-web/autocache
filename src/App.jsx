@@ -889,8 +889,8 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   return dataURL;
 }
 
-// Détecte l'orientation + les 4 coins exacts de la plaque via GPT-4o Vision (~$0.001)
-// Retourne { near_side, angle_deg, corners } ou null en cas d'échec
+// Coins précis via GPT-4o sur le CROP de la plaque (plaque = 100% de l'image envoyée)
+// Retourne { near_side, angle_deg, corners } ou null
 async function detectGptData(b64) {
   try {
     const r = await fetch("/api/corners", {
@@ -910,6 +910,47 @@ async function detectGptData(b64) {
   } catch(e) {
     return null;
   }
+}
+
+// Crop la zone de la plaque (±30% de marge) et envoie le crop à GPT-4o.
+// La plaque remplit ~80% de l'image envoyée → résolution maximale → coins précis.
+// Retourne les coins dans le repère de l'image complète (0-1).
+async function detectGptCropCorners(ctx, plate, imgW, imgH) {
+  const pw = plate.tr.x - plate.tl.x;
+  const ph = plate.bl.y - plate.tl.y;
+  const mg = 0.30; // marge 30%
+
+  const cx = Math.max(0, Math.round((plate.tl.x - pw * mg) * imgW));
+  const cy = Math.max(0, Math.round((plate.tl.y - ph * mg) * imgH));
+  const cw = Math.min(imgW - cx, Math.round(pw * (1 + 2 * mg) * imgW));
+  const ch = Math.min(imgH - cy, Math.round(ph * (1 + 2 * mg) * imgH));
+  if (cw < 10 || ch < 5) return null;
+
+  // Dessiner le crop dans un canvas temporaire (max 1200px de large)
+  const scale = Math.min(1, 1200 / Math.max(cw, ch));
+  const oc = document.createElement('canvas');
+  oc.width  = Math.round(cw * scale);
+  oc.height = Math.round(ch * scale);
+  oc.getContext('2d').drawImage(ctx.canvas, cx, cy, cw, ch, 0, 0, oc.width, oc.height);
+  const cropB64 = oc.toDataURL('image/jpeg', 0.95).split(',')[1];
+
+  try {
+    const r = await fetch('/api/corners', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ b64: cropB64, cropMode: true }),
+    });
+    const data = await r.json();
+    if (!data.corners) return null;
+
+    // Re-mapper les coins du crop vers l'image complète
+    const map = c => ({
+      x: Math.max(0, Math.min(1, (cx + c.x * cw) / imgW)),
+      y: Math.max(0, Math.min(1, (cy + c.y * ch) / imgH)),
+    });
+    return { tl: map(data.corners.tl), tr: map(data.corners.tr),
+             br: map(data.corners.br), bl: map(data.corners.bl) };
+  } catch(e) { return null; }
 }
 
 async function detectPlate(b64, imgW, imgH) {
@@ -978,17 +1019,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // Valide que les coins GPT sont proches de la bbox PR (évite les hallucinations).
-    // Marge = 1× la largeur de la plaque de chaque côté.
-    const gpt = angleData?.corners;
-    const pw  = plate.tr.x - plate.tl.x;
-    const ph  = plate.bl.y - plate.tl.y;
-    const gptValid = gpt && [gpt.tl, gpt.tr, gpt.br, gpt.bl].every(c =>
-      c.x >= plate.tl.x - pw && c.x <= plate.tr.x + pw &&
-      c.y >= plate.tl.y - ph && c.y <= plate.bl.y + ph
-    );
-
-    savedCorners = gptValid ? gpt : buildCorners(plate, near_side, angle_deg, null);
+    // Coins GPT sur le CROP de la plaque : résolution maximale, pas d'hallucination
+    // hors-plaque. Fallback buildCorners si GPT échoue.
+    const cropCorners = await detectGptCropCorners(ctx, plate, c.width, c.height);
+    savedCorners = cropCorners ?? buildCorners(plate, near_side, angle_deg, null);
   }
 
   // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)

@@ -30,7 +30,22 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set in environment' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64 image' });
 
-  const prompt = `Look at this car photo. Find the VEHICLE LICENSE PLATE — the flat metal/plastic plate with alphanumeric registration characters (e.g. "AB-123-CD" in France, numbers+letters on a white/yellow background).
+  const { cropMode } = req.body;
+
+  const prompt = cropMode
+    ? `This image is a tight crop showing ONLY a vehicle license plate.
+The plate fills most of this image. Find the exact 4 corners of the plate's registration surface (the flat panel with text/numbers — white or yellow background).
+
+Rules:
+- tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left
+- x=0.0 is the LEFT edge of THIS image, x=1.0 is the RIGHT edge
+- y=0.0 is the TOP edge of THIS image, y=1.0 is the BOTTOM edge
+- The plate may appear as a trapezoid if viewed at an angle — return actual corner positions
+- Use 3 decimal places for precision
+
+Return ONLY this JSON (no markdown, no explanation):
+{"tl":{"x":0.030,"y":0.050},"tr":{"x":0.970,"y":0.045},"br":{"x":0.968,"y":0.955},"bl":{"x":0.032,"y":0.950}}`
+    : `Look at this car photo. Find the VEHICLE LICENSE PLATE — the flat metal/plastic plate with alphanumeric registration characters (e.g. "AB-123-CD" in France, numbers+letters on a white/yellow background).
 
 DO NOT confuse the license plate with: dealer stickers, plastic bumper trim, skid plates, mud flaps, parking sensors, tow hook covers, or any sign on a wall/floor.
 The license plate is ATTACHED TO THE CAR BODY (front bumper or rear bumper), not to the floor or wall.
