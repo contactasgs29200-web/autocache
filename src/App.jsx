@@ -311,17 +311,17 @@ function buildCorners(plate, near_side, angle_deg, plateCenter = null) {
   const leftCYf  = plateCenter ? plateCenter.cy : leftCY;
   const rightCYf = plateCenter ? plateCenter.cy : rightCY;
 
-  // Hauteur : max entre ratio 520×110mm et bbox PR.
-  // Pour les voitures de côté la largeur apparente est raccourcie par la perspective,
-  // donc avgW/4.73 sous-estime ; la bbox PR donne la vraie hauteur dans ce cas.
-  const topW = trx - tlx;
-  const botW = brx - blx;
-  const avgW = (topW + botW) / 2;
-  const prH  = plate.bl.y - plate.tl.y;
-  const ph   = Math.max(avgW / 4.73, prH);
+  // Hauteur : ratio 520×110mm corrigé pour la perspective.
+  // Pour les voitures de côté, la largeur apparente est raccourcie par cos(θ),
+  // donc on divise par cos(θ) pour retrouver la hauteur réelle.
+  const topW  = trx - tlx;
+  const botW  = brx - blx;
+  const avgW  = (topW + botW) / 2;
+  const theta = angle_deg * Math.PI / 180;
+  const cosT  = Math.max(0.55, Math.cos(theta)); // cos correction perspective
+  const ph    = avgW / cosT / 4.73;
 
   // Hauteur gauche/droite différente en perspective
-  const theta  = angle_deg * Math.PI / 180;
   const PERSP  = 0.32;
   const nearH  = ph * (1 + Math.sin(theta) * PERSP);
   const farH   = ph * (1 - Math.sin(theta) * PERSP);
