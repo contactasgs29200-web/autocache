@@ -889,10 +889,9 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   return dataURL;
 }
 
-// Détecte l'orientation réelle de la voiture via GPT-4o Vision (detail:low, ~$0.001)
-// Retourne { near_side: "left"|"right"|"none", angle_deg: number }
-// ou null en cas d'échec (fallback sur estimateAngleFromPosition)
-async function detectCarAngle(b64) {
+// Détecte l'orientation + les 4 coins exacts de la plaque via GPT-4o Vision (~$0.001)
+// Retourne { near_side, angle_deg, corners } ou null en cas d'échec
+async function detectGptData(b64) {
   try {
     const r = await fetch("/api/corners", {
       method: "POST",
@@ -901,7 +900,11 @@ async function detectCarAngle(b64) {
     });
     const data = await r.json();
     if (typeof data.near_side === 'string' && typeof data.angle_deg === 'number') {
-      return { near_side: data.near_side, angle_deg: data.angle_deg };
+      return {
+        near_side: data.near_side,
+        angle_deg: data.angle_deg,
+        corners: data.corners ?? null,
+      };
     }
     return null;
   } catch(e) {
@@ -929,10 +932,10 @@ async function detectPlate(b64, imgW, imgH) {
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
-  // PR + angle en parallèle (Claude sur crop après, besoin du canvas)
+  // PR + GPT-4o en parallèle (coins exacts + angle)
   const [plate, angleData] = await Promise.all([
     detectPlate(b64, imgW, imgH),
-    useGptAngle ? detectCarAngle(b64) : Promise.resolve(null),
+    detectGptData(b64),
   ]);
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
@@ -975,9 +978,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // Approche mathématique pure : plus fiable que la détection pixel
-    // qui échoue sur les voitures de côté (perspective) et les fonds complexes.
-    savedCorners = buildCorners(plate, near_side, angle_deg, null);
+    // Coins GPT-4o en priorité (coordonnées directes, pas de calcul mathématique).
+    // Fallback buildCorners si GPT échoue ou retourne des coins invalides.
+    savedCorners = angleData?.corners ?? buildCorners(plate, near_side, angle_deg, null);
   }
 
   // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)
