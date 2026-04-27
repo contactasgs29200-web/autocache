@@ -912,7 +912,59 @@ async function detectGptData(b64) {
   }
 }
 
-// Crop la zone de la plaque (±30% de marge) et envoie le crop à GPT-4o.
+// Affine localement les coins GPT avec une analyse de gradient par pixels.
+// Fenêtre = ±25% de la hauteur de plaque autour du coin GPT → trop petite
+// pour dériver sur le pare-chocs ou le sol, assez grande pour corriger GPT.
+// Garde les X de GPT (précis), corrige seulement les Y.
+function locallyRefineCorners(gptCorners, ctx, plate, imgW, imgH) {
+  const ph = Math.max(plate.bl.y - plate.tl.y, 0.02);
+  const searchR = Math.max(5, Math.round(ph * 0.28 * imgH)); // ±28% hauteur plaque
+  const bandW   = Math.max(3, Math.round((plate.tr.x - plate.tl.x) * 0.07 * imgW));
+
+  const refineY = (approxX, approxY, dir) => {
+    // dir: +1 → bord haut (gradient max positif), -1 → bord bas (gradient max négatif)
+    const bx = Math.max(0, Math.round(approxX * imgW - bandW / 2));
+    const bw = Math.min(imgW - bx, bandW);
+    const sy = Math.max(0, Math.round(approxY * imgH) - searchR);
+    const sh = Math.min(imgH - sy, searchR * 2);
+    if (bw < 2 || sh < 4) return approxY;
+
+    const px = ctx.getImageData(bx, sy, bw, sh).data;
+    const avg = new Float32Array(sh);
+    for (let r = 0; r < sh; r++) {
+      let s = 0;
+      for (let c = 0; c < bw; c++) { const i = (r*bw+c)*4; s += (px[i]+px[i+1]+px[i+2])/3; }
+      avg[r] = s / bw;
+    }
+    // Lissage 3 lignes
+    const sm = new Float32Array(sh);
+    for (let r = 0; r < sh; r++)
+      sm[r] = (avg[Math.max(0,r-1)] + avg[r] + avg[Math.min(sh-1,r+1)]) / 3;
+    // Gradient
+    const gr = new Float32Array(sh);
+    for (let r = 1; r < sh; r++) gr[r] = sm[r] - sm[r-1];
+
+    if (dir > 0) { // haut : max gradient positif (sombre→clair)
+      let best = -1, bestG = 8;
+      for (let r = 0; r < sh; r++) if (gr[r] > bestG) { bestG = gr[r]; best = r; }
+      if (best >= 0) return (sy + best) / imgH;
+    } else {       // bas  : max gradient négatif (clair→sombre)
+      let best = -1, bestG = -8;
+      for (let r = 0; r < sh; r++) if (gr[r] < bestG) { bestG = gr[r]; best = r; }
+      if (best >= 0) return (sy + best) / imgH;
+    }
+    return approxY;
+  };
+
+  return {
+    tl: { x: gptCorners.tl.x, y: refineY(gptCorners.tl.x, gptCorners.tl.y, +1) },
+    tr: { x: gptCorners.tr.x, y: refineY(gptCorners.tr.x, gptCorners.tr.y, +1) },
+    br: { x: gptCorners.br.x, y: refineY(gptCorners.br.x, gptCorners.br.y, -1) },
+    bl: { x: gptCorners.bl.x, y: refineY(gptCorners.bl.x, gptCorners.bl.y, -1) },
+  };
+}
+
+
 // La plaque remplit ~80% de l'image envoyée → résolution maximale → coins précis.
 // Retourne les coins dans le repère de l'image complète (0-1).
 async function detectGptCropCorners(ctx, plate, imgW, imgH) {
@@ -1019,10 +1071,13 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // Coins GPT sur le CROP de la plaque : résolution maximale, pas d'hallucination
-    // hors-plaque. Fallback buildCorners si GPT échoue.
+    // GPT crop → coins rough. Puis refinement local par pixels (fenêtre ±28% hauteur)
+    // pour corriger les petits décalages GPT sans risque de dériver loin de la plaque.
     const cropCorners = await detectGptCropCorners(ctx, plate, c.width, c.height);
-    savedCorners = cropCorners ?? buildCorners(plate, near_side, angle_deg, null);
+    const roughCorners = cropCorners ?? buildCorners(plate, near_side, angle_deg, null);
+    savedCorners = roughCorners
+      ? locallyRefineCorners(roughCorners, ctx, plate, c.width, c.height)
+      : null;
   }
 
   // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)
