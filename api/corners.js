@@ -33,16 +33,23 @@ export default async function handler(req, res) {
   const { cropMode } = req.body;
 
   const prompt = cropMode
-    ? `This image shows a vehicle license plate centered in the frame. There is visible car body/bumper margin around the plate — the plate does NOT fill the entire image.
+    ? `This image shows a vehicle license plate centered in the frame, with car body/bumper visible around it.
 
-Find the 4 corners of the plate's registration surface (white or yellow panel with alphanumeric text). Account for perspective — an angled plate will appear as a trapezoid.
+YOUR TASK: Find the 4 corners of the LICENSE PLATE SURFACE ONLY.
+The license plate is the FLAT RECTANGULAR PANEL with alphanumeric registration text on a WHITE or YELLOW background.
 
-Coordinate system: x=0.0 is LEFT edge, x=1.0 is RIGHT edge, y=0.0 is TOP, y=1.0 is BOTTOM of this image.
+CRITICAL — DO NOT include:
+- Red, black, or colored bumper strips/trim above or below the plate
+- The plastic mounting frame/holder around the plate
+- Any colored car body parts
 
-The plate corners are somewhere in the interior of the image, NOT at the edges. Typical range: x between 0.10–0.90, y between 0.10–0.90.
+The plate surface starts where the WHITE or YELLOW background begins.
 
-Use 3 decimal places. Return ONLY this JSON with no explanation:
-{"tl":{"x":0.143,"y":0.167},"tr":{"x":0.857,"y":0.160},"br":{"x":0.860,"y":0.840},"bl":{"x":0.140,"y":0.833}}`
+Coordinate system of THIS image: x=0.0=LEFT, x=1.0=RIGHT, y=0.0=TOP, y=1.0=BOTTOM.
+The plate occupies the central area — corners are NOT at the image edges.
+
+Use 3 decimal places. Return ONLY JSON:
+{"tl":{"x":0.143,"y":0.200},"tr":{"x":0.857,"y":0.195},"br":{"x":0.857,"y":0.800},"bl":{"x":0.143,"y":0.805}}`
     : `Look at this car photo. Find the VEHICLE LICENSE PLATE — the flat metal/plastic plate with alphanumeric registration characters (e.g. "AB-123-CD" in France, numbers+letters on a white/yellow background).
 
 DO NOT confuse the license plate with: dealer stickers, plastic bumper trim, skid plates, mud flaps, parking sensors, tow hook covers, or any sign on a wall/floor.
