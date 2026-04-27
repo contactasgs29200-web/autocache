@@ -978,9 +978,17 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // Coins GPT-4o en priorité (coordonnées directes, pas de calcul mathématique).
-    // Fallback buildCorners si GPT échoue ou retourne des coins invalides.
-    savedCorners = angleData?.corners ?? buildCorners(plate, near_side, angle_deg, null);
+    // Valide que les coins GPT sont proches de la bbox PR (évite les hallucinations).
+    // Marge = 1× la largeur de la plaque de chaque côté.
+    const gpt = angleData?.corners;
+    const pw  = plate.tr.x - plate.tl.x;
+    const ph  = plate.bl.y - plate.tl.y;
+    const gptValid = gpt && [gpt.tl, gpt.tr, gpt.br, gpt.bl].every(c =>
+      c.x >= plate.tl.x - pw && c.x <= plate.tr.x + pw &&
+      c.y >= plate.tl.y - ph && c.y <= plate.bl.y + ph
+    );
+
+    savedCorners = gptValid ? gpt : buildCorners(plate, near_side, angle_deg, null);
   }
 
   // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)
