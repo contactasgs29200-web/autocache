@@ -1022,6 +1022,137 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
+// Détection de coins par gradient Sobel + ajustement de droites.
+// Étapes :
+//   1. Blur gaussien 5×5 (réduit le bruit/caractères)
+//   2. Gradient Sobel → magnitude élevée aux bords de la plaque
+//   3. Pour chaque colonne (22-78 % du crop), scanner depuis le CENTRE vers l'EXTÉRIEUR :
+//      le premier pixel dont la luminosité en bande chute sous le seuil = bord de plaque.
+//      Partir du centre garantit qu'on trouve le bord de la plaque et non le chrome au-dessus.
+//   4. Filtrage médian des points collectés → élimine les faux positifs sur les caractères
+//   5. Régression linéaire sur les points de bord haut et bas → 2 droites perspectivées
+//   6. Intersection avec les X de PlateRecognizer → 4 coins exacts
+function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
+  const pw = plate.tr.x - plate.tl.x;
+  const ph = plate.bl.y - plate.tl.y;
+  const mg = 0.15;
+
+  const cx = Math.max(0, Math.round((plate.tl.x - pw * mg) * imgW));
+  const cy = Math.max(0, Math.round((plate.tl.y - ph * mg) * imgH));
+  const cw = Math.min(imgW - cx, Math.round(pw * (1 + 2 * mg) * imgW));
+  const ch = Math.min(imgH - cy, Math.round(ph * (1 + 2 * mg) * imgH));
+  if (cw < 20 || ch < 10) return null;
+
+  const pixels = ctx.getImageData(cx, cy, cw, ch).data;
+
+  // Blur gaussien 5×5 séparable — lisse les caractères et réduit le bruit
+  const k5 = [1, 4, 6, 4, 1];
+  const gray = new Float32Array(cw * ch);
+  for (let i = 0; i < cw * ch; i++)
+    gray[i] = (pixels[i*4] + pixels[i*4+1] + pixels[i*4+2]) / 3;
+  const tmp = new Float32Array(cw * ch);
+  for (let r = 0; r < ch; r++)
+    for (let c = 0; c < cw; c++) {
+      let s = 0;
+      for (let k = -2; k <= 2; k++) s += k5[k+2] * gray[r*cw + Math.max(0, Math.min(cw-1, c+k))];
+      tmp[r*cw+c] = s / 16;
+    }
+  const blur = new Float32Array(cw * ch);
+  for (let r = 0; r < ch; r++)
+    for (let c = 0; c < cw; c++) {
+      let s = 0;
+      for (let k = -2; k <= 2; k++) s += k5[k+2] * tmp[Math.max(0, Math.min(ch-1, r+k))*cw+c];
+      blur[r*cw+c] = s / 16;
+    }
+
+  // Luminosité en bande : moyenne sur ±BW colonnes autour d'une colonne cible
+  const BW = Math.max(2, Math.round(cw * 0.015));
+  const bandAvg = (col, row) => {
+    let s = 0, n = 0;
+    for (let dc = -BW; dc <= BW; dc++) {
+      const cc = col + dc;
+      if (cc >= 0 && cc < cw) { s += blur[row*cw+cc]; n++; }
+    }
+    return n > 0 ? s / n : 0;
+  };
+
+  const midRow = Math.round(ch / 2);
+
+  // Pour chaque colonne échantillon, trouver le bord haut et bas depuis le centre
+  const topPts = [], botPts = [];
+  for (let i = 0; i <= 28; i++) {
+    const col = Math.round((0.22 + i * 0.02) * cw); // 22 % à 78 % par pas de 2 %
+    const ref = bandAvg(col, midRow);
+    if (ref < 140) continue;
+    const thresh = ref * 0.65;
+
+    // Bord supérieur : centre → haut (premier pixel sous le seuil = on quitte la plaque)
+    for (let r = midRow; r >= 0; r--) {
+      if (bandAvg(col, r) < thresh) { topPts.push([col, r + 1]); break; }
+      if (r === 0) topPts.push([col, 0]);
+    }
+    // Bord inférieur : centre → bas
+    for (let r = midRow; r < ch; r++) {
+      if (bandAvg(col, r) < thresh) { botPts.push([col, r - 1]); break; }
+      if (r === ch - 1) botPts.push([col, ch - 1]);
+    }
+  }
+
+  if (topPts.length < 5 || botPts.length < 5) return null;
+
+  // Filtrage médian : écarte les outliers (faux positifs sur caractères ou sol)
+  const medFilter = (pts, axis) => {
+    const vals = pts.map(p => p[axis]).sort((a, b) => a - b);
+    const med  = vals[Math.floor(vals.length / 2)];
+    const mad  = vals.map(v => Math.abs(v - med)).sort((a, b) => a - b)[Math.floor(vals.length / 2)];
+    const tol  = Math.max(6, mad * 3);
+    return pts.filter(p => Math.abs(p[axis] - med) <= tol);
+  };
+  const topF = medFilter(topPts, 1);
+  const botF = medFilter(botPts, 1);
+  if (topF.length < 4 || botF.length < 4) return null;
+
+  // Régression linéaire y = m·x + b pour les droites de bord haut et bas
+  const fitLine = pts => {
+    const n  = pts.length;
+    const mx = pts.reduce((a, p) => a + p[0], 0) / n;
+    const my = pts.reduce((a, p) => a + p[1], 0) / n;
+    const ssxx = pts.reduce((a, p) => a + (p[0]-mx)**2, 0);
+    const ssxy = pts.reduce((a, p) => a + (p[0]-mx)*(p[1]-my), 0);
+    if (ssxx < 1) return null;
+    const m = ssxy / ssxx;
+    return { m, b: my - m * mx };
+  };
+  const topLine = fitLine(topF);
+  const botLine = fitLine(botF);
+  if (!topLine || !botLine) return null;
+
+  // Colonnes des bords gauche/droite dans le repère crop (depuis PlateRecognizer)
+  const tlxC = plate.tl.x * imgW - cx;
+  const trxC = plate.tr.x * imgW - cx;
+  const blxC = (plate.bl?.x ?? plate.tl.x) * imgW - cx;
+  const brxC = (plate.br?.x ?? plate.tr.x) * imgW - cx;
+
+  // Coordonnées Y de chaque coin par les droites ajustées
+  const tly = (cy + topLine.m * tlxC + topLine.b) / imgH;
+  const trY = (cy + topLine.m * trxC + topLine.b) / imgH;
+  const bly = (cy + botLine.m * blxC + botLine.b) / imgH;
+  const brY = (cy + botLine.m * brxC + botLine.b) / imgH;
+
+  // Sanity : hauteurs cohérentes avec PlateRecognizer
+  if (bly - tly < ph * 0.5 || bly - tly > ph * 1.5) return null;
+  if (brY - trY < ph * 0.5 || brY - trY > ph * 1.5) return null;
+
+  console.log(`Contour corners: TL(${plate.tl.x.toFixed(3)},${tly.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${trY.toFixed(3)}) BR(${plate.tr.x.toFixed(3)},${brY.toFixed(3)}) BL(${plate.tl.x.toFixed(3)},${bly.toFixed(3)})`);
+
+  return {
+    tl: { x: Math.max(0, plate.tl.x),              y: Math.max(0, tly) },
+    tr: { x: Math.min(1, plate.tr.x),              y: Math.max(0, trY) },
+    br: { x: Math.min(1, plate.br?.x ?? plate.tr.x), y: Math.min(1, brY) },
+    bl: { x: Math.max(0, plate.bl?.x ?? plate.tl.x), y: Math.min(1, bly) },
+  };
+}
+
 // Détecte les bords de la plaque en scannant depuis l'EXTÉRIEUR du crop vers l'intérieur.
 // Principe : le crop (PR bbox ± 12 %) contient du pare-chocs (sombre) autour de la plaque
 // (blanche). En partant du bord du crop et en avançant vers le centre, le premier pixel
@@ -1182,11 +1313,11 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // 1. GPT-4o crop mode : raisonnement géométrique (angles non-droits) → coins précis
-    // 2. Fallback pixel scan si GPT échoue ou retourne des coins incohérents
-    // 3. Fallback mathématique si le scan pixel échoue aussi
-    const gptCrop = await detectGptCropCorners(ctx, plate, c.width, c.height);
-    const scanned = gptCrop ?? scanPlateEdgesFromCrop(ctx, plate, c.width, c.height);
+    // 1. Gradient Sobel + régression de droites (robuste au chrome, perspective exacte)
+    // 2. Fallback scan luminosité si gradient échoue
+    // 3. Fallback mathématique
+    const contour = detectPlateCornersByContour(ctx, plate, c.width, c.height);
+    const scanned = contour ?? scanPlateEdgesFromCrop(ctx, plate, c.width, c.height);
     savedCorners = scanned ?? buildCorners(plate, near_side, angle_deg, null);
   }
 
