@@ -1026,7 +1026,12 @@ async function detectPlate(b64, imgW, imgH) {
 // Principe : le crop (PR bbox ± 12 %) contient du pare-chocs (sombre) autour de la plaque
 // (blanche). En partant du bord du crop et en avançant vers le centre, le premier pixel
 // lumineux trouvé EST le bord de la plaque — impossible de démarrer à l'intérieur.
-// Seuil = 65 % de la luminosité du centre du crop (toujours blanc = référence fiable).
+//
+// Scan vertical (bandes gauche/droite) → Y de chaque coin (gère inclinaison horizontale).
+// Scan horizontal (bandes haut/bas)    → X de chaque coin (gère perspective verticale :
+//   caméra haute/basse → TL.x ≠ BL.x, TR.x ≠ BR.x).
+// Seuil Y = 65 % du centre (fond blanc). Seuil X = 38 % : bandeau EU (bleu foncé +
+// étoiles blanches, luminosité ~90-130) doit être inclus dans le bord gauche.
 function scanPlateEdgesFromCrop(ctx, plate, imgW, imgH) {
   const pw = plate.tr.x - plate.tl.x;
   const ph = plate.bl.y - plate.tl.y;
@@ -1044,7 +1049,8 @@ function scanPlateEdgesFromCrop(ctx, plate, imgW, imgH) {
     return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
   };
 
-  const edgesForBand = (c0f, c1f) => {
+  // Bandes verticales → bords Y (haut/bas) par côté gauche ou droit
+  const yEdgesForBand = (c0f, c1f) => {
     const c0 = Math.round(c0f * cw), c1 = Math.max(c0 + 1, Math.round(c1f * cw));
     const avg = new Float32Array(ch);
     for (let r = 0; r < ch; r++) {
@@ -1052,16 +1058,13 @@ function scanPlateEdgesFromCrop(ctx, plate, imgW, imgH) {
       for (let c = c0; c < c1; c++) s += bright(c, r);
       avg[r] = s / (c1 - c0);
     }
-    // Seuil basé sur le centre du crop (toujours à l'intérieur de la plaque blanche)
     const mid = Math.round(ch / 2);
     const ref = avg[mid];
     if (ref < 140) return null;
     const thresh = ref * 0.65;
 
-    // Haut : depuis le bord supérieur du crop vers le centre
     let top = -1;
     for (let r = 0; r < ch; r++) { if (avg[r] >= thresh) { top = r; break; } }
-    // Bas : depuis le bord inférieur du crop vers le centre
     let bot = -1;
     for (let r = ch - 1; r >= 0; r--) { if (avg[r] >= thresh) { bot = r; break; } }
 
@@ -1069,17 +1072,47 @@ function scanPlateEdgesFromCrop(ctx, plate, imgW, imgH) {
     return { top: (cy + top) / imgH, bot: (cy + bot) / imgH };
   };
 
-  // Bande gauche 20-45 % du crop (évite bandeau EU ~0-20 %)
-  // Bande droite 55-80 % du crop (évite sticker ~80-100 %)
-  const lEdges = edgesForBand(0.20, 0.45);
-  const rEdges = edgesForBand(0.55, 0.80);
+  // Bandes horizontales → bords X (gauche/droite) par tranche haute ou basse
+  // Seuil bas (0.38×ref) pour capturer le bandeau EU (luminosité ~90-130)
+  // avant le fond blanc, tout en excluant le pare-chocs sombre (~40-70).
+  const xEdgesForBand = (r0f, r1f) => {
+    const r0 = Math.round(r0f * ch), r1 = Math.max(r0 + 1, Math.round(r1f * ch));
+    const avg = new Float32Array(cw);
+    for (let c = 0; c < cw; c++) {
+      let s = 0;
+      for (let r = r0; r < r1; r++) s += bright(c, r);
+      avg[c] = s / (r1 - r0);
+    }
+    const mid = Math.round(cw / 2);
+    const ref = avg[mid];
+    if (ref < 140) return null;
+    const thresh = ref * 0.38;
+
+    let left = -1;
+    for (let c = 0; c < cw; c++) { if (avg[c] >= thresh) { left = c; break; } }
+    let right = -1;
+    for (let c = cw - 1; c >= 0; c--) { if (avg[c] >= thresh) { right = c; break; } }
+
+    if (left < 0 || right < 0 || right <= left) return null;
+    // Sanity : la plaque doit occuper 60-97 % de la largeur du crop (attendu ~81 %)
+    if ((right - left) / cw < 0.60 || (right - left) / cw > 0.97) return null;
+    return { left: (cx + left) / imgW, right: (cx + right) / imgW };
+  };
+
+  // Y : bande gauche 20-45 % (évite bandeau EU ~0-20 %), droite 55-80 % (évite sticker)
+  const lEdges = yEdgesForBand(0.20, 0.45);
+  const rEdges = yEdgesForBand(0.55, 0.80);
   if (!lEdges || !rEdges) return null;
 
+  // X : tranche haute 22-45 %, basse 55-78 % du crop — à l'intérieur de la plaque
+  const tEdges = xEdgesForBand(0.22, 0.45);
+  const bEdges = xEdgesForBand(0.55, 0.78);
+
   return {
-    tl: { x: plate.tl.x, y: Math.max(0, lEdges.top) },
-    tr: { x: plate.tr.x, y: Math.max(0, rEdges.top) },
-    br: { x: plate.tr.x, y: Math.min(1, rEdges.bot) },
-    bl: { x: plate.tl.x, y: Math.min(1, lEdges.bot) },
+    tl: { x: Math.max(0, tEdges ? tEdges.left  : plate.tl.x), y: Math.max(0, lEdges.top) },
+    tr: { x: Math.min(1, tEdges ? tEdges.right : plate.tr.x), y: Math.max(0, rEdges.top) },
+    br: { x: Math.min(1, bEdges ? bEdges.right : plate.tr.x), y: Math.min(1, rEdges.bot) },
+    bl: { x: Math.max(0, bEdges ? bEdges.left  : plate.tl.x), y: Math.min(1, lEdges.bot) },
   };
 }
 
