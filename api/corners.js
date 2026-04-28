@@ -33,26 +33,42 @@ export default async function handler(req, res) {
   const { cropMode } = req.body;
 
   const prompt = cropMode
-    ? `This image shows a vehicle license plate (physical rectangle, ~520×110 mm) seen in perspective — it projects as a DISTORTED QUADRILATERAL, not a rectangle.
+    ? `You are analyzing a cropped image that contains a vehicle LICENSE PLATE surrounded by car body / bumper.
 
-STEP 1 — Describe the perspective distortion BEFORE placing any corner:
-A. Camera position: is the camera ABOVE, BELOW, or LEVEL with the plate? (above → top edge appears shorter than bottom)
-B. Horizontal angle: is the car turned LEFT, RIGHT, or STRAIGHT toward the camera? (turned → one side appears taller than the other)
-C. Interior angles: a real rectangle has four 90° corners. Perspective makes some ACUTE (<90°) and some OBTUSE (>90°). Estimate each:
-   - TL angle ≈ ?°   TR angle ≈ ?°
-   - BL angle ≈ ?°   BR angle ≈ ?°
-D. Which edge is the NEAREST to the camera (appears larger/taller)?
+═══ STEP 1 — ISOLATE THE PLATE FROM THE CHROME ═══
+The plate and the surrounding chrome/metal can look similar in brightness. Use these discriminators:
 
-STEP 2 — Locate the 4 corners of the WHITE/YELLOW plate surface ONLY:
-Use your geometric analysis from Step 1 to place corners precisely.
-DO NOT include: chrome strips, colored bumper trim, mounting frame, screws, or any car body part.
-The plate surface = white or yellow background carrying the alphanumeric text.
+TEXTURE: The plate surface is MATTE (flat, non-reflective coating). Chrome/metal is SHINY (specular highlights, reflections). Look for the matte rectangular zone.
 
-Coordinate system: x=0.0=LEFT edge of image, x=1.0=RIGHT, y=0.0=TOP, y=1.0=BOTTOM.
-The plate is centered in the image — corners are well inside the image edges.
+TEXT: The plate carries ALPHANUMERIC CHARACTERS (letters + digits, e.g. "AB-123-CD"). Find the bounding box that tightly contains ALL those characters — that is the plate surface.
+
+STRUCTURE: Plates have a uniform white or yellow background. Chrome trim is narrow, irregular, and has no text.
+
+Identify exactly where the plate surface starts and ends — NOT the chrome frame, NOT the bumper recess, NOT any shiny strip above or below.
+
+═══ STEP 2 — DESCRIBE THE QUADRILATERAL ═══
+The plate is a physical rectangle (~520×110 mm) that perspective projects into a DISTORTED QUADRILATERAL. Reason through:
+
+A. Camera height: ABOVE / LEVEL / BELOW the plate?
+   → If above: top edge appears shorter than bottom edge.
+B. Horizontal angle: car turned LEFT / STRAIGHT / RIGHT toward camera?
+   → If turned: near side appears taller than far side.
+C. Estimate the interior angle at each projected corner (true rectangle = 90°):
+   TL ≈ ?°  |  TR ≈ ?°
+   BL ≈ ?°  |  BR ≈ ?°
+D. Identify which edge is NEAREST the camera (largest apparent dimension).
+
+═══ STEP 3 — PLACE THE 4 CORNERS ═══
+Using your analysis, give the EXACT normalized coordinates of the 4 corners of the PLATE SURFACE (matte white/yellow zone with the text).
+
+Rules:
+- x=0.0 = LEFT edge of THIS image, x=1.0 = RIGHT edge
+- y=0.0 = TOP edge of THIS image, y=1.0 = BOTTOM edge
+- Corners must hug the outer boundary of the matte plate surface
+- Do NOT include chrome strips, shiny trim, screws, or mounting frame
 
 Return ONLY this JSON (3 decimal places, no markdown):
-{"analysis":"camera above, car straight, TL≈91° TR≈89° BR≈91° BL≈89°, top edge shorter","tl":{"x":0.143,"y":0.210},"tr":{"x":0.857,"y":0.200},"br":{"x":0.857,"y":0.795},"bl":{"x":0.143,"y":0.805}}`
+{"analysis":"matte white zone with text isolated; camera above, car straight; TL≈91° TR≈89° BR≈91° BL≈89°; top edge shorter","tl":{"x":0.130,"y":0.215},"tr":{"x":0.868,"y":0.205},"br":{"x":0.868,"y":0.792},"bl":{"x":0.130,"y":0.802}}`
     : `Look at this car photo. Find the VEHICLE LICENSE PLATE — the flat metal/plastic plate with alphanumeric registration characters (e.g. "AB-123-CD" in France, numbers+letters on a white/yellow background).
 
 DO NOT confuse the license plate with: dealer stickers, plastic bumper trim, skid plates, mud flaps, parking sensors, tow hook covers, or any sign on a wall/floor.
