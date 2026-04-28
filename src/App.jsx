@@ -1182,9 +1182,11 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // Scan pixel depuis l'extérieur du crop vers l'intérieur.
-    // Fallback buildCorners si scan échoue (plaque trop sombre, etc.)
-    const scanned = scanPlateEdgesFromCrop(ctx, plate, c.width, c.height);
+    // 1. GPT-4o crop mode : raisonnement géométrique (angles non-droits) → coins précis
+    // 2. Fallback pixel scan si GPT échoue ou retourne des coins incohérents
+    // 3. Fallback mathématique si le scan pixel échoue aussi
+    const gptCrop = await detectGptCropCorners(ctx, plate, c.width, c.height);
+    const scanned = gptCrop ?? scanPlateEdgesFromCrop(ctx, plate, c.width, c.height);
     savedCorners = scanned ?? buildCorners(plate, near_side, angle_deg, null);
   }
 

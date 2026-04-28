@@ -33,23 +33,26 @@ export default async function handler(req, res) {
   const { cropMode } = req.body;
 
   const prompt = cropMode
-    ? `This image shows a vehicle license plate centered in the frame, with car body/bumper visible around it.
+    ? `This image shows a vehicle license plate (physical rectangle, ~520×110 mm) seen in perspective — it projects as a DISTORTED QUADRILATERAL, not a rectangle.
 
-YOUR TASK: Find the 4 corners of the LICENSE PLATE SURFACE ONLY.
-The license plate is the FLAT RECTANGULAR PANEL with alphanumeric registration text on a WHITE or YELLOW background.
+STEP 1 — Describe the perspective distortion BEFORE placing any corner:
+A. Camera position: is the camera ABOVE, BELOW, or LEVEL with the plate? (above → top edge appears shorter than bottom)
+B. Horizontal angle: is the car turned LEFT, RIGHT, or STRAIGHT toward the camera? (turned → one side appears taller than the other)
+C. Interior angles: a real rectangle has four 90° corners. Perspective makes some ACUTE (<90°) and some OBTUSE (>90°). Estimate each:
+   - TL angle ≈ ?°   TR angle ≈ ?°
+   - BL angle ≈ ?°   BR angle ≈ ?°
+D. Which edge is the NEAREST to the camera (appears larger/taller)?
 
-CRITICAL — DO NOT include:
-- Red, black, or colored bumper strips/trim above or below the plate
-- The plastic mounting frame/holder around the plate
-- Any colored car body parts
+STEP 2 — Locate the 4 corners of the WHITE/YELLOW plate surface ONLY:
+Use your geometric analysis from Step 1 to place corners precisely.
+DO NOT include: chrome strips, colored bumper trim, mounting frame, screws, or any car body part.
+The plate surface = white or yellow background carrying the alphanumeric text.
 
-The plate surface starts where the WHITE or YELLOW background begins.
+Coordinate system: x=0.0=LEFT edge of image, x=1.0=RIGHT, y=0.0=TOP, y=1.0=BOTTOM.
+The plate is centered in the image — corners are well inside the image edges.
 
-Coordinate system of THIS image: x=0.0=LEFT, x=1.0=RIGHT, y=0.0=TOP, y=1.0=BOTTOM.
-The plate occupies the central area — corners are NOT at the image edges.
-
-Use 3 decimal places. Return ONLY JSON:
-{"tl":{"x":0.143,"y":0.200},"tr":{"x":0.857,"y":0.195},"br":{"x":0.857,"y":0.800},"bl":{"x":0.143,"y":0.805}}`
+Return ONLY this JSON (3 decimal places, no markdown):
+{"analysis":"camera above, car straight, TL≈91° TR≈89° BR≈91° BL≈89°, top edge shorter","tl":{"x":0.143,"y":0.210},"tr":{"x":0.857,"y":0.200},"br":{"x":0.857,"y":0.795},"bl":{"x":0.143,"y":0.805}}`
     : `Look at this car photo. Find the VEHICLE LICENSE PLATE — the flat metal/plastic plate with alphanumeric registration characters (e.g. "AB-123-CD" in France, numbers+letters on a white/yellow background).
 
 DO NOT confuse the license plate with: dealer stickers, plastic bumper trim, skid plates, mud flaps, parking sensors, tow hook covers, or any sign on a wall/floor.
@@ -83,7 +86,7 @@ Return ONLY this JSON (no explanation, no markdown):
       },
       body: JSON.stringify({
         model: 'gpt-4o',
-        max_tokens: 300,
+        max_tokens: 600,
         messages: [{
           role: 'user',
           content: [
@@ -129,6 +132,7 @@ Return ONLY this JSON (no explanation, no markdown):
     if (!corners) {
       console.warn('GPT-4o coins invalides ou absents:', JSON.stringify(gpt));
     }
+    if (gpt.analysis) console.log('GPT-4o geometry analysis:', gpt.analysis);
     console.log('GPT-4o result:', JSON.stringify({ near_side, angle_deg, corners }));
     return res.json({ near_side, angle_deg, corners });
 
