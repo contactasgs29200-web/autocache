@@ -1049,7 +1049,10 @@ function scanPlateEdgesFromCrop(ctx, plate, imgW, imgH) {
     return (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
   };
 
-  // Bandes verticales → bords Y (haut/bas) par côté gauche ou droit
+  // Bandes verticales → bords Y (haut/bas) par côté gauche ou droit.
+  // Stratégie "plus grande zone lumineuse" : la plaque occupe ~80 % du crop,
+  // tout élément parasite (strip chromé, sol) ≤ 12 % → la plaque est toujours
+  // la région la plus haute. Évite de détecter le strip chromé au-dessus comme bord.
   const yEdgesForBand = (c0f, c1f) => {
     const c0 = Math.round(c0f * cw), c1 = Math.max(c0 + 1, Math.round(c1f * cw));
     const avg = new Float32Array(ch);
@@ -1063,18 +1066,26 @@ function scanPlateEdgesFromCrop(ctx, plate, imgW, imgH) {
     if (ref < 140) return null;
     const thresh = ref * 0.65;
 
-    let top = -1;
-    for (let r = 0; r < ch; r++) { if (avg[r] >= thresh) { top = r; break; } }
-    let bot = -1;
-    for (let r = ch - 1; r >= 0; r--) { if (avg[r] >= thresh) { bot = r; break; } }
+    // Recenser toutes les zones lumineuses contiguës
+    const regions = [];
+    let rs = -1;
+    for (let r = 0; r < ch; r++) {
+      if (avg[r] >= thresh && rs < 0) rs = r;
+      else if (avg[r] < thresh && rs >= 0) { regions.push([rs, r - 1]); rs = -1; }
+    }
+    if (rs >= 0) regions.push([rs, ch - 1]);
+    if (regions.length === 0) return null;
 
-    if (top < 0 || bot < 0 || bot <= top) return null;
+    // La plus grande région = la plaque (strips ou sols font < 12 % du crop)
+    const [top, bot] = regions.reduce((a, b) => (b[1] - b[0] > a[1] - a[0]) ? b : a);
+    if (bot <= top) return null;
     return { top: (cy + top) / imgH, bot: (cy + bot) / imgH };
   };
 
   // Bandes horizontales → bords X (gauche/droite) par tranche haute ou basse
   // Seuil bas (0.38×ref) pour capturer le bandeau EU (luminosité ~90-130)
   // avant le fond blanc, tout en excluant le pare-chocs sombre (~40-70).
+  // Même stratégie "plus grande zone" pour ignorer éléments parasites latéraux.
   const xEdgesForBand = (r0f, r1f) => {
     const r0 = Math.round(r0f * ch), r1 = Math.max(r0 + 1, Math.round(r1f * ch));
     const avg = new Float32Array(cw);
@@ -1088,12 +1099,18 @@ function scanPlateEdgesFromCrop(ctx, plate, imgW, imgH) {
     if (ref < 140) return null;
     const thresh = ref * 0.38;
 
-    let left = -1;
-    for (let c = 0; c < cw; c++) { if (avg[c] >= thresh) { left = c; break; } }
-    let right = -1;
-    for (let c = cw - 1; c >= 0; c--) { if (avg[c] >= thresh) { right = c; break; } }
+    // Plus grande zone lumineuse horizontale = la plaque
+    const regions = [];
+    let cs = -1;
+    for (let c = 0; c < cw; c++) {
+      if (avg[c] >= thresh && cs < 0) cs = c;
+      else if (avg[c] < thresh && cs >= 0) { regions.push([cs, c - 1]); cs = -1; }
+    }
+    if (cs >= 0) regions.push([cs, cw - 1]);
+    if (regions.length === 0) return null;
 
-    if (left < 0 || right < 0 || right <= left) return null;
+    const [left, right] = regions.reduce((a, b) => (b[1] - b[0] > a[1] - a[0]) ? b : a);
+    if (right <= left) return null;
     // Sanity : la plaque doit occuper 60-97 % de la largeur du crop (attendu ~81 %)
     if ((right - left) / cw < 0.60 || (right - left) / cw > 0.97) return null;
     return { left: (cx + left) / imgW, right: (cx + right) / imgW };
