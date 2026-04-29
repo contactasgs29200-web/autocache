@@ -1022,22 +1022,29 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-// Détection de coins par Canny (Sobel → NMS → hystérésis) + régression de droites.
-// 1. Blur gaussien 5×5
-// 2. Gradients Sobel Gx/Gy → magnitude + direction
-// 3. Non-maximum suppression (amincissement des contours)
-// 4. Double seuil adaptatif + hystérésis (edge tracking)
-// 5. Pour chaque colonne, premier et dernier pixel de contour "horizontal" = bord haut/bas
-// 6. Filtrage médian + régression linéaire → 2 droites perspectivées
-// 7. Intersection avec les X de PlateRecognizer → 4 coins exacts
+// Détection de coins par Canny (Sobel → NMS → hystérésis) + régression de 4 droites.
+// 1. Crop centré sur la détection PR, largeur = max(PR, 4.7×hauteur) + 25% margin
+//    → corrige les cas où PR ne détecte qu'une fraction de la plaque
+// 2. Blur gaussien 5×5
+// 3. Gradients Sobel Gx/Gy → magnitude + direction
+// 4. Non-maximum suppression + hystérésis adaptative
+// 5. Edges horizontaux (|gy|>|gx|*0.5) → bords haut/bas par colonne
+//    Edges verticaux  (|gx|>|gy|*0.5) → bords gauche/droit par ligne
+// 6. Filtrage médian + régression linéaire sur chaque bord → 4 droites
+// 7. Intersection des 4 droites → 4 coins (indépendant des X de PR)
 function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
   const pw = plate.tr.x - plate.tl.x;
   const ph = plate.bl.y - plate.tl.y;
-  const mg = 0.15;
 
-  const cx = Math.max(0, Math.round((plate.tl.x - pw * mg) * imgW));
-  const cy = Math.max(0, Math.round((plate.tl.y - ph * mg) * imgH));
-  const cw = Math.min(imgW - cx, Math.round(pw * (1 + 2 * mg) * imgW));
+  // Plaque française : 520×110 mm ≈ 4.7:1. Si PR ne détecte qu'une tranche, élargir.
+  const effectivePw = Math.max(pw, ph * 4.7);
+  const pCx = (plate.tl.x + plate.tr.x) / 2;
+  const pCy = (plate.tl.y + plate.bl.y) / 2;
+  const mg = 0.25;
+
+  const cx = Math.max(0, Math.round((pCx - effectivePw / 2 * (1 + mg)) * imgW));
+  const cy = Math.max(0, Math.round((pCy - ph / 2 * (1 + 2 * mg)) * imgH));
+  const cw = Math.min(imgW - cx, Math.round(effectivePw * (1 + 2 * mg) * imgW));
   const ch = Math.min(imgH - cy, Math.round(ph * (1 + 2 * mg) * imgH));
   if (cw < 20 || ch < 10) return null;
 
@@ -1124,11 +1131,11 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
       }
   }
 
-  // Pour chaque colonne (22-78 % du crop), premier et dernier contour "horizontal"
-  // Un contour horizontal = gradient principalement vertical : |gy| > |gx| * 0.5
+  // Edges horizontaux (bords haut/bas) : scanner chaque colonne, garder 1er/dernier contour
+  // où |gy| > |gx| * 0.5 (gradient principalement vertical = bord horizontal)
   const topPts = [], botPts = [];
-  for (let i = 0; i <= 28; i++) {
-    const col = Math.round((0.22 + i * 0.02) * cw);
+  for (let i = 0; i <= 38; i++) {
+    const col = Math.round((0.10 + i * 0.021) * cw); // 10 % à 90 % du crop
     if (col < 1 || col >= cw - 1) continue;
     const colEdges = [];
     for (let r = 1; r < ch - 1; r++) {
@@ -1142,9 +1149,27 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
     botPts.push([col, colEdges[colEdges.length - 1]]);
   }
 
-  if (topPts.length < 5 || botPts.length < 5) return null;
+  // Edges verticaux (bords gauche/droit) : scanner chaque ligne, garder 1er/dernier contour
+  // où |gx| > |gy| * 0.5 (gradient principalement horizontal = bord vertical)
+  const leftPts = [], rightPts = [];
+  const rStart = Math.round(ch * 0.25), rEnd = Math.round(ch * 0.75);
+  for (let r = rStart; r <= rEnd; r++) {
+    const rowEdges = [];
+    for (let c = 1; c < cw - 1; c++) {
+      const idx = r*cw+c;
+      if (edge[idx] !== 2) continue;
+      if (Math.abs(gx[idx]) < Math.abs(gy[idx]) * 0.5) continue;
+      rowEdges.push(c);
+    }
+    if (rowEdges.length < 2) continue;
+    leftPts.push([rowEdges[0], r]);
+    rightPts.push([rowEdges[rowEdges.length - 1], r]);
+  }
 
-  // Filtrage médian : écarte les outliers (faux positifs sur caractères ou sol)
+  if (topPts.length < 5 || botPts.length < 5) return null;
+  if (leftPts.length < 5 || rightPts.length < 5) return null;
+
+  // Filtrage médian
   const medFilter = (pts, axis) => {
     const vals = pts.map(p => p[axis]).sort((a, b) => a - b);
     const med  = vals[Math.floor(vals.length / 2)];
@@ -1152,12 +1177,15 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
     const tol  = Math.max(6, mad * 3);
     return pts.filter(p => Math.abs(p[axis] - med) <= tol);
   };
-  const topF = medFilter(topPts, 1);
-  const botF = medFilter(botPts, 1);
+  const topF   = medFilter(topPts,   1);
+  const botF   = medFilter(botPts,   1);
+  const leftF  = medFilter(leftPts,  0);
+  const rightF = medFilter(rightPts, 0);
   if (topF.length < 4 || botF.length < 4) return null;
+  if (leftF.length < 4 || rightF.length < 4) return null;
 
-  // Régression linéaire y = m·x + b pour les droites de bord haut et bas
-  const fitLine = pts => {
+  // Régression linéaire horizontale : y = m·x + b
+  const fitHLine = pts => {
     const n  = pts.length;
     const mx = pts.reduce((a, p) => a + p[0], 0) / n;
     const my = pts.reduce((a, p) => a + p[1], 0) / n;
@@ -1167,33 +1195,56 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
     const m = ssxy / ssxx;
     return { m, b: my - m * mx };
   };
-  const topLine = fitLine(topF);
-  const botLine = fitLine(botF);
-  if (!topLine || !botLine) return null;
-
-  // Colonnes des bords gauche/droite dans le repère crop (depuis PlateRecognizer)
-  const tlxC = plate.tl.x * imgW - cx;
-  const trxC = plate.tr.x * imgW - cx;
-  const blxC = (plate.bl?.x ?? plate.tl.x) * imgW - cx;
-  const brxC = (plate.br?.x ?? plate.tr.x) * imgW - cx;
-
-  const tly = (cy + topLine.m * tlxC + topLine.b) / imgH;
-  const trY = (cy + topLine.m * trxC + topLine.b) / imgH;
-  const bly = (cy + botLine.m * blxC + botLine.b) / imgH;
-  const brY = (cy + botLine.m * brxC + botLine.b) / imgH;
-
-  // Sanity : hauteurs cohérentes avec PlateRecognizer
-  if (bly - tly < ph * 0.5 || bly - tly > ph * 1.5) return null;
-  if (brY - trY < ph * 0.5 || brY - trY > ph * 1.5) return null;
-
-  console.log(`Canny corners: TL(${plate.tl.x.toFixed(3)},${tly.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${trY.toFixed(3)}) BR(${(plate.br?.x??plate.tr.x).toFixed(3)},${brY.toFixed(3)}) BL(${(plate.bl?.x??plate.tl.x).toFixed(3)},${bly.toFixed(3)})`);
-
-  return {
-    tl: { x: Math.max(0, plate.tl.x),               y: Math.max(0, tly) },
-    tr: { x: Math.min(1, plate.tr.x),               y: Math.max(0, trY) },
-    br: { x: Math.min(1, plate.br?.x ?? plate.tr.x), y: Math.min(1, brY) },
-    bl: { x: Math.max(0, plate.bl?.x ?? plate.tl.x), y: Math.min(1, bly) },
+  // Régression linéaire verticale : x = n·y + d
+  const fitVLine = pts => {
+    const n  = pts.length;
+    const my = pts.reduce((a, p) => a + p[1], 0) / n;
+    const mx = pts.reduce((a, p) => a + p[0], 0) / n;
+    const ssyy = pts.reduce((a, p) => a + (p[1]-my)**2, 0);
+    const ssxy = pts.reduce((a, p) => a + (p[0]-mx)*(p[1]-my), 0);
+    if (ssyy < 1) return null;
+    const nSlope = ssxy / ssyy;
+    return { n: nSlope, d: mx - nSlope * my };
   };
+
+  const topLine   = fitHLine(topF);
+  const botLine   = fitHLine(botF);
+  const leftLine  = fitVLine(leftF);
+  const rightLine = fitVLine(rightF);
+  if (!topLine || !botLine || !leftLine || !rightLine) return null;
+
+  // Intersection droite horizontale (y=m·x+b) et verticale (x=n·y+d)
+  // y = m·(n·y+d)+b → y(1-mn) = md+b → y = (md+b)/(1-mn) ; x = n·y+d
+  const intersect = (h, v) => {
+    const denom = 1 - h.m * v.n;
+    if (Math.abs(denom) < 1e-6) return null;
+    const y = (h.m * v.d + h.b) / denom;
+    return { x: v.n * y + v.d, y };
+  };
+
+  const tlC = intersect(topLine, leftLine);
+  const trC = intersect(topLine, rightLine);
+  const brC = intersect(botLine, rightLine);
+  const blC = intersect(botLine, leftLine);
+  if (!tlC || !trC || !brC || !blC) return null;
+
+  // Convertir du repère crop vers coordonnées normalisées image
+  const toImg = p => ({
+    x: Math.max(0, Math.min(1, (cx + p.x) / imgW)),
+    y: Math.max(0, Math.min(1, (cy + p.y) / imgH)),
+  });
+  const tl = toImg(tlC), tr = toImg(trC), br = toImg(brC), bl = toImg(blC);
+
+  // Sanity : hauteur détectée cohérente avec PR (×0.5 à ×2)
+  const detH = ((bl.y - tl.y) + (br.y - tr.y)) / 2;
+  if (detH < ph * 0.5 || detH > ph * 2.0) return null;
+  // Sanity : largeur plaque ≥ 2× hauteur (évite détection d'un objet vertical)
+  const detW = ((tr.x - tl.x) + (br.x - bl.x)) / 2;
+  if (detW < detH * 2) return null;
+
+  console.log(`Canny corners: TL(${tl.x.toFixed(3)},${tl.y.toFixed(3)}) TR(${tr.x.toFixed(3)},${tr.y.toFixed(3)}) BR(${br.x.toFixed(3)},${br.y.toFixed(3)}) BL(${bl.x.toFixed(3)},${bl.y.toFixed(3)})`);
+
+  return { tl, tr, br, bl };
 }
 
 // Détecte les bords de la plaque en scannant depuis l'EXTÉRIEUR du crop vers l'intérieur.
