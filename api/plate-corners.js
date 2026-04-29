@@ -25,19 +25,42 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
-  const prompt = `This image is a crop of a car photo containing a vehicle license plate. Find the license plate and return the precise coordinates of its 4 corners.
+  const prompt = `PRECISE LICENSE PLATE CORNER DETECTION
 
-The license plate is the white/grey flat plate with alphanumeric registration characters (French format like "FJ-713-KZ", "GA-700-JL", etc.) and a blue EU strip on the left side with the letter F.
+You are looking at a CROP of a vehicle photo. Find THE FOREGROUND vehicle's license plate.
 
-PRECISE MEASUREMENT RULES:
-1. Measure to the OUTER EDGE of the white plate surface — where the plate material begins and ends.
-2. Do NOT include the plastic mounting frame or border around the plate.
-3. If the plate is viewed at an angle, the 4 corners will NOT form a rectangle — measure the actual visible quadrilateral.
-4. x=0.0 is the LEFT edge of this image, x=1.0 is the RIGHT edge.
-5. y=0.0 is the TOP edge of this image, y=1.0 is the BOTTOM edge.
+═══ STEP 1 — IDENTIFY THE CORRECT PLATE ═══
+If multiple plates are visible (other vehicles in background), pick the LARGEST and MOST CENTRAL one — the plate of the FOREGROUND vehicle. Ignore plates of background vehicles.
 
-Return ONLY this JSON (no markdown, no explanation):
-{"tl":{"x":0.10,"y":0.30},"tr":{"x":0.90,"y":0.28},"br":{"x":0.91,"y":0.72},"bl":{"x":0.09,"y":0.74}}`;
+A French license plate is:
+- A flat rectangular plaque mounted on the bumper
+- WHITE OR YELLOW background with alphanumeric characters (e.g. "FJ-713-KZ", "DM-996-HX")
+- Has a BLUE EU STRIP on the LEFT side with letter "F"
+- Has a small DEPARTMENT CODE on the RIGHT side (e.g. "75", "77", "92")
+
+═══ STEP 2 — REASON ABOUT PERSPECTIVE ═══
+The plate is a physical rectangle (520×110mm). Due to perspective:
+- Camera ABOVE the plate → top edge appears SHORTER than bottom edge
+- Camera BELOW the plate → top edge appears LONGER than bottom edge
+- Car turned LEFT (toward camera right) → RIGHT side of plate appears TALLER
+- Car turned RIGHT (toward camera left) → LEFT side of plate appears TALLER
+The 4 corners often form a NON-RECTANGULAR QUADRILATERAL — that's expected.
+
+═══ STEP 3 — PLACE THE 4 CORNERS PRECISELY ═══
+Each corner sits on the OUTER EDGE of the plate's flat surface:
+- INCLUDE the blue EU strip (it's part of the plate surface)
+- INCLUDE the department code on the right
+- DO NOT include the plastic/metal mounting frame around the plate
+- DO NOT include screws, dealer stickers, bumper trim, or chrome
+
+Coordinate system (NORMALIZED to this cropped image):
+- x = 0.0 → LEFT edge of THIS image
+- x = 1.0 → RIGHT edge of THIS image
+- y = 0.0 → TOP edge of THIS image
+- y = 1.0 → BOTTOM edge of THIS image
+
+Return ONLY this JSON (3 decimal places, no markdown, no explanation):
+{"tl":{"x":0.123,"y":0.456},"tr":{"x":0.789,"y":0.450},"br":{"x":0.795,"y":0.567},"bl":{"x":0.118,"y":0.572}}`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -49,7 +72,7 @@ Return ONLY this JSON (no markdown, no explanation):
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 200,
+        max_tokens: 400,
         messages: [{
           role: 'user',
           content: [
