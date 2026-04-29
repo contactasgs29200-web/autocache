@@ -1227,8 +1227,8 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
 
   const detH = ((bl.y - tl.y) + (br.y - tr.y)) / 2;
   const detW = ((tr.x - tl.x) + (br.x - bl.x)) / 2;
-  if (detH < ph * 0.4 || detH > ph * 2.5) return null;
-  if (detW < detH * 1.5) return null;
+  if (detH <= 0 || detW <= 0) return null;
+  if (detW < detH * 1.2) return null;
 
   console.log(`WhiteBlob corners: TL(${tl.x.toFixed(3)},${tl.y.toFixed(3)}) TR(${tr.x.toFixed(3)},${tr.y.toFixed(3)}) BR(${br.x.toFixed(3)},${br.y.toFixed(3)}) BL(${bl.x.toFixed(3)},${bl.y.toFixed(3)})`);
   return { tl, tr, br, bl };
@@ -1402,6 +1402,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     const contour   = aiCorners ?? detectPlateCornersByContour(ctx, plate, c.width, c.height);
     const scanned   = contour   ?? scanPlateEdgesFromCrop(ctx, plate, c.width, c.height);
     savedCorners    = scanned   ?? buildCorners(plate, near_side, angle_deg, null);
+    const method = aiCorners ? 'Claude-AI' : contour ? 'WhiteBlob' : scanned ? 'EdgeScan' : 'Geometric';
+    console.log(`Corner method: ${method}`);
   }
 
   // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)
