@@ -1022,10 +1022,10 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-// Détection de coins par Claude Vision (Sonnet 4.6) — méthode primaire.
-// Envoie l'IMAGE COMPLÈTE à Claude : pas de crop, pas de remapping de coordonnées.
+// Détection de coins par Claude Vision (Sonnet 4.6) — méthode primaire et unique.
+// Envoie l'IMAGE COMPLÈTE à Claude avec un hint PR optionnel.
 // Claude retourne directement les 4 coins normalisés (0-1) dans l'image complète.
-async function detectPlateCornersByAI(ctx, imgW, imgH) {
+async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
   // Réduire à max 1200px pour garder la réponse rapide (<400 Ko en JPEG)
   const scale = Math.min(1, 1200 / Math.max(imgW, imgH));
   const oc = document.createElement('canvas');
@@ -1034,15 +1034,21 @@ async function detectPlateCornersByAI(ctx, imgW, imgH) {
   oc.getContext('2d').drawImage(ctx.canvas, 0, 0, imgW, imgH, 0, 0, oc.width, oc.height);
   const b64 = oc.toDataURL('image/jpeg', 0.88).split(',')[1];
 
+  // Hint PR : centre approximatif de la plaque détectée (peut être inexact ou faux)
+  const hint = plate ? {
+    cx: ((plate.tl.x + plate.tr.x) / 2).toFixed(3),
+    cy: ((plate.tl.y + plate.bl.y) / 2).toFixed(3),
+  } : null;
+
   try {
     const r = await fetch('/api/plate-corners', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ b64 }),
+      body: JSON.stringify({ b64, hint }),
     });
-    if (!r.ok) { console.warn('AI corners HTTP', r.status); return null; }
+    if (!r.ok) { console.warn('AI corners HTTP', r.status, await r.text()); return null; }
     const c = await r.json();
-    if (!c.tl || !c.tr || !c.br || !c.bl) return null;
+    if (!c.tl || !c.tr || !c.br || !c.bl) { console.warn('AI corners missing', c); return null; }
 
     // Coordonnées directement en repère image complète (0-1) — aucun remapping nécessaire
     const result = { tl: c.tl, tr: c.tr, br: c.br, bl: c.bl };
@@ -1371,16 +1377,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     const { near_side, angle_deg } = angleData ?? estimateAngleFromPosition(plate);
 
-    // 1. Claude Vision (méthode primaire) — la plus fiable, gère perspective + plaques multiples
-    // 2. Fallback : blob blanc (scan luminosité)
-    // 3. Fallback : scan extérieur du crop
-    // 4. Fallback : calcul géométrique pur depuis PR
-    const aiCorners = await detectPlateCornersByAI(ctx, c.width, c.height);
-    const contour   = aiCorners ?? detectPlateCornersByContour(ctx, plate, c.width, c.height);
-    const scanned   = contour   ?? scanPlateEdgesFromCrop(ctx, plate, c.width, c.height);
-    savedCorners    = scanned   ?? buildCorners(plate, near_side, angle_deg, null);
-    const method = aiCorners ? 'Claude-AI' : contour ? 'WhiteBlob' : scanned ? 'EdgeScan' : 'Geometric';
-    console.log(`Corner method: ${method}`);
+    // Claude Vision : image complète → coins directs, pas de remapping.
+    // Si Claude échoue, on n'affiche rien (évite les points fantaisie sur roue/sol).
+    savedCorners = await detectPlateCornersByAI(ctx, plate, c.width, c.height);
+    console.log(`Corner method: ${savedCorners ? 'Claude-AI' : 'failed/null'}`);
   }
 
   // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)

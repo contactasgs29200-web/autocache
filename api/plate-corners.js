@@ -19,50 +19,46 @@ function extractJSON(txt) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { b64 } = req.body;
+  const { b64, hint } = req.body;
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
-  const prompt = `PRECISE LICENSE PLATE CORNER DETECTION
+  const hintLine = hint
+    ? `\nSEARCH HINT: An automated detector (may be wrong) estimated the plate center near x≈${hint.cx}, y≈${hint.cy}. Use this as a starting point but ALWAYS verify visually — it might point to a wheel, background, or wrong object.\n`
+    : '';
 
+  const prompt = `PRECISE LICENSE PLATE CORNER DETECTION
+${hintLine}
 You are looking at a FULL vehicle photo. Find the main vehicle's license plate.
 
 ═══ STEP 1 — IDENTIFY THE CORRECT PLATE ═══
-If multiple plates are visible (other vehicles in background), pick the one belonging to the MAIN (foreground) vehicle — typically the LARGEST and most prominent plate in the image. Ignore plates of background vehicles.
+If multiple plates are visible (other vehicles in background), pick the one belonging to the MAIN (foreground) vehicle — the largest and most prominent. Ignore background plates, wheels, hubcaps, stickers, and all non-plate objects.
 
-A French license plate is:
-- A flat rectangular plaque mounted on the front or rear bumper
-- WHITE OR YELLOW background with alphanumeric characters (e.g. "FJ-713-KZ", "DM-996-HX")
-- Has a BLUE EU STRIP on the LEFT side with letter "F"
-- Has a small DEPARTMENT CODE on the RIGHT side (e.g. "75", "77", "92")
+A French license plate:
+- Flat rectangular plaque on the front or rear bumper
+- WHITE or YELLOW background with alphanumeric text (e.g. "FJ-713-KZ", "FG-976-DN")
+- Blue EU strip on LEFT edge with letter "F"
+- Small department code on RIGHT edge (e.g. "06", "75", "92")
+- NOT a wheel, NOT a hubcap, NOT a sticker, NOT a grille
 
 ═══ STEP 2 — REASON ABOUT PERSPECTIVE ═══
-The plate is a physical rectangle (520×110mm). Due to perspective:
-- Camera ABOVE the plate → top edge appears SHORTER than bottom edge
-- Camera BELOW the plate → top edge appears LONGER than bottom edge
-- Car turned LEFT → RIGHT side of plate appears TALLER
-- Car turned RIGHT → LEFT side of plate appears TALLER
-The 4 corners often form a NON-RECTANGULAR QUADRILATERAL — that's expected and correct.
+The plate is 520×110mm physical rectangle. Due to camera angle:
+- Camera above → top edge shorter than bottom
+- Car turned → near side appears taller
+The 4 corners form a QUADRILATERAL, not necessarily a rectangle.
 
 ═══ STEP 3 — PLACE THE 4 CORNERS PRECISELY ═══
-Each corner sits on the OUTER EDGE of the plate's flat surface:
-- INCLUDE the blue EU strip (it's part of the plate surface)
-- INCLUDE the department code on the right
-- DO NOT include the plastic/metal mounting frame around the plate
-- DO NOT include screws, dealer stickers, bumper trim, or chrome
+Corners on the OUTER EDGE of the plate surface only:
+- INCLUDE the blue EU strip and department code
+- DO NOT include mounting frame, screws, bumper trim, chrome
 
-Coordinate system (NORMALIZED to the FULL image):
-- x = 0.0 → LEFT edge of the image
-- x = 1.0 → RIGHT edge of the image
-- y = 0.0 → TOP edge of the image
-- y = 1.0 → BOTTOM edge of the image
+Coordinate system (full image):
+- x=0.0 = LEFT edge, x=1.0 = RIGHT edge
+- y=0.0 = TOP edge, y=1.0 = BOTTOM edge
 
-The plate will typically occupy a small portion of the full image (maybe 5-30% of width).
-Be precise — small errors in a full-image context have large pixel impact.
-
-Return ONLY this JSON (3 decimal places, no markdown, no explanation):
+Return ONLY this JSON (3 decimal places, no markdown):
 {"tl":{"x":0.123,"y":0.456},"tr":{"x":0.789,"y":0.450},"br":{"x":0.795,"y":0.567},"bl":{"x":0.118,"y":0.572}}`;
 
   try {
