@@ -1023,57 +1023,34 @@ async function detectPlate(b64, imgW, imgH) {
 }
 
 // Détection de coins par Claude Vision (Sonnet 4.6) — méthode primaire.
-// Envoie un crop large autour de PR à /api/plate-corners qui retourne les 4 coins
-// précis. Plus fiable que toute approche pixel pour gérer perspective + plaques multiples.
-async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
-  const pw = plate.tr.x - plate.tl.x;
-  const ph = plate.bl.y - plate.tl.y;
-  const pCx = (plate.tl.x + plate.tr.x) / 2;
-  const pCy = (plate.tl.y + plate.bl.y) / 2;
-
-  // Crop large : couvre la plaque entière même si PR a partiellement détecté.
-  // Marge Y généreuse pour donner du contexte à Claude (bumper, voiture).
-  const halfW = Math.max(pw * 0.7, ph * 3.5) + 0.15;
-  const halfH = Math.max(ph * 1.8, 0.10);
-  const cx = Math.max(0, Math.round((pCx - halfW) * imgW));
-  const cy = Math.max(0, Math.round((pCy - halfH) * imgH));
-  const cw = Math.min(imgW - cx, Math.round(halfW * 2 * imgW));
-  const ch = Math.min(imgH - cy, Math.round(halfH * 2 * imgH));
-  if (cw < 50 || ch < 30) return null;
-
-  // Rendu du crop en JPEG (max 1400px de côté pour rester rapide)
-  const scale = Math.min(1, 1400 / Math.max(cw, ch));
+// Envoie l'IMAGE COMPLÈTE à Claude : pas de crop, pas de remapping de coordonnées.
+// Claude retourne directement les 4 coins normalisés (0-1) dans l'image complète.
+async function detectPlateCornersByAI(ctx, imgW, imgH) {
+  // Réduire à max 1200px pour garder la réponse rapide (<400 Ko en JPEG)
+  const scale = Math.min(1, 1200 / Math.max(imgW, imgH));
   const oc = document.createElement('canvas');
-  oc.width  = Math.round(cw * scale);
-  oc.height = Math.round(ch * scale);
-  oc.getContext('2d').drawImage(ctx.canvas, cx, cy, cw, ch, 0, 0, oc.width, oc.height);
-  const cropB64 = oc.toDataURL('image/jpeg', 0.92).split(',')[1];
+  oc.width  = Math.round(imgW * scale);
+  oc.height = Math.round(imgH * scale);
+  oc.getContext('2d').drawImage(ctx.canvas, 0, 0, imgW, imgH, 0, 0, oc.width, oc.height);
+  const b64 = oc.toDataURL('image/jpeg', 0.88).split(',')[1];
 
   try {
     const r = await fetch('/api/plate-corners', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ b64: cropB64 }),
+      body: JSON.stringify({ b64 }),
     });
-    if (!r.ok) {
-      console.warn('AI corners HTTP', r.status);
-      return null;
-    }
+    if (!r.ok) { console.warn('AI corners HTTP', r.status); return null; }
     const c = await r.json();
     if (!c.tl || !c.tr || !c.br || !c.bl) return null;
 
-    // Re-mapper du repère crop (0–1) vers l'image complète (0–1)
-    const map = p => ({
-      x: Math.max(0, Math.min(1, (cx + p.x * cw) / imgW)),
-      y: Math.max(0, Math.min(1, (cy + p.y * ch) / imgH)),
-    });
-    const result = { tl: map(c.tl), tr: map(c.tr), br: map(c.br), bl: map(c.bl) };
+    // Coordonnées directement en repère image complète (0-1) — aucun remapping nécessaire
+    const result = { tl: c.tl, tr: c.tr, br: c.br, bl: c.bl };
 
-    // Sanity minimaliste : aspect ratio plaque (≥ 1.5:1) et taille non nulle
     const detH = ((result.bl.y - result.tl.y) + (result.br.y - result.tr.y)) / 2;
     const detW = ((result.tr.x - result.tl.x) + (result.br.x - result.bl.x)) / 2;
-    if (detH <= 0 || detW <= 0)      { console.warn('AI corners degenerate', detH, detW); return null; }
-    if (detW < detH * 1.2)           { console.warn('AI corners aspect fail', detW, detH); return null; }
+    if (detH <= 0 || detW <= 0) { console.warn('AI corners degenerate', detH, detW); return null; }
+    if (detW < detH * 1.2)      { console.warn('AI corners aspect fail', detW, detH); return null; }
 
     console.log(`AI corners: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) TR(${result.tr.x.toFixed(3)},${result.tr.y.toFixed(3)}) BR(${result.br.x.toFixed(3)},${result.br.y.toFixed(3)}) BL(${result.bl.x.toFixed(3)},${result.bl.y.toFixed(3)})`);
     return result;
@@ -1398,7 +1375,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     // 2. Fallback : blob blanc (scan luminosité)
     // 3. Fallback : scan extérieur du crop
     // 4. Fallback : calcul géométrique pur depuis PR
-    const aiCorners = await detectPlateCornersByAI(ctx, plate, c.width, c.height);
+    const aiCorners = await detectPlateCornersByAI(ctx, c.width, c.height);
     const contour   = aiCorners ?? detectPlateCornersByContour(ctx, plate, c.width, c.height);
     const scanned   = contour   ?? scanPlateEdgesFromCrop(ctx, plate, c.width, c.height);
     savedCorners    = scanned   ?? buildCorners(plate, near_side, angle_deg, null);
