@@ -1022,148 +1022,92 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-// Détection de coins par Canny (Sobel → NMS → hystérésis) + régression de 4 droites.
-// 1. Crop centré sur la détection PR, largeur = max(PR, 4.7×hauteur) + 25% margin
-//    → corrige les cas où PR ne détecte qu'une fraction de la plaque
-// 2. Blur gaussien 5×5
-// 3. Gradients Sobel Gx/Gy → magnitude + direction
-// 4. Non-maximum suppression + hystérésis adaptative
-// 5. Edges horizontaux (|gy|>|gx|*0.5) → bords haut/bas par colonne
-//    Edges verticaux  (|gx|>|gy|*0.5) → bords gauche/droit par ligne
-// 6. Filtrage médian + régression linéaire sur chaque bord → 4 droites
-// 7. Intersection des 4 droites → 4 coins (indépendant des X de PR)
+// Détection de plaque par blob blanc : la plaque est le seul grand rectangle blanc
+// dans la zone de pare-chocs. Canny échouait car il détectait les bords de carrosserie.
+//
+// 1. Crop large centré sur PR (±3.5× hauteur pour couvrir les détections partielles)
+// 2. Canal "blancheur" = min(R,G,B) : blanc=élevé, bleu-EU=faible, gris/noir=faible
+// 3. Blur 9×9 pour fondre les caractères noirs dans le fond blanc de la plaque
+// 4. Seuil à 80 % du max → seul le blanc de plaque reste au-dessus du seuil
+// 5. Scan colonne → plus longue séquence blanche = bord haut/bas de plaque
+//    Scan ligne  → plus longue séquence blanche = bord gauche/droit de plaque
+//    Filtre taille : longueur attendue ×0.45 à ×2.0 pour rejeter murs/sols
+// 6. Filtrage médian + régression linéaire 4 droites + intersection → 4 coins
 function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
   const pw = plate.tr.x - plate.tl.x;
   const ph = plate.bl.y - plate.tl.y;
-
-  // Plaque française : 520×110 mm ≈ 4.7:1. Si PR ne détecte qu'une tranche, élargir.
-  const effectivePw = Math.max(pw, ph * 4.7);
   const pCx = (plate.tl.x + plate.tr.x) / 2;
   const pCy = (plate.tl.y + plate.bl.y) / 2;
-  const mg = 0.25;
 
-  const cx = Math.max(0, Math.round((pCx - effectivePw / 2 * (1 + mg)) * imgW));
-  const cy = Math.max(0, Math.round((pCy - ph / 2 * (1 + 2 * mg)) * imgH));
-  const cw = Math.min(imgW - cx, Math.round(effectivePw * (1 + 2 * mg) * imgW));
-  const ch = Math.min(imgH - cy, Math.round(ph * (1 + 2 * mg) * imgH));
+  // Crop large pour couvrir même les détections partielles de PR
+  const halfW = Math.max(pw * 0.6, ph * 3.5) + 0.20;
+  const halfH = ph * 0.85;
+  const cx = Math.max(0, Math.round((pCx - halfW) * imgW));
+  const cy = Math.max(0, Math.round((pCy - halfH) * imgH));
+  const cw = Math.min(imgW - cx, Math.round(halfW * 2 * imgW));
+  const ch = Math.min(imgH - cy, Math.round(halfH * 2 * imgH));
   if (cw < 20 || ch < 10) return null;
 
   const pixels = ctx.getImageData(cx, cy, cw, ch).data;
 
-  // Niveaux de gris
-  const gray = new Float32Array(cw * ch);
+  // "Blancheur" = min(R,G,B) : blanc=255, bleu-EU=~0, gris/noir=faible
+  // Plus discriminant que la luminosité pour isoler le fond blanc de la plaque
+  const white = new Float32Array(cw * ch);
   for (let i = 0; i < cw * ch; i++)
-    gray[i] = (pixels[i*4] + pixels[i*4+1] + pixels[i*4+2]) / 3;
+    white[i] = Math.min(pixels[i*4], pixels[i*4+1], pixels[i*4+2]);
 
-  // Blur gaussien 5×5 séparable
-  const k5 = [1, 4, 6, 4, 1];
+  // Blur 9×9 : fusionne les caractères noirs dans le fond blanc
+  const k9 = [1, 8, 28, 56, 70, 56, 28, 8, 1]; // somme = 256
   const tmp = new Float32Array(cw * ch);
   for (let r = 0; r < ch; r++)
     for (let c = 0; c < cw; c++) {
       let s = 0;
-      for (let k = -2; k <= 2; k++) s += k5[k+2] * gray[r*cw + Math.max(0, Math.min(cw-1, c+k))];
-      tmp[r*cw+c] = s / 16;
+      for (let k = -4; k <= 4; k++) s += k9[k+4] * white[r*cw + Math.max(0, Math.min(cw-1, c+k))];
+      tmp[r*cw+c] = s / 256;
     }
   const blur = new Float32Array(cw * ch);
   for (let r = 0; r < ch; r++)
     for (let c = 0; c < cw; c++) {
       let s = 0;
-      for (let k = -2; k <= 2; k++) s += k5[k+2] * tmp[Math.max(0, Math.min(ch-1, r+k))*cw+c];
-      blur[r*cw+c] = s / 16;
+      for (let k = -4; k <= 4; k++) s += k9[k+4] * tmp[Math.max(0, Math.min(ch-1, r+k))*cw+c];
+      blur[r*cw+c] = s / 256;
     }
 
-  // Gradients Sobel
-  const gx = new Float32Array(cw * ch);
-  const gy = new Float32Array(cw * ch);
-  const mag = new Float32Array(cw * ch);
-  for (let r = 1; r < ch - 1; r++) {
-    for (let c = 1; c < cw - 1; c++) {
-      const tl = blur[(r-1)*cw+(c-1)], tc = blur[(r-1)*cw+c], tr2 = blur[(r-1)*cw+(c+1)];
-      const ml = blur[r*cw+(c-1)],                              mr  = blur[r*cw+(c+1)];
-      const bl = blur[(r+1)*cw+(c-1)], bc = blur[(r+1)*cw+c],  br2 = blur[(r+1)*cw+(c+1)];
-      gx[r*cw+c] = -tl - 2*ml - bl + tr2 + 2*mr + br2;
-      gy[r*cw+c] = -tl - 2*tc - tr2 + bl  + 2*bc + br2;
-      mag[r*cw+c] = Math.hypot(gx[r*cw+c], gy[r*cw+c]);
-    }
-  }
+  // Seuil à 80 % du max → seul le blanc de plaque reste (mur gris, sol, chrome exclus)
+  let maxB = 0;
+  for (let i = 0; i < blur.length; i++) if (blur[i] > maxB) maxB = blur[i];
+  if (maxB < 155) return null;
+  const thresh = maxB * 0.80;
 
-  // Non-maximum suppression
-  const nms = new Float32Array(cw * ch);
-  for (let r = 1; r < ch - 1; r++) {
-    for (let c = 1; c < cw - 1; c++) {
-      const idx = r*cw+c;
-      const angle = ((Math.atan2(gy[idx], gx[idx]) * 180 / Math.PI) % 180 + 180) % 180;
-      let n1, n2;
-      if (angle < 22.5 || angle >= 157.5)      { n1 = mag[(r-1)*cw+c]; n2 = mag[(r+1)*cw+c]; }
-      else if (angle < 67.5)                    { n1 = mag[(r-1)*cw+(c+1)]; n2 = mag[(r+1)*cw+(c-1)]; }
-      else if (angle < 112.5)                   { n1 = mag[r*cw+(c-1)]; n2 = mag[r*cw+(c+1)]; }
-      else                                      { n1 = mag[(r-1)*cw+(c-1)]; n2 = mag[(r+1)*cw+(c+1)]; }
-      nms[idx] = (mag[idx] >= n1 && mag[idx] >= n2) ? mag[idx] : 0;
-    }
-  }
+  const expH = ph * imgH;                       // hauteur attendue en px
+  const expW = Math.max(pw, ph * 4.7) * imgW;  // largeur attendue en px (ratio 4.7:1)
 
-  // Seuils adaptatifs (percentile 70 % et 40 % de la magnitude NMS)
-  const nonZero = [];
-  for (let i = 0; i < nms.length; i++) if (nms[i] > 0) nonZero.push(nms[i]);
-  if (nonZero.length < 10) return null;
-  nonZero.sort((a, b) => a - b);
-  const hiThr = nonZero[Math.floor(nonZero.length * 0.70)];
-  const loThr = hiThr * 0.4;
-
-  // Hystérésis : les pixels forts connectent les pixels faibles
-  const edge = new Uint8Array(cw * ch);
-  const stack = [];
-  for (let i = 0; i < nms.length; i++) {
-    if (nms[i] >= hiThr) { edge[i] = 2; stack.push(i); }
-    else if (nms[i] >= loThr) edge[i] = 1;
-  }
-  while (stack.length) {
-    const idx = stack.pop();
-    const r = Math.floor(idx / cw), c = idx % cw;
-    for (let dr = -1; dr <= 1; dr++)
-      for (let dc = -1; dc <= 1; dc++) {
-        if (!dr && !dc) continue;
-        const nr = r+dr, nc = c+dc;
-        if (nr >= 0 && nr < ch && nc >= 0 && nc < cw) {
-          const ni = nr*cw+nc;
-          if (edge[ni] === 1) { edge[ni] = 2; stack.push(ni); }
-        }
-      }
-  }
-
-  // Edges horizontaux (bords haut/bas) : scanner chaque colonne, garder 1er/dernier contour
-  // où |gy| > |gx| * 0.5 (gradient principalement vertical = bord horizontal)
+  // Scan colonne → plus longue séquence blanche = bord haut/bas
   const topPts = [], botPts = [];
-  for (let i = 0; i <= 38; i++) {
-    const col = Math.round((0.10 + i * 0.021) * cw); // 10 % à 90 % du crop
-    if (col < 1 || col >= cw - 1) continue;
-    const colEdges = [];
-    for (let r = 1; r < ch - 1; r++) {
-      const idx = r*cw+col;
-      if (edge[idx] !== 2) continue;
-      if (Math.abs(gy[idx]) < Math.abs(gx[idx]) * 0.5) continue;
-      colEdges.push(r);
+  for (let c = 1; c < cw - 1; c++) {
+    let bS = -1, bL = 0, cS = -1, cL = 0;
+    for (let r = 0; r < ch; r++) {
+      if (blur[r*cw+c] >= thresh) { if (cS < 0) cS = r; cL++; }
+      else if (cS >= 0) { if (cL > bL) { bL = cL; bS = cS; } cS = -1; cL = 0; }
     }
-    if (colEdges.length < 2) continue;
-    topPts.push([col, colEdges[0]]);
-    botPts.push([col, colEdges[colEdges.length - 1]]);
+    if (cL > bL) { bL = cL; bS = cS; }
+    if (bS < 0 || bL < expH * 0.45 || bL > expH * 2.0) continue;
+    topPts.push([c, bS]);
+    botPts.push([c, bS + bL - 1]);
   }
 
-  // Edges verticaux (bords gauche/droit) : scanner chaque ligne, garder 1er/dernier contour
-  // où |gx| > |gy| * 0.5 (gradient principalement horizontal = bord vertical)
+  // Scan ligne → plus longue séquence blanche = bord gauche/droit
   const leftPts = [], rightPts = [];
-  const rStart = Math.round(ch * 0.25), rEnd = Math.round(ch * 0.75);
-  for (let r = rStart; r <= rEnd; r++) {
-    const rowEdges = [];
-    for (let c = 1; c < cw - 1; c++) {
-      const idx = r*cw+c;
-      if (edge[idx] !== 2) continue;
-      if (Math.abs(gx[idx]) < Math.abs(gy[idx]) * 0.5) continue;
-      rowEdges.push(c);
+  for (let r = 1; r < ch - 1; r++) {
+    let bS = -1, bL = 0, cS = -1, cL = 0;
+    for (let c = 0; c < cw; c++) {
+      if (blur[r*cw+c] >= thresh) { if (cS < 0) cS = c; cL++; }
+      else if (cS >= 0) { if (cL > bL) { bL = cL; bS = cS; } cS = -1; cL = 0; }
     }
-    if (rowEdges.length < 2) continue;
-    leftPts.push([rowEdges[0], r]);
-    rightPts.push([rowEdges[rowEdges.length - 1], r]);
+    if (cL > bL) { bL = cL; bS = cS; }
+    if (bS < 0 || bL < expW * 0.45 || bL > expW * 2.0) continue;
+    leftPts.push([bS, r]);
+    rightPts.push([bS + bL - 1, r]);
   }
 
   if (topPts.length < 5 || botPts.length < 5) return null;
@@ -1174,76 +1118,58 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
     const vals = pts.map(p => p[axis]).sort((a, b) => a - b);
     const med  = vals[Math.floor(vals.length / 2)];
     const mad  = vals.map(v => Math.abs(v - med)).sort((a, b) => a - b)[Math.floor(vals.length / 2)];
-    const tol  = Math.max(6, mad * 3);
-    return pts.filter(p => Math.abs(p[axis] - med) <= tol);
+    return pts.filter(p => Math.abs(p[axis] - med) <= Math.max(8, mad * 3));
   };
-  const topF   = medFilter(topPts,   1);
-  const botF   = medFilter(botPts,   1);
-  const leftF  = medFilter(leftPts,  0);
-  const rightF = medFilter(rightPts, 0);
+  const topF = medFilter(topPts, 1), botF = medFilter(botPts, 1);
+  const leftF = medFilter(leftPts, 0), rightF = medFilter(rightPts, 0);
   if (topF.length < 4 || botF.length < 4) return null;
   if (leftF.length < 4 || rightF.length < 4) return null;
 
-  // Régression linéaire horizontale : y = m·x + b
-  const fitHLine = pts => {
-    const n  = pts.length;
-    const mx = pts.reduce((a, p) => a + p[0], 0) / n;
-    const my = pts.reduce((a, p) => a + p[1], 0) / n;
-    const ssxx = pts.reduce((a, p) => a + (p[0]-mx)**2, 0);
-    const ssxy = pts.reduce((a, p) => a + (p[0]-mx)*(p[1]-my), 0);
+  // Régression y = m·x + b (bords horizontaux)
+  const fitH = pts => {
+    const n = pts.length;
+    const mx = pts.reduce((a,p) => a+p[0],0)/n, my = pts.reduce((a,p) => a+p[1],0)/n;
+    const ssxx = pts.reduce((a,p) => a+(p[0]-mx)**2,0), ssxy = pts.reduce((a,p) => a+(p[0]-mx)*(p[1]-my),0);
     if (ssxx < 1) return null;
-    const m = ssxy / ssxx;
-    return { m, b: my - m * mx };
+    return { m: ssxy/ssxx, b: my - ssxy/ssxx*mx };
   };
-  // Régression linéaire verticale : x = n·y + d
-  const fitVLine = pts => {
-    const n  = pts.length;
-    const my = pts.reduce((a, p) => a + p[1], 0) / n;
-    const mx = pts.reduce((a, p) => a + p[0], 0) / n;
-    const ssyy = pts.reduce((a, p) => a + (p[1]-my)**2, 0);
-    const ssxy = pts.reduce((a, p) => a + (p[0]-mx)*(p[1]-my), 0);
+  // Régression x = n·y + d (bords verticaux)
+  const fitV = pts => {
+    const n = pts.length;
+    const my = pts.reduce((a,p) => a+p[1],0)/n, mx = pts.reduce((a,p) => a+p[0],0)/n;
+    const ssyy = pts.reduce((a,p) => a+(p[1]-my)**2,0), ssxy = pts.reduce((a,p) => a+(p[0]-mx)*(p[1]-my),0);
     if (ssyy < 1) return null;
-    const nSlope = ssxy / ssyy;
-    return { n: nSlope, d: mx - nSlope * my };
+    const nv = ssxy/ssyy;
+    return { n: nv, d: mx - nv*my };
   };
 
-  const topLine   = fitHLine(topF);
-  const botLine   = fitHLine(botF);
-  const leftLine  = fitVLine(leftF);
-  const rightLine = fitVLine(rightF);
-  if (!topLine || !botLine || !leftLine || !rightLine) return null;
+  const [topL, botL, leftL, rightL] = [fitH(topF), fitH(botF), fitV(leftF), fitV(rightF)];
+  if (!topL || !botL || !leftL || !rightL) return null;
 
-  // Intersection droite horizontale (y=m·x+b) et verticale (x=n·y+d)
-  // y = m·(n·y+d)+b → y(1-mn) = md+b → y = (md+b)/(1-mn) ; x = n·y+d
-  const intersect = (h, v) => {
-    const denom = 1 - h.m * v.n;
-    if (Math.abs(denom) < 1e-6) return null;
-    const y = (h.m * v.d + h.b) / denom;
-    return { x: v.n * y + v.d, y };
+  // Intersection droite h (y=m*x+b) et droite v (x=n*y+d)
+  const isect = (h, v) => {
+    const den = 1 - h.m * v.n;
+    if (Math.abs(den) < 1e-6) return null;
+    const y = (h.m * v.d + h.b) / den;
+    return { x: v.n*y + v.d, y };
   };
 
-  const tlC = intersect(topLine, leftLine);
-  const trC = intersect(topLine, rightLine);
-  const brC = intersect(botLine, rightLine);
-  const blC = intersect(botLine, leftLine);
+  const tlC = isect(topL, leftL), trC = isect(topL, rightL);
+  const brC = isect(botL, rightL), blC = isect(botL, leftL);
   if (!tlC || !trC || !brC || !blC) return null;
 
-  // Convertir du repère crop vers coordonnées normalisées image
   const toImg = p => ({
     x: Math.max(0, Math.min(1, (cx + p.x) / imgW)),
     y: Math.max(0, Math.min(1, (cy + p.y) / imgH)),
   });
-  const tl = toImg(tlC), tr = toImg(trC), br = toImg(brC), bl = toImg(blC);
+  const [tl, tr, br, bl] = [toImg(tlC), toImg(trC), toImg(brC), toImg(blC)];
 
-  // Sanity : hauteur détectée cohérente avec PR (×0.5 à ×2)
   const detH = ((bl.y - tl.y) + (br.y - tr.y)) / 2;
-  if (detH < ph * 0.5 || detH > ph * 2.0) return null;
-  // Sanity : largeur plaque ≥ 2× hauteur (évite détection d'un objet vertical)
   const detW = ((tr.x - tl.x) + (br.x - bl.x)) / 2;
-  if (detW < detH * 2) return null;
+  if (detH < ph * 0.4 || detH > ph * 2.5) return null;
+  if (detW < detH * 1.5) return null;
 
-  console.log(`Canny corners: TL(${tl.x.toFixed(3)},${tl.y.toFixed(3)}) TR(${tr.x.toFixed(3)},${tr.y.toFixed(3)}) BR(${br.x.toFixed(3)},${br.y.toFixed(3)}) BL(${bl.x.toFixed(3)},${bl.y.toFixed(3)})`);
-
+  console.log(`WhiteBlob corners: TL(${tl.x.toFixed(3)},${tl.y.toFixed(3)}) TR(${tr.x.toFixed(3)},${tr.y.toFixed(3)}) BR(${br.x.toFixed(3)},${br.y.toFixed(3)}) BL(${bl.x.toFixed(3)},${bl.y.toFixed(3)})`);
   return { tl, tr, br, bl };
 }
 
