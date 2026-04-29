@@ -1069,11 +1069,11 @@ async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
     });
     const result = { tl: map(c.tl), tr: map(c.tr), br: map(c.br), bl: map(c.bl) };
 
-    // Sanity : dimensions cohérentes avec PR
+    // Sanity minimaliste : aspect ratio plaque (≥ 1.5:1) et taille non nulle
     const detH = ((result.bl.y - result.tl.y) + (result.br.y - result.tr.y)) / 2;
     const detW = ((result.tr.x - result.tl.x) + (result.br.x - result.bl.x)) / 2;
-    if (detH < ph * 0.4 || detH > ph * 3) { console.warn('AI corners H sanity fail', detH, ph); return null; }
-    if (detW < detH * 1.5)                { console.warn('AI corners aspect fail', detW, detH); return null; }
+    if (detH <= 0 || detW <= 0)      { console.warn('AI corners degenerate', detH, detW); return null; }
+    if (detW < detH * 1.2)           { console.warn('AI corners aspect fail', detW, detH); return null; }
 
     console.log(`AI corners: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) TR(${result.tr.x.toFixed(3)},${result.tr.y.toFixed(3)}) BR(${result.br.x.toFixed(3)},${result.br.y.toFixed(3)}) BL(${result.bl.x.toFixed(3)},${result.bl.y.toFixed(3)})`);
     return result;
