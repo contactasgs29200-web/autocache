@@ -1022,16 +1022,14 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-// Détection de coins par gradient Sobel + ajustement de droites.
-// Étapes :
-//   1. Blur gaussien 5×5 (réduit le bruit/caractères)
-//   2. Gradient Sobel → magnitude élevée aux bords de la plaque
-//   3. Pour chaque colonne (22-78 % du crop), scanner depuis le CENTRE vers l'EXTÉRIEUR :
-//      le premier pixel dont la luminosité en bande chute sous le seuil = bord de plaque.
-//      Partir du centre garantit qu'on trouve le bord de la plaque et non le chrome au-dessus.
-//   4. Filtrage médian des points collectés → élimine les faux positifs sur les caractères
-//   5. Régression linéaire sur les points de bord haut et bas → 2 droites perspectivées
-//   6. Intersection avec les X de PlateRecognizer → 4 coins exacts
+// Détection de coins par Canny (Sobel → NMS → hystérésis) + régression de droites.
+// 1. Blur gaussien 5×5
+// 2. Gradients Sobel Gx/Gy → magnitude + direction
+// 3. Non-maximum suppression (amincissement des contours)
+// 4. Double seuil adaptatif + hystérésis (edge tracking)
+// 5. Pour chaque colonne, premier et dernier pixel de contour "horizontal" = bord haut/bas
+// 6. Filtrage médian + régression linéaire → 2 droites perspectivées
+// 7. Intersection avec les X de PlateRecognizer → 4 coins exacts
 function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
   const pw = plate.tr.x - plate.tl.x;
   const ph = plate.bl.y - plate.tl.y;
@@ -1045,11 +1043,13 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
 
   const pixels = ctx.getImageData(cx, cy, cw, ch).data;
 
-  // Blur gaussien 5×5 séparable — lisse les caractères et réduit le bruit
-  const k5 = [1, 4, 6, 4, 1];
+  // Niveaux de gris
   const gray = new Float32Array(cw * ch);
   for (let i = 0; i < cw * ch; i++)
     gray[i] = (pixels[i*4] + pixels[i*4+1] + pixels[i*4+2]) / 3;
+
+  // Blur gaussien 5×5 séparable
+  const k5 = [1, 4, 6, 4, 1];
   const tmp = new Float32Array(cw * ch);
   for (let r = 0; r < ch; r++)
     for (let c = 0; c < cw; c++) {
@@ -1065,37 +1065,81 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
       blur[r*cw+c] = s / 16;
     }
 
-  // Luminosité en bande : moyenne sur ±BW colonnes autour d'une colonne cible
-  const BW = Math.max(2, Math.round(cw * 0.015));
-  const bandAvg = (col, row) => {
-    let s = 0, n = 0;
-    for (let dc = -BW; dc <= BW; dc++) {
-      const cc = col + dc;
-      if (cc >= 0 && cc < cw) { s += blur[row*cw+cc]; n++; }
+  // Gradients Sobel
+  const gx = new Float32Array(cw * ch);
+  const gy = new Float32Array(cw * ch);
+  const mag = new Float32Array(cw * ch);
+  for (let r = 1; r < ch - 1; r++) {
+    for (let c = 1; c < cw - 1; c++) {
+      const tl = blur[(r-1)*cw+(c-1)], tc = blur[(r-1)*cw+c], tr2 = blur[(r-1)*cw+(c+1)];
+      const ml = blur[r*cw+(c-1)],                              mr  = blur[r*cw+(c+1)];
+      const bl = blur[(r+1)*cw+(c-1)], bc = blur[(r+1)*cw+c],  br2 = blur[(r+1)*cw+(c+1)];
+      gx[r*cw+c] = -tl - 2*ml - bl + tr2 + 2*mr + br2;
+      gy[r*cw+c] = -tl - 2*tc - tr2 + bl  + 2*bc + br2;
+      mag[r*cw+c] = Math.hypot(gx[r*cw+c], gy[r*cw+c]);
     }
-    return n > 0 ? s / n : 0;
-  };
+  }
 
-  const midRow = Math.round(ch / 2);
+  // Non-maximum suppression
+  const nms = new Float32Array(cw * ch);
+  for (let r = 1; r < ch - 1; r++) {
+    for (let c = 1; c < cw - 1; c++) {
+      const idx = r*cw+c;
+      const angle = ((Math.atan2(gy[idx], gx[idx]) * 180 / Math.PI) % 180 + 180) % 180;
+      let n1, n2;
+      if (angle < 22.5 || angle >= 157.5)      { n1 = mag[(r-1)*cw+c]; n2 = mag[(r+1)*cw+c]; }
+      else if (angle < 67.5)                    { n1 = mag[(r-1)*cw+(c+1)]; n2 = mag[(r+1)*cw+(c-1)]; }
+      else if (angle < 112.5)                   { n1 = mag[r*cw+(c-1)]; n2 = mag[r*cw+(c+1)]; }
+      else                                      { n1 = mag[(r-1)*cw+(c-1)]; n2 = mag[(r+1)*cw+(c+1)]; }
+      nms[idx] = (mag[idx] >= n1 && mag[idx] >= n2) ? mag[idx] : 0;
+    }
+  }
 
-  // Pour chaque colonne échantillon, trouver le bord haut et bas depuis le centre
+  // Seuils adaptatifs (percentile 70 % et 40 % de la magnitude NMS)
+  const nonZero = [];
+  for (let i = 0; i < nms.length; i++) if (nms[i] > 0) nonZero.push(nms[i]);
+  if (nonZero.length < 10) return null;
+  nonZero.sort((a, b) => a - b);
+  const hiThr = nonZero[Math.floor(nonZero.length * 0.70)];
+  const loThr = hiThr * 0.4;
+
+  // Hystérésis : les pixels forts connectent les pixels faibles
+  const edge = new Uint8Array(cw * ch);
+  const stack = [];
+  for (let i = 0; i < nms.length; i++) {
+    if (nms[i] >= hiThr) { edge[i] = 2; stack.push(i); }
+    else if (nms[i] >= loThr) edge[i] = 1;
+  }
+  while (stack.length) {
+    const idx = stack.pop();
+    const r = Math.floor(idx / cw), c = idx % cw;
+    for (let dr = -1; dr <= 1; dr++)
+      for (let dc = -1; dc <= 1; dc++) {
+        if (!dr && !dc) continue;
+        const nr = r+dr, nc = c+dc;
+        if (nr >= 0 && nr < ch && nc >= 0 && nc < cw) {
+          const ni = nr*cw+nc;
+          if (edge[ni] === 1) { edge[ni] = 2; stack.push(ni); }
+        }
+      }
+  }
+
+  // Pour chaque colonne (22-78 % du crop), premier et dernier contour "horizontal"
+  // Un contour horizontal = gradient principalement vertical : |gy| > |gx| * 0.5
   const topPts = [], botPts = [];
   for (let i = 0; i <= 28; i++) {
-    const col = Math.round((0.22 + i * 0.02) * cw); // 22 % à 78 % par pas de 2 %
-    const ref = bandAvg(col, midRow);
-    if (ref < 140) continue;
-    const thresh = ref * 0.65;
-
-    // Bord supérieur : centre → haut (premier pixel sous le seuil = on quitte la plaque)
-    for (let r = midRow; r >= 0; r--) {
-      if (bandAvg(col, r) < thresh) { topPts.push([col, r + 1]); break; }
-      if (r === 0) topPts.push([col, 0]);
+    const col = Math.round((0.22 + i * 0.02) * cw);
+    if (col < 1 || col >= cw - 1) continue;
+    const colEdges = [];
+    for (let r = 1; r < ch - 1; r++) {
+      const idx = r*cw+col;
+      if (edge[idx] !== 2) continue;
+      if (Math.abs(gy[idx]) < Math.abs(gx[idx]) * 0.5) continue;
+      colEdges.push(r);
     }
-    // Bord inférieur : centre → bas
-    for (let r = midRow; r < ch; r++) {
-      if (bandAvg(col, r) < thresh) { botPts.push([col, r - 1]); break; }
-      if (r === ch - 1) botPts.push([col, ch - 1]);
-    }
+    if (colEdges.length < 2) continue;
+    topPts.push([col, colEdges[0]]);
+    botPts.push([col, colEdges[colEdges.length - 1]]);
   }
 
   if (topPts.length < 5 || botPts.length < 5) return null;
@@ -1133,7 +1177,6 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
   const blxC = (plate.bl?.x ?? plate.tl.x) * imgW - cx;
   const brxC = (plate.br?.x ?? plate.tr.x) * imgW - cx;
 
-  // Coordonnées Y de chaque coin par les droites ajustées
   const tly = (cy + topLine.m * tlxC + topLine.b) / imgH;
   const trY = (cy + topLine.m * trxC + topLine.b) / imgH;
   const bly = (cy + botLine.m * blxC + botLine.b) / imgH;
@@ -1143,11 +1186,11 @@ function detectPlateCornersByContour(ctx, plate, imgW, imgH) {
   if (bly - tly < ph * 0.5 || bly - tly > ph * 1.5) return null;
   if (brY - trY < ph * 0.5 || brY - trY > ph * 1.5) return null;
 
-  console.log(`Contour corners: TL(${plate.tl.x.toFixed(3)},${tly.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${trY.toFixed(3)}) BR(${plate.tr.x.toFixed(3)},${brY.toFixed(3)}) BL(${plate.tl.x.toFixed(3)},${bly.toFixed(3)})`);
+  console.log(`Canny corners: TL(${plate.tl.x.toFixed(3)},${tly.toFixed(3)}) TR(${plate.tr.x.toFixed(3)},${trY.toFixed(3)}) BR(${(plate.br?.x??plate.tr.x).toFixed(3)},${brY.toFixed(3)}) BL(${(plate.bl?.x??plate.tl.x).toFixed(3)},${bly.toFixed(3)})`);
 
   return {
-    tl: { x: Math.max(0, plate.tl.x),              y: Math.max(0, tly) },
-    tr: { x: Math.min(1, plate.tr.x),              y: Math.max(0, trY) },
+    tl: { x: Math.max(0, plate.tl.x),               y: Math.max(0, tly) },
+    tr: { x: Math.min(1, plate.tr.x),               y: Math.max(0, trY) },
     br: { x: Math.min(1, plate.br?.x ?? plate.tr.x), y: Math.min(1, brY) },
     bl: { x: Math.max(0, plate.bl?.x ?? plate.tl.x), y: Math.min(1, bly) },
   };
