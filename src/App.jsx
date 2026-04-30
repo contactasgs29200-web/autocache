@@ -1383,20 +1383,46 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     console.log(`Corner method: ${savedCorners ? 'Claude-AI' : 'failed/null'}`);
   }
 
-  // DEBUG : dessine 4 ronds rouges aux 4 coins détectés (sans appliquer le cache)
+  // DEBUG : dessine coins + quadrilatère + coords en overlay
   if (savedCorners) {
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
-    const corners = [savedCorners.tl, savedCorners.tr, savedCorners.br, savedCorners.bl].map(toPixel);
-    const r = Math.max(3, Math.round(c.width * 0.004));
-    corners.forEach(pt => {
+    const [ptl, ptr, pbr, pbl] = [savedCorners.tl, savedCorners.tr, savedCorners.br, savedCorners.bl].map(toPixel);
+    const r = Math.max(4, Math.round(c.width * 0.005));
+
+    // Quadrilatère
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(255,50,50,0.9)';
+    ctx.lineWidth = Math.max(2, r * 0.5);
+    ctx.stroke();
+    ctx.restore();
+
+    // Points + labels
+    const labels = ['TL', 'TR', 'BR', 'BL'];
+    [ptl, ptr, pbr, pbl].forEach((pt, i) => {
+      const corner = [savedCorners.tl, savedCorners.tr, savedCorners.br, savedCorners.bl][i];
       ctx.save();
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
       ctx.fillStyle = 'red';
       ctx.fill();
-      ctx.lineWidth = Math.max(2, r * 0.3);
       ctx.strokeStyle = 'white';
+      ctx.lineWidth = Math.max(1, r * 0.3);
       ctx.stroke();
+      // Label avec coordonnées
+      const fs = Math.max(12, Math.round(c.width * 0.018));
+      ctx.font = `bold ${fs}px monospace`;
+      ctx.fillStyle = 'white';
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = fs * 0.15;
+      const txt = `${labels[i]}(${corner.x.toFixed(2)},${corner.y.toFixed(2)})`;
+      const tx = Math.min(pt.x + r + 2, c.width - fs * txt.length * 0.6);
+      const ty = Math.max(pt.y - r - 2, fs);
+      ctx.strokeText(txt, tx, ty);
+      ctx.fillText(txt, tx, ty);
       ctx.restore();
     });
   }

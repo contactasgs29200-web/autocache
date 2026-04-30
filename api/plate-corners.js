@@ -1,6 +1,5 @@
 // /api/plate-corners.js
-// Claude Haiku Vision sur l'image complète — détecte les 4 coins réels de la plaque
-// Claude distingue la plaque d'immatriculation des stickers concessionnaire, protections, etc.
+// Claude Sonnet Vision sur l'image complète — chain-of-thought pour ancrer sur le texte de plaque
 
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
@@ -26,40 +25,40 @@ export default async function handler(req, res) {
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
   const hintLine = hint
-    ? `\nSEARCH HINT: An automated detector (may be wrong) estimated the plate center near x≈${hint.cx}, y≈${hint.cy}. Use this as a starting point but ALWAYS verify visually — it might point to a wheel, background, or wrong object.\n`
+    ? `\nHINT: An automated detector estimated the plate center near x=${hint.cx}, y=${hint.cy} (may be wrong — verify visually).\n`
     : '';
 
-  const prompt = `PRECISE LICENSE PLATE CORNER DETECTION
+  const prompt = `LICENSE PLATE CORNER DETECTION — THINK STEP BY STEP
 ${hintLine}
-You are looking at a FULL vehicle photo. Find the main vehicle's license plate.
+This is a FULL vehicle photo. Follow ALL 4 steps.
 
-═══ STEP 1 — IDENTIFY THE CORRECT PLATE ═══
-If multiple plates are visible (other vehicles in background), pick the one belonging to the MAIN (foreground) vehicle — the largest and most prominent. Ignore background plates, wheels, hubcaps, stickers, and all non-plate objects.
+STEP 1 — READ THE PLATE TEXT
+Look carefully at the bumper area. Find the flat rectangular white/yellow surface with alphanumeric registration text.
+State the exact characters you read (e.g. "DF-788-KV" or "AB-123-CD").
+This text is your anchor — do not proceed until you have found it.
 
-A French license plate:
-- Flat rectangular plaque on the front or rear bumper
-- WHITE or YELLOW background with alphanumeric text (e.g. "FJ-713-KZ", "FG-976-DN")
-- Blue EU strip on LEFT edge with letter "F"
-- Small department code on RIGHT edge (e.g. "06", "75", "92")
-- NOT a wheel, NOT a hubcap, NOT a sticker, NOT a grille
+STEP 2 — ESTIMATE POSITION AS PERCENTAGES
+Based on where the plate TEXT is located in the full image:
+- Plate left edge is at x ≈ __% from left
+- Plate right edge is at x ≈ __% from left
+- Plate top edge is at y ≈ __% from top
+- Plate bottom edge is at y ≈ __% from top
 
-═══ STEP 2 — REASON ABOUT PERSPECTIVE ═══
-The plate is 520×110mm physical rectangle. Due to camera angle:
-- Camera above → top edge shorter than bottom
-- Car turned → near side appears taller
-The 4 corners form a QUADRILATERAL, not necessarily a rectangle.
+STEP 3 — ACCOUNT FOR PERSPECTIVE
+Physical plate size: 520mm × 110mm (ratio ~4.7:1).
+Is the car straight-on (rectangle shape), slightly angled, or strongly angled (trapezoid shape)?
 
-═══ STEP 3 — PLACE THE 4 CORNERS PRECISELY ═══
-Corners on the OUTER EDGE of the plate surface only:
-- INCLUDE the blue EU strip and department code
-- DO NOT include mounting frame, screws, bumper trim, chrome
+STEP 4 — FINAL CORNER COORDINATES
+Convert your Step 2 percentages to 0-1 decimal values (divide by 100).
+Corners must be on the OUTER EDGE of the plate surface:
+- Include the blue EU strip on the left
+- Include the department code on the right
+- Exclude any mounting frame, screws, chrome, or bumper trim
 
-Coordinate system (full image):
-- x=0.0 = LEFT edge, x=1.0 = RIGHT edge
-- y=0.0 = TOP edge, y=1.0 = BOTTOM edge
+Coordinate axes: x=0.0 is LEFT edge, x=1.0 is RIGHT edge, y=0.0 is TOP, y=1.0 is BOTTOM.
 
-Return ONLY this JSON (3 decimal places, no markdown):
-{"tl":{"x":0.123,"y":0.456},"tr":{"x":0.789,"y":0.450},"br":{"x":0.795,"y":0.567},"bl":{"x":0.118,"y":0.572}}`;
+Return JSON with analysis field showing your reasoning:
+{"analysis":"I read DF-788-KV; plate left=35% right=67% top=40% bottom=55%; car straight-on","tl":{"x":0.350,"y":0.400},"tr":{"x":0.670,"y":0.400},"br":{"x":0.670,"y":0.550},"bl":{"x":0.350,"y":0.550}}`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -71,7 +70,7 @@ Return ONLY this JSON (3 decimal places, no markdown):
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 400,
+        max_tokens: 800,
         messages: [{
           role: 'user',
           content: [
@@ -96,6 +95,8 @@ Return ONLY this JSON (3 decimal places, no markdown):
     if (!raw) return res.status(500).json({ error: 'No JSON', text });
 
     const c = JSON.parse(raw);
+    if (c.analysis) console.log('Claude analysis:', c.analysis);
+
     const ok = p => p && typeof p.x === 'number' && typeof p.y === 'number'
       && p.x >= -0.05 && p.x <= 1.05 && p.y >= -0.05 && p.y <= 1.05;
 
@@ -103,15 +104,13 @@ Return ONLY this JSON (3 decimal places, no markdown):
       return res.status(500).json({ error: 'Invalid corners', c });
     }
 
-    // Validation : la plaque doit avoir un ratio largeur/hauteur raisonnable (1.2:1 à 12:1)
-    // Plus permissif car la plaque occupe une petite portion de l'image complète
     const w = Math.abs(c.tr.x - c.tl.x);
     const h = Math.abs(c.bl.y - c.tl.y);
-    if (h > 0 && (w / h < 1.2 || w / h > 12)) {
-      return res.status(500).json({ error: 'Aspect ratio invalid', w, h });
+    if (h > 0 && (w / h < 1.0 || w / h > 15)) {
+      return res.status(500).json({ error: 'Aspect ratio invalid', w, h, ratio: w/h });
     }
 
-    console.log('plate-corners OK:', JSON.stringify(c));
+    console.log('plate-corners OK:', JSON.stringify({ tl: c.tl, tr: c.tr, br: c.br, bl: c.bl }));
     return res.json({ tl: c.tl, tr: c.tr, br: c.br, bl: c.bl });
 
   } catch(e) {
