@@ -1022,46 +1022,139 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-// Détection de coins par Claude Vision (Sonnet 4.6) — méthode primaire et unique.
-// Envoie l'IMAGE COMPLÈTE à Claude avec un hint PR optionnel.
-// Claude retourne directement les 4 coins normalisés (0-1) dans l'image complète.
+// Détection de coins par Claude Vision (Sonnet 4.6) — deux modes selon fiabilité PR.
+//
+// Mode CROP (primaire) : si PR a une bbox aspect ratio > 1.5 (= plate-like, pas une roue),
+//   on envoie un crop large centré sur PR → plaque remplit ~30% du crop → Claude précis.
+//   Remapping: (cx + p.x*cw)/imgW, (cy + p.y*ch)/imgH
+//
+// Mode FULL (fallback) : si PR aspect ≤ 1.5 (roue, mauvais détection) ou si crop mode échoue,
+//   on envoie l'image complète avec chain-of-thought. Moins précis mais plus robuste.
+
+async function _claudeOnImage(b64, hint, isCrop) {
+  const hintLine = hint
+    ? `\nHINT: Approximate plate center at x=${hint.cx}, y=${hint.cy} (may be wrong).\n`
+    : '';
+
+  const prompt = isCrop
+    ? `LICENSE PLATE CORNER DETECTION — CROPPED IMAGE
+${hintLine}
+This image is a CROP centered around a vehicle license plate. The plate is the dominant feature.
+
+Find the French license plate:
+- White/yellow background with alphanumeric text (e.g. "DF-788-KV", "AB-123-CD")
+- Blue EU strip on LEFT edge with "F" and stars
+- Department code on RIGHT edge (e.g. "31", "75")
+
+Coordinate system (this cropped image):
+- x=0.0 = LEFT edge, x=1.0 = RIGHT edge
+- y=0.0 = TOP edge, y=1.0 = BOTTOM edge
+
+IMPORTANT: The plate SURFACE spans the FULL width of the white/yellow area.
+Include the blue EU strip. Exclude mounting frame, screws, chrome.
+
+Return ONLY JSON (3 decimals, no markdown):
+{"tl":{"x":0.120,"y":0.280},"tr":{"x":0.880,"y":0.270},"br":{"x":0.885,"y":0.720},"bl":{"x":0.115,"y":0.730}}`
+    : `LICENSE PLATE CORNER DETECTION — FULL IMAGE
+${hintLine}
+STEP 1 — READ THE PLATE TEXT: Find the white/yellow rectangular plaque on the bumper. What characters do you read?
+STEP 2 — ESTIMATE POSITION: Plate left≈__%, right≈__%, top≈__%, bottom≈__% of image.
+STEP 3 — CORNER COORDINATES: Convert percentages to 0-1 decimals.
+
+Include blue EU strip. Exclude mounting frame.
+x=0.0=left, x=1.0=right, y=0.0=top, y=1.0=bottom.
+
+Return JSON with analysis:
+{"analysis":"I read XX-XXX-XX; plate left=35% right=67% top=40% bottom=55%","tl":{"x":0.350,"y":0.400},"tr":{"x":0.670,"y":0.400},"br":{"x":0.670,"y":0.550},"bl":{"x":0.350,"y":0.550}}`;
+
+  const r = await fetch('/api/plate-corners', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ b64, hint, prompt }),
+  });
+  if (!r.ok) { console.warn('AI corners HTTP', r.status); return null; }
+  const c = await r.json();
+  if (!c.tl || !c.tr || !c.br || !c.bl) { console.warn('AI corners missing', c); return null; }
+  return c;
+}
+
 async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
-  // Réduire à max 1200px pour garder la réponse rapide (<400 Ko en JPEG)
+  const pw = plate.tr.x - plate.tl.x;
+  const ph = plate.bl.y - plate.tl.y;
+  const prAspect = ph > 0.001 ? pw / ph : 0;
+  const prLooksLikePlate = prAspect >= 1.5; // roue ≈ 1:1, plaque ≥ 4:1
+
+  const hint = {
+    cx: ((plate.tl.x + plate.tr.x) / 2).toFixed(3),
+    cy: ((plate.tl.y + plate.bl.y) / 2).toFixed(3),
+  };
+
+  // ── MODE CROP (PR plausible) ──────────────────────────────────────────────
+  if (prLooksLikePlate) {
+    const pCx = (plate.tl.x + plate.tr.x) / 2;
+    const pCy = (plate.tl.y + plate.bl.y) / 2;
+    // Marge généreuse : couvre les détections partielles de PR
+    const halfW = Math.max(pw * 0.6, ph * 3.0) + 0.18;
+    const halfH = Math.max(ph * 1.5, 0.08);
+    const cx = Math.max(0, Math.round((pCx - halfW) * imgW));
+    const cy = Math.max(0, Math.round((pCy - halfH) * imgH));
+    const cw = Math.min(imgW - cx, Math.round(halfW * 2 * imgW));
+    const ch = Math.min(imgH - cy, Math.round(halfH * 2 * imgH));
+
+    if (cw >= 100 && ch >= 40) {
+      const scale = Math.min(1, 1400 / Math.max(cw, ch));
+      const oc = document.createElement('canvas');
+      oc.width  = Math.round(cw * scale);
+      oc.height = Math.round(ch * scale);
+      oc.getContext('2d').drawImage(ctx.canvas, cx, cy, cw, ch, 0, 0, oc.width, oc.height);
+      const cropB64 = oc.toDataURL('image/jpeg', 0.92).split(',')[1];
+
+      try {
+        const raw = await _claudeOnImage(cropB64, hint, true);
+        if (raw) {
+          // Remapper crop (0-1) → image complète (0-1)
+          const map = p => ({
+            x: Math.max(0, Math.min(1, (cx + p.x * cw) / imgW)),
+            y: Math.max(0, Math.min(1, (cy + p.y * ch) / imgH)),
+          });
+          const result = { tl: map(raw.tl), tr: map(raw.tr), br: map(raw.br), bl: map(raw.bl) };
+          const detH = ((result.bl.y - result.tl.y) + (result.br.y - result.tr.y)) / 2;
+          const detW = ((result.tr.x - result.tl.x) + (result.br.x - result.bl.x)) / 2;
+          if (detH > 0 && detW > 0 && detW >= detH * 1.5) {
+            console.log(`AI crop: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) TR(${result.tr.x.toFixed(3)},${result.tr.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
+            return result;
+          }
+          console.warn('AI crop sanity fail', detW.toFixed(3), detH.toFixed(3));
+        }
+      } catch(e) { console.warn('AI crop err:', e.message); }
+    }
+  } else {
+    console.log(`AI: PR aspect ${prAspect.toFixed(2)} looks like wheel, skipping crop`);
+  }
+
+  // ── MODE FULL IMAGE (fallback) ────────────────────────────────────────────
+  console.log('AI: trying full image mode');
   const scale = Math.min(1, 1200 / Math.max(imgW, imgH));
   const oc = document.createElement('canvas');
   oc.width  = Math.round(imgW * scale);
   oc.height = Math.round(imgH * scale);
   oc.getContext('2d').drawImage(ctx.canvas, 0, 0, imgW, imgH, 0, 0, oc.width, oc.height);
-  const b64 = oc.toDataURL('image/jpeg', 0.88).split(',')[1];
-
-  // Hint PR : centre approximatif de la plaque détectée (peut être inexact ou faux)
-  const hint = plate ? {
-    cx: ((plate.tl.x + plate.tr.x) / 2).toFixed(3),
-    cy: ((plate.tl.y + plate.bl.y) / 2).toFixed(3),
-  } : null;
+  const fullB64 = oc.toDataURL('image/jpeg', 0.85).split(',')[1];
 
   try {
-    const r = await fetch('/api/plate-corners', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ b64, hint }),
-    });
-    if (!r.ok) { console.warn('AI corners HTTP', r.status, await r.text()); return null; }
-    const c = await r.json();
-    if (!c.tl || !c.tr || !c.br || !c.bl) { console.warn('AI corners missing', c); return null; }
-
-    // Coordonnées directement en repère image complète (0-1) — aucun remapping nécessaire
-    const result = { tl: c.tl, tr: c.tr, br: c.br, bl: c.bl };
-
+    const raw = await _claudeOnImage(fullB64, hint, false);
+    if (!raw) return null;
+    const result = { tl: raw.tl, tr: raw.tr, br: raw.br, bl: raw.bl };
     const detH = ((result.bl.y - result.tl.y) + (result.br.y - result.tr.y)) / 2;
     const detW = ((result.tr.x - result.tl.x) + (result.br.x - result.bl.x)) / 2;
-    if (detH <= 0 || detW <= 0) { console.warn('AI corners degenerate', detH, detW); return null; }
-    if (detW < detH * 1.2)      { console.warn('AI corners aspect fail', detW, detH); return null; }
-
-    console.log(`AI corners: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) TR(${result.tr.x.toFixed(3)},${result.tr.y.toFixed(3)}) BR(${result.br.x.toFixed(3)},${result.br.y.toFixed(3)}) BL(${result.bl.x.toFixed(3)},${result.bl.y.toFixed(3)})`);
+    if (detH <= 0 || detW <= 0 || detW < detH * 1.2) {
+      console.warn('AI full sanity fail', detW.toFixed(3), detH.toFixed(3));
+      return null;
+    }
+    console.log(`AI full: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) TR(${result.tr.x.toFixed(3)},${result.tr.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
     return result;
   } catch(e) {
-    console.warn('AI corners err:', e.message);
+    console.warn('AI full err:', e.message);
     return null;
   }
 }

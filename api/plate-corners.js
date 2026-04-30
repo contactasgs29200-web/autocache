@@ -1,5 +1,5 @@
 // /api/plate-corners.js
-// Claude Sonnet Vision sur l'image complète — chain-of-thought pour ancrer sur le texte de plaque
+// Claude Sonnet Vision — accepte un prompt custom (crop ou full image)
 
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
@@ -18,47 +18,12 @@ function extractJSON(txt) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { b64, hint } = req.body;
+  const { b64, prompt } = req.body;
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
-
-  const hintLine = hint
-    ? `\nHINT: An automated detector estimated the plate center near x=${hint.cx}, y=${hint.cy} (may be wrong — verify visually).\n`
-    : '';
-
-  const prompt = `LICENSE PLATE CORNER DETECTION — THINK STEP BY STEP
-${hintLine}
-This is a FULL vehicle photo. Follow ALL 4 steps.
-
-STEP 1 — READ THE PLATE TEXT
-Look carefully at the bumper area. Find the flat rectangular white/yellow surface with alphanumeric registration text.
-State the exact characters you read (e.g. "DF-788-KV" or "AB-123-CD").
-This text is your anchor — do not proceed until you have found it.
-
-STEP 2 — ESTIMATE POSITION AS PERCENTAGES
-Based on where the plate TEXT is located in the full image:
-- Plate left edge is at x ≈ __% from left
-- Plate right edge is at x ≈ __% from left
-- Plate top edge is at y ≈ __% from top
-- Plate bottom edge is at y ≈ __% from top
-
-STEP 3 — ACCOUNT FOR PERSPECTIVE
-Physical plate size: 520mm × 110mm (ratio ~4.7:1).
-Is the car straight-on (rectangle shape), slightly angled, or strongly angled (trapezoid shape)?
-
-STEP 4 — FINAL CORNER COORDINATES
-Convert your Step 2 percentages to 0-1 decimal values (divide by 100).
-Corners must be on the OUTER EDGE of the plate surface:
-- Include the blue EU strip on the left
-- Include the department code on the right
-- Exclude any mounting frame, screws, chrome, or bumper trim
-
-Coordinate axes: x=0.0 is LEFT edge, x=1.0 is RIGHT edge, y=0.0 is TOP, y=1.0 is BOTTOM.
-
-Return JSON with analysis field showing your reasoning:
-{"analysis":"I read DF-788-KV; plate left=35% right=67% top=40% bottom=55%; car straight-on","tl":{"x":0.350,"y":0.400},"tr":{"x":0.670,"y":0.400},"br":{"x":0.670,"y":0.550},"bl":{"x":0.350,"y":0.550}}`;
+  if (!prompt) return res.status(400).json({ error: 'Missing prompt' });
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -74,10 +39,7 @@ Return JSON with analysis field showing your reasoning:
         messages: [{
           role: 'user',
           content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/jpeg', data: b64 },
-            },
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
             { type: 'text', text: prompt },
           ],
         }],
@@ -89,13 +51,13 @@ Return JSON with analysis field showing your reasoning:
     if (!response.ok) return res.status(500).json({ error: 'Anthropic error', details: data });
 
     const text = data.content?.[0]?.text ?? '';
-    console.log('plate-corners response:', text);
+    console.log('plate-corners raw:', text.slice(0, 300));
 
     const raw = extractJSON(text);
-    if (!raw) return res.status(500).json({ error: 'No JSON', text });
+    if (!raw) return res.status(500).json({ error: 'No JSON in response', text });
 
     const c = JSON.parse(raw);
-    if (c.analysis) console.log('Claude analysis:', c.analysis);
+    if (c.analysis) console.log('analysis:', c.analysis);
 
     const ok = p => p && typeof p.x === 'number' && typeof p.y === 'number'
       && p.x >= -0.05 && p.x <= 1.05 && p.y >= -0.05 && p.y <= 1.05;
@@ -106,8 +68,8 @@ Return JSON with analysis field showing your reasoning:
 
     const w = Math.abs(c.tr.x - c.tl.x);
     const h = Math.abs(c.bl.y - c.tl.y);
-    if (h > 0 && (w / h < 1.0 || w / h > 15)) {
-      return res.status(500).json({ error: 'Aspect ratio invalid', w, h, ratio: w/h });
+    if (h > 0 && (w / h < 0.8 || w / h > 20)) {
+      return res.status(500).json({ error: 'Aspect ratio invalid', w, h, ratio: (w/h).toFixed(2) });
     }
 
     console.log('plate-corners OK:', JSON.stringify({ tl: c.tl, tr: c.tr, br: c.br, bl: c.bl }));
