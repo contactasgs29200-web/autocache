@@ -1022,59 +1022,67 @@ async function detectPlate(b64, imgW, imgH) {
   }
 }
 
-// Détection de coins par Claude Vision (Sonnet 4.6) — deux modes selon fiabilité PR.
+// Détection de coins par Claude Vision (Sonnet 4.6).
 //
-// Mode CROP (primaire) : si PR a une bbox aspect ratio > 1.5 (= plate-like, pas une roue),
-//   on envoie un crop large centré sur PR → plaque remplit ~30% du crop → Claude précis.
-//   Remapping: (cx + p.x*cw)/imgW, (cy + p.y*ch)/imgH
-//
-// Mode FULL (fallback) : si PR aspect ≤ 1.5 (roue, mauvais détection) ou si crop mode échoue,
-//   on envoie l'image complète avec chain-of-thought. Moins précis mais plus robuste.
+// Stratégie : crop ancré sur le BORD DROIT de PR (le plus fiable).
+// On cherche 1.8× la largeur attendue vers la GAUCHE pour capturer
+// la bandelette EU bleue même sur carrosserie bleue.
+// La plaque remplit ~50% du crop → Claude précis.
+// Fallback image complète si PR suspect (roue, aspect < 1.5).
 
-async function _claudeOnImage(b64, hint, isCrop) {
-  const hintLine = hint
-    ? `\nHINT: Approximate plate center at x=${hint.cx}, y=${hint.cy} (may be wrong).\n`
-    : '';
+async function _claudeOnCrop(b64) {
+  const prompt = `LICENSE PLATE CORNER DETECTION
 
-  const prompt = isCrop
-    ? `LICENSE PLATE CORNER DETECTION — CROPPED IMAGE
-${hintLine}
-This image is a CROP centered around a vehicle license plate. The plate is the dominant feature.
+This is a CROP of a vehicle photo. The license plate is somewhere in the central portion.
 
-Find the French license plate:
-- White/yellow background with alphanumeric text (e.g. "DF-788-KV", "AB-123-CD")
-- Blue EU strip on LEFT edge with "F" and stars
-- Department code on RIGHT edge (e.g. "31", "75")
+The plate:
+- White/yellow rectangular surface with alphanumeric text (e.g. "DF-788-KV 31")
+- Has a BLUE vertical strip on its LEFT edge (EU strip with "F")
+- May have a department number on its RIGHT edge (e.g. "31", "75")
+- The plate SURFACE starts at the left edge of the blue EU strip
+- The plate SURFACE ends at the right edge of the department number
+- DO NOT include the black/plastic mounting frame around the plate
 
-Coordinate system (this cropped image):
-- x=0.0 = LEFT edge, x=1.0 = RIGHT edge
-- y=0.0 = TOP edge, y=1.0 = BOTTOM edge
+COORDINATE SYSTEM for this cropped image only:
+x=0.0 = left edge of THIS crop, x=1.0 = right edge of THIS crop
+y=0.0 = top edge of THIS crop,  y=1.0 = bottom edge of THIS crop
 
-IMPORTANT: The plate SURFACE spans the FULL width of the white/yellow area.
-Include the blue EU strip. Exclude mounting frame, screws, chrome.
-
-Return ONLY JSON (3 decimals, no markdown):
-{"tl":{"x":0.120,"y":0.280},"tr":{"x":0.880,"y":0.270},"br":{"x":0.885,"y":0.720},"bl":{"x":0.115,"y":0.730}}`
-    : `LICENSE PLATE CORNER DETECTION — FULL IMAGE
-${hintLine}
-STEP 1 — READ THE PLATE TEXT: Find the white/yellow rectangular plaque on the bumper. What characters do you read?
-STEP 2 — ESTIMATE POSITION: Plate left≈__%, right≈__%, top≈__%, bottom≈__% of image.
-STEP 3 — CORNER COORDINATES: Convert percentages to 0-1 decimals.
-
-Include blue EU strip. Exclude mounting frame.
-x=0.0=left, x=1.0=right, y=0.0=top, y=1.0=bottom.
-
-Return JSON with analysis:
-{"analysis":"I read XX-XXX-XX; plate left=35% right=67% top=40% bottom=55%","tl":{"x":0.350,"y":0.400},"tr":{"x":0.670,"y":0.400},"br":{"x":0.670,"y":0.550},"bl":{"x":0.350,"y":0.550}}`;
+Return ONLY this JSON (3 decimal places, no markdown, no text):
+{"tl":{"x":0.120,"y":0.280},"tr":{"x":0.880,"y":0.270},"br":{"x":0.885,"y":0.720},"bl":{"x":0.115,"y":0.730}}`;
 
   const r = await fetch('/api/plate-corners', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ b64, hint, prompt }),
+    body: JSON.stringify({ b64, prompt }),
   });
-  if (!r.ok) { console.warn('AI corners HTTP', r.status); return null; }
+  if (!r.ok) { console.warn('AI crop HTTP', r.status); return null; }
   const c = await r.json();
-  if (!c.tl || !c.tr || !c.br || !c.bl) { console.warn('AI corners missing', c); return null; }
+  if (!c.tl || !c.tr || !c.br || !c.bl) { console.warn('AI crop missing', c); return null; }
+  return c;
+}
+
+async function _claudeOnFullImage(b64, hint) {
+  const hintLine = hint ? `\nHINT: Detector estimated plate center near x=${hint.cx}, y=${hint.cy} (verify visually).\n` : '';
+  const prompt = `LICENSE PLATE CORNER DETECTION — FULL IMAGE
+${hintLine}
+STEP 1: Read the license plate text character by character (e.g. "DF-788-KV").
+STEP 2: Estimate plate position — left≈__%, right≈__%, top≈__%, bottom≈__% of this image.
+STEP 3: Convert those % to 0-1 decimals (divide by 100) for the 4 corners.
+
+Rules: include blue EU strip on left; exclude mounting frame.
+x=0=left, x=1=right, y=0=top, y=1=bottom.
+
+Return JSON:
+{"analysis":"I read DF-788-KV; left=55% right=83% top=55% bottom=62%","tl":{"x":0.550,"y":0.550},"tr":{"x":0.830,"y":0.550},"br":{"x":0.830,"y":0.620},"bl":{"x":0.550,"y":0.620}}`;
+
+  const r = await fetch('/api/plate-corners', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ b64, prompt }),
+  });
+  if (!r.ok) { console.warn('AI full HTTP', r.status); return null; }
+  const c = await r.json();
+  if (!c.tl || !c.tr || !c.br || !c.bl) { console.warn('AI full missing', c); return null; }
   return c;
 }
 
@@ -1082,26 +1090,33 @@ async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
   const pw = plate.tr.x - plate.tl.x;
   const ph = plate.bl.y - plate.tl.y;
   const prAspect = ph > 0.001 ? pw / ph : 0;
-  const prLooksLikePlate = prAspect >= 1.5; // roue ≈ 1:1, plaque ≥ 4:1
+  const prLooksLikePlate = prAspect >= 1.5;
 
   const hint = {
     cx: ((plate.tl.x + plate.tr.x) / 2).toFixed(3),
     cy: ((plate.tl.y + plate.bl.y) / 2).toFixed(3),
   };
 
-  // ── MODE CROP (PR plausible) ──────────────────────────────────────────────
-  if (prLooksLikePlate) {
-    const pCx = (plate.tl.x + plate.tr.x) / 2;
-    const pCy = (plate.tl.y + plate.bl.y) / 2;
-    // Marge généreuse : couvre les détections partielles de PR
-    const halfW = Math.max(pw * 0.6, ph * 3.0) + 0.18;
-    const halfH = Math.max(ph * 1.5, 0.08);
-    const cx = Math.max(0, Math.round((pCx - halfW) * imgW));
-    const cy = Math.max(0, Math.round((pCy - halfH) * imgH));
-    const cw = Math.min(imgW - cx, Math.round(halfW * 2 * imgW));
-    const ch = Math.min(imgH - cy, Math.round(halfH * 2 * imgH));
+  console.log(`PR: aspect=${prAspect.toFixed(2)} pw=${pw.toFixed(3)} ph=${ph.toFixed(3)} looks_like_plate=${prLooksLikePlate}`);
 
-    if (cw >= 100 && ch >= 40) {
+  // ── CROP MODE : ancré sur le bord DROIT de PR ─────────────────────────────
+  if (prLooksLikePlate) {
+    // Le bord droit de PR est plus fiable (contraste plaque/carrosserie).
+    // On cherche 1.8× largeur attendue vers la gauche pour capturer la bandelette EU.
+    const expectedPw = Math.max(pw, ph * 4.7);
+    const cropL = Math.max(0, plate.tr.x - expectedPw * 1.8);
+    const cropR = Math.min(1, plate.tr.x + 0.06);
+    const cropT = Math.max(0, plate.tl.y - ph * 1.0);
+    const cropB = Math.min(1, plate.bl.y + ph * 1.0);
+
+    const cx = Math.round(cropL * imgW);
+    const cy = Math.round(cropT * imgH);
+    const cw = Math.round((cropR - cropL) * imgW);
+    const ch = Math.round((cropB - cropT) * imgH);
+
+    console.log(`Crop: L=${cropL.toFixed(3)} R=${cropR.toFixed(3)} T=${cropT.toFixed(3)} B=${cropB.toFixed(3)} (${cw}×${ch}px)`);
+
+    if (cw >= 80 && ch >= 30) {
       const scale = Math.min(1, 1400 / Math.max(cw, ch));
       const oc = document.createElement('canvas');
       oc.width  = Math.round(cw * scale);
@@ -1110,9 +1125,8 @@ async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
       const cropB64 = oc.toDataURL('image/jpeg', 0.92).split(',')[1];
 
       try {
-        const raw = await _claudeOnImage(cropB64, hint, true);
+        const raw = await _claudeOnCrop(cropB64);
         if (raw) {
-          // Remapper crop (0-1) → image complète (0-1)
           const map = p => ({
             x: Math.max(0, Math.min(1, (cx + p.x * cw) / imgW)),
             y: Math.max(0, Math.min(1, (cy + p.y * ch) / imgH)),
@@ -1121,19 +1135,17 @@ async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
           const detH = ((result.bl.y - result.tl.y) + (result.br.y - result.tr.y)) / 2;
           const detW = ((result.tr.x - result.tl.x) + (result.br.x - result.bl.x)) / 2;
           if (detH > 0 && detW > 0 && detW >= detH * 1.5) {
-            console.log(`AI crop: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) TR(${result.tr.x.toFixed(3)},${result.tr.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
+            console.log(`AI crop OK: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
             return result;
           }
-          console.warn('AI crop sanity fail', detW.toFixed(3), detH.toFixed(3));
+          console.warn(`AI crop sanity fail: detW=${detW.toFixed(3)} detH=${detH.toFixed(3)}`);
         }
       } catch(e) { console.warn('AI crop err:', e.message); }
     }
-  } else {
-    console.log(`AI: PR aspect ${prAspect.toFixed(2)} looks like wheel, skipping crop`);
   }
 
-  // ── MODE FULL IMAGE (fallback) ────────────────────────────────────────────
-  console.log('AI: trying full image mode');
+  // ── FALLBACK IMAGE COMPLÈTE ───────────────────────────────────────────────
+  console.log('AI: falling back to full image');
   const scale = Math.min(1, 1200 / Math.max(imgW, imgH));
   const oc = document.createElement('canvas');
   oc.width  = Math.round(imgW * scale);
@@ -1142,17 +1154,16 @@ async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
   const fullB64 = oc.toDataURL('image/jpeg', 0.85).split(',')[1];
 
   try {
-    const raw = await _claudeOnImage(fullB64, hint, false);
+    const raw = await _claudeOnFullImage(fullB64, hint);
     if (!raw) return null;
-    const result = { tl: raw.tl, tr: raw.tr, br: raw.br, bl: raw.bl };
-    const detH = ((result.bl.y - result.tl.y) + (result.br.y - result.tr.y)) / 2;
-    const detW = ((result.tr.x - result.tl.x) + (result.br.x - result.bl.x)) / 2;
+    const detH = ((raw.bl.y - raw.tl.y) + (raw.br.y - raw.tr.y)) / 2;
+    const detW = ((raw.tr.x - raw.tl.x) + (raw.br.x - raw.bl.x)) / 2;
     if (detH <= 0 || detW <= 0 || detW < detH * 1.2) {
-      console.warn('AI full sanity fail', detW.toFixed(3), detH.toFixed(3));
+      console.warn(`AI full sanity fail: detW=${detW.toFixed(3)} detH=${detH.toFixed(3)}`);
       return null;
     }
-    console.log(`AI full: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) TR(${result.tr.x.toFixed(3)},${result.tr.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
-    return result;
+    console.log(`AI full OK: TL(${raw.tl.x.toFixed(3)},${raw.tl.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
+    return { tl: raw.tl, tr: raw.tr, br: raw.br, bl: raw.bl };
   } catch(e) {
     console.warn('AI full err:', e.message);
     return null;
