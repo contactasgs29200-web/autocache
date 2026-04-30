@@ -1135,8 +1135,11 @@ async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
           const detH = ((result.bl.y - result.tl.y) + (result.br.y - result.tr.y)) / 2;
           const detW = ((result.tr.x - result.tl.x) + (result.br.x - result.bl.x)) / 2;
           if (detH > 0 && detW > 0 && detW >= detH * 1.5) {
-            console.log(`AI crop OK: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
-            return result;
+            console.log(`AI crop rough: TL(${result.tl.x.toFixed(3)},${result.tl.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
+            // Affinage pixel : scan whiteness pour trouver les vrais bords
+            const refined = pixelScanRefinePlate(ctx, result, imgW, imgH);
+            if (refined) return refined;
+            return result; // pixel scan failed → use Claude rough
           }
           console.warn(`AI crop sanity fail: detW=${detW.toFixed(3)} detH=${detH.toFixed(3)}`);
         }
@@ -1162,12 +1165,114 @@ async function detectPlateCornersByAI(ctx, plate, imgW, imgH) {
       console.warn(`AI full sanity fail: detW=${detW.toFixed(3)} detH=${detH.toFixed(3)}`);
       return null;
     }
-    console.log(`AI full OK: TL(${raw.tl.x.toFixed(3)},${raw.tl.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
-    return { tl: raw.tl, tr: raw.tr, br: raw.br, bl: raw.bl };
+    const roughResult = { tl: raw.tl, tr: raw.tr, br: raw.br, bl: raw.bl };
+    console.log(`AI full rough: TL(${raw.tl.x.toFixed(3)},${raw.tl.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
+    const refined = pixelScanRefinePlate(ctx, roughResult, imgW, imgH);
+    if (refined) return refined;
+    return roughResult;
   } catch(e) {
     console.warn('AI full err:', e.message);
     return null;
   }
+}
+
+// Affinage pixel des coins après détection IA.
+// Claude donne une position approximative (±10%) ; ce scan trouve les vrais bords
+// de la zone blanche/jaune de la plaque avec une précision sub-pixel.
+// Fonctionnement :
+//  1. Scan horizontal au centre de la plaque → trouver bord gauche/droit de la zone blanche
+//  2. Scan vertical au centre → trouver bord haut/bas de la zone blanche
+//  3. Correction EU strip : ajouter ~8.8% de la largeur blanche à gauche
+function pixelScanRefinePlate(ctx, rough, imgW, imgH) {
+  const approxPh = Math.max(0.01, rough.bl.y - rough.tl.y);
+  const approxRight = rough.tr.x;
+  const approxCy = (rough.tl.y + rough.bl.y) / 2;
+
+  // ── Scan horizontal ────────────────────────────────────────────────────────
+  // Démarre 2× la largeur attendue à gauche du bord droit de PR/Claude
+  const expectedPw = Math.max(rough.tr.x - rough.tl.x, approxPh * 4.7);
+  const scanLeft  = Math.max(0, Math.round((approxRight - expectedPw * 2.2) * imgW));
+  const scanRight = Math.min(imgW - 1, Math.round((approxRight + 0.05) * imgW));
+  const hScanW    = scanRight - scanLeft + 1;
+  const hScanHalf = Math.max(3, Math.round(approxPh * imgH * 0.3));
+  const hScanTop  = Math.max(0, Math.round(approxCy * imgH) - hScanHalf);
+  const hScanH    = Math.min(imgH - hScanTop, hScanHalf * 2);
+
+  if (hScanW < 10 || hScanH < 2) return null;
+
+  const hPx = ctx.getImageData(scanLeft, hScanTop, hScanW, hScanH).data;
+  // Whiteness par colonne : min(R,G,B) — plaque blanche ≈ 220+, bleu/gris ≈ 30-80
+  const col = new Float32Array(hScanW);
+  for (let x = 0; x < hScanW; x++) {
+    let s = 0;
+    for (let y = 0; y < hScanH; y++) { const i=(y*hScanW+x)*4; s+=Math.min(hPx[i],hPx[i+1],hPx[i+2]); }
+    col[x] = s / hScanH;
+  }
+  // Lissage 5px
+  const cSm = new Float32Array(hScanW);
+  for (let x=0; x<hScanW; x++) {
+    let s=0,n=0;
+    for(let k=-2;k<=2;k++){const j=x+k;if(j>=0&&j<hScanW){s+=col[j];n++;}}
+    cSm[x]=s/n;
+  }
+  const maxC = Math.max(...cSm);
+  if (maxC < 150) return null; // plaque pas assez blanche
+  const tC = maxC * 0.62;
+  let wL = -1, wR = -1;
+  for (let x=0; x<hScanW; x++) { if (cSm[x]>=tC) { if (wL<0) wL=x; wR=x; } }
+  if (wL < 0 || wR - wL < 10) return null;
+
+  // Correction EU strip (≈8.8% de la largeur de la zone blanche)
+  const whiteW = wR - wL;
+  const euCorr = Math.round(whiteW * 0.088);
+  const trueLeftPx  = Math.max(0, scanLeft + wL - euCorr);
+  const trueRightPx = Math.min(imgW - 1, scanLeft + wR);
+
+  // ── Scan vertical ──────────────────────────────────────────────────────────
+  const vCenterX = Math.round((trueLeftPx + trueRightPx) / 2);
+  const vBand    = Math.max(8, Math.round((trueRightPx - trueLeftPx) * 0.25));
+  const vLeft    = Math.max(0, vCenterX - vBand);
+  const vW       = Math.min(imgW - vLeft, vBand * 2);
+  const vScanR   = Math.round(approxPh * imgH * 2.5);
+  const vTop     = Math.max(0, Math.round(approxCy * imgH) - vScanR);
+  const vH       = Math.min(imgH - vTop, vScanR * 2);
+
+  if (vW < 5 || vH < 10) return null;
+
+  const vPx = ctx.getImageData(vLeft, vTop, vW, vH).data;
+  const row = new Float32Array(vH);
+  for (let y=0; y<vH; y++) {
+    let s=0;
+    for(let x=0;x<vW;x++){const i=(y*vW+x)*4;s+=Math.min(vPx[i],vPx[i+1],vPx[i+2]);}
+    row[y]=s/vW;
+  }
+  const rSm = new Float32Array(vH);
+  for (let y=0;y<vH;y++) {
+    let s=0,n=0;
+    for(let k=-2;k<=2;k++){const j=y+k;if(j>=0&&j<vH){s+=row[j];n++;}}
+    rSm[y]=s/n;
+  }
+  const maxR = Math.max(...rSm);
+  if (maxR < 140) return null;
+  const tR = maxR * 0.62;
+  let wTop = -1, wBot = -1;
+  for (let y=0;y<vH;y++) { if(rSm[y]>=tR) { if(wTop<0) wTop=y; wBot=y; } }
+  if (wTop < 0) return null;
+
+  const tl = { x: trueLeftPx / imgW,         y: (vTop + wTop) / imgH };
+  const tr = { x: trueRightPx / imgW,         y: (vTop + wTop) / imgH };
+  const br = { x: trueRightPx / imgW,         y: (vTop + wBot) / imgH };
+  const bl = { x: trueLeftPx / imgW,          y: (vTop + wBot) / imgH };
+
+  const detW = tr.x - tl.x;
+  const detH = bl.y - tl.y;
+  if (detH <= 0 || detW <= 0 || detW < detH * 2.0) {
+    console.warn(`pixelScan sanity fail: detW=${detW.toFixed(3)} detH=${detH.toFixed(3)}`);
+    return null;
+  }
+
+  console.log(`pixelScan: TL(${tl.x.toFixed(3)},${tl.y.toFixed(3)}) TR(${tr.x.toFixed(3)},${tr.y.toFixed(3)}) size=${detW.toFixed(3)}×${detH.toFixed(3)}`);
+  return { tl, tr, br, bl };
 }
 
 // Détection de plaque par blob blanc : la plaque est le seul grand rectangle blanc
