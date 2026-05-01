@@ -820,14 +820,16 @@ async function detectGptData(b64) {
   }
 }
 
-async function detectPlateYOLO(b64) {
+async function detectPlateYOLO(imageFile) {
   const backendUrl = import.meta.env.VITE_YOLO_BACKEND_URL;
   if (!backendUrl) { console.warn('VITE_YOLO_BACKEND_URL non défini'); return null; }
   try {
+    const formData = new FormData();
+    formData.append('file', imageFile);
     const r = await fetch(`${backendUrl}/detect-plate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ b64 }),
+      body: formData,
+      // pas de Content-Type : le navigateur pose multipart/form-data + boundary
     });
     if (!r.ok) { console.warn('YOLO backend HTTP', r.status); return null; }
     const d = await r.json();
@@ -880,7 +882,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   let plateFound = false;
   let savedCorners = null;
 
-  const yolo = await detectPlateYOLO(b64);
+  const yolo = await detectPlateYOLO(photoFile);
   if (yolo) {
     plateFound = true;
     savedCorners = {
