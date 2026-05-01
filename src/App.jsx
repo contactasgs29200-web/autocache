@@ -834,7 +834,9 @@ async function detectPlateYOLO(imageFile) {
     if (!r.ok) { console.warn('YOLO backend HTTP', r.status); return null; }
     const d = await r.json();
     if (!d.found) { console.log('YOLO: aucune plaque détectée'); return null; }
-    console.log(`YOLO: (${d.x1.toFixed(3)},${d.y1.toFixed(3)})-(${d.x2.toFixed(3)},${d.y2.toFixed(3)}) conf=${d.conf}`);
+    const b = d.bbox;
+    console.log(`YOLO bbox: (${b.x1.toFixed(3)},${b.y1.toFixed(3)})-(${b.x2.toFixed(3)},${b.y2.toFixed(3)}) conf=${d.conf}`);
+    if (d.corners) console.log('Corners raffinés:', d.corners.map(p => `(${p.x.toFixed(3)},${p.y.toFixed(3)})`).join(' '));
     return d;
   } catch(e) {
     console.error('YOLO error:', e.message);
@@ -885,12 +887,13 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const yolo = await detectPlateYOLO(photoFile);
   if (yolo) {
     plateFound = true;
-    savedCorners = {
-      tl: { x: yolo.x1, y: yolo.y1 },
-      tr: { x: yolo.x2, y: yolo.y1 },
-      br: { x: yolo.x2, y: yolo.y2 },
-      bl: { x: yolo.x1, y: yolo.y2 },
-    };
+    // Priorité aux coins OpenCV raffinés (perspective), sinon fallback bbox YOLO
+    if (yolo.corners && yolo.corners.length === 4) {
+      savedCorners = { tl: yolo.corners[0], tr: yolo.corners[1], br: yolo.corners[2], bl: yolo.corners[3] };
+    } else {
+      const b = yolo.bbox;
+      savedCorners = { tl: { x: b.x1, y: b.y1 }, tr: { x: b.x2, y: b.y1 }, br: { x: b.x2, y: b.y2 }, bl: { x: b.x1, y: b.y2 } };
+    }
   }
 
   if (false && savedCorners && logoImg) {
@@ -925,8 +928,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.drawImage(tmp, 0, 0);
     ctx.restore();
   }
-  const yoloBbox = yolo ? { x1: yolo.x1, y1: yolo.y1, x2: yolo.x2, y2: yolo.y2, conf: yolo.conf } : null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, imgW: c.width, imgH: c.height };
+  const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
+  const yoloCorners = yolo?.corners ?? null;
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -2504,22 +2508,31 @@ export default function AutoCache() {
                             viewBox={`0 0 ${r.imgW} ${r.imgH}`}
                             preserveAspectRatio="xMidYMid meet"
                           >
+                            {/* Bbox YOLO — vert pointillé */}
                             <rect
                               x={r.yoloBbox.x1 * r.imgW} y={r.yoloBbox.y1 * r.imgH}
                               width={(r.yoloBbox.x2 - r.yoloBbox.x1) * r.imgW}
                               height={(r.yoloBbox.y2 - r.yoloBbox.y1) * r.imgH}
-                              fill="none" stroke="#22c55e" strokeWidth={Math.max(3, r.imgW * 0.003)}
+                              fill="none" stroke="#22c55e" strokeWidth={Math.max(2, r.imgW * 0.002)}
+                              strokeDasharray={`${r.imgW * 0.01} ${r.imgW * 0.005}`}
                             />
-                            <rect
-                              x={r.yoloBbox.x1 * r.imgW} y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.038}
-                              width={r.imgW * 0.072} height={r.imgH * 0.036}
-                              fill="#22c55e" rx={r.imgW * 0.003}
-                            />
-                            <text
-                              x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.005}
-                              y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.01}
-                              fill="#000" fontSize={r.imgH * 0.026} fontFamily="monospace" fontWeight="bold"
-                            >
+                            {/* Quadrilatère raffiné OpenCV — orange */}
+                            {r.yoloCorners && (
+                              <polygon
+                                points={r.yoloCorners.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
+                                fill="none" stroke="#f97316" strokeWidth={Math.max(2, r.imgW * 0.003)}
+                              />
+                            )}
+                            {/* Coins — points orange */}
+                            {r.yoloCorners && r.yoloCorners.map((p, i) => (
+                              <circle key={i} cx={p.x * r.imgW} cy={p.y * r.imgH}
+                                r={Math.max(4, r.imgW * 0.006)} fill="#f97316" />
+                            ))}
+                            {/* Badge confiance */}
+                            <rect x={r.yoloBbox.x1 * r.imgW} y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.042}
+                              width={r.imgW * 0.072} height={r.imgH * 0.038} fill="#22c55e" rx={r.imgW * 0.003} />
+                            <text x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.005} y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.01}
+                              fill="#000" fontSize={r.imgH * 0.026} fontFamily="monospace" fontWeight="bold">
                               {Math.round(r.yoloBbox.conf * 100)}%
                             </text>
                           </svg>
@@ -2749,29 +2762,38 @@ export default function AutoCache() {
               />
             )}
 
-            {/* ── Debug YOLO bbox overlay ── */}
+            {/* ── Debug YOLO bbox + corners overlay ── */}
             {!cropMode && !adjustMode && lightbox.yoloBbox && lightbox.imgW && (
               <svg
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
                 viewBox={`0 0 ${lightbox.imgW} ${lightbox.imgH}`}
                 preserveAspectRatio="xMidYMid meet"
               >
+                {/* Bbox YOLO — vert pointillé */}
                 <rect
                   x={lightbox.yoloBbox.x1 * lightbox.imgW} y={lightbox.yoloBbox.y1 * lightbox.imgH}
                   width={(lightbox.yoloBbox.x2 - lightbox.yoloBbox.x1) * lightbox.imgW}
                   height={(lightbox.yoloBbox.y2 - lightbox.yoloBbox.y1) * lightbox.imgH}
-                  fill="none" stroke="#22c55e" strokeWidth={Math.max(3, lightbox.imgW * 0.003)}
+                  fill="none" stroke="#22c55e" strokeWidth={Math.max(2, lightbox.imgW * 0.002)}
+                  strokeDasharray={`${lightbox.imgW * 0.01} ${lightbox.imgW * 0.005}`}
                 />
-                <rect
-                  x={lightbox.yoloBbox.x1 * lightbox.imgW} y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.038}
-                  width={lightbox.imgW * 0.072} height={lightbox.imgH * 0.036}
-                  fill="#22c55e" rx={lightbox.imgW * 0.003}
-                />
-                <text
-                  x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.005}
-                  y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.01}
-                  fill="#000" fontSize={lightbox.imgH * 0.026} fontFamily="monospace" fontWeight="bold"
-                >
+                {/* Quadrilatère raffiné — orange */}
+                {lightbox.yoloCorners && (
+                  <polygon
+                    points={lightbox.yoloCorners.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
+                    fill="none" stroke="#f97316" strokeWidth={Math.max(2, lightbox.imgW * 0.003)}
+                  />
+                )}
+                {/* Coins — points orange */}
+                {lightbox.yoloCorners && lightbox.yoloCorners.map((p, i) => (
+                  <circle key={i} cx={p.x * lightbox.imgW} cy={p.y * lightbox.imgH}
+                    r={Math.max(5, lightbox.imgW * 0.006)} fill="#f97316" />
+                ))}
+                {/* Badge confiance */}
+                <rect x={lightbox.yoloBbox.x1 * lightbox.imgW} y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.042}
+                  width={lightbox.imgW * 0.072} height={lightbox.imgH * 0.038} fill="#22c55e" rx={lightbox.imgW * 0.003} />
+                <text x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.005} y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.01}
+                  fill="#000" fontSize={lightbox.imgH * 0.026} fontFamily="monospace" fontWeight="bold">
                   {Math.round(lightbox.yoloBbox.conf * 100)}%
                 </text>
               </svg>
