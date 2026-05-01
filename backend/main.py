@@ -1,11 +1,9 @@
-import base64
 import io
 import os
 import logging
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from PIL import Image
 from ultralytics import YOLO
 from huggingface_hub import hf_hub_download
@@ -43,19 +41,15 @@ def get_model() -> YOLO:
     return _model
 
 
-class DetectRequest(BaseModel):
-    b64: str
-
-
 @app.get("/")
 def health():
     return {"status": "ok"}
 
 
 @app.post("/detect-plate")
-async def detect_plate(req: DetectRequest):
+async def detect_plate(file: UploadFile = File(...)):
     try:
-        img_bytes = base64.b64decode(req.b64)
+        img_bytes = await file.read()
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
