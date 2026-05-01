@@ -2749,6 +2749,34 @@ export default function AutoCache() {
               />
             )}
 
+            {/* ── Debug YOLO bbox overlay ── */}
+            {!cropMode && !adjustMode && lightbox.yoloBbox && lightbox.imgW && (
+              <svg
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                viewBox={`0 0 ${lightbox.imgW} ${lightbox.imgH}`}
+                preserveAspectRatio="xMidYMid meet"
+              >
+                <rect
+                  x={lightbox.yoloBbox.x1 * lightbox.imgW} y={lightbox.yoloBbox.y1 * lightbox.imgH}
+                  width={(lightbox.yoloBbox.x2 - lightbox.yoloBbox.x1) * lightbox.imgW}
+                  height={(lightbox.yoloBbox.y2 - lightbox.yoloBbox.y1) * lightbox.imgH}
+                  fill="none" stroke="#22c55e" strokeWidth={Math.max(3, lightbox.imgW * 0.003)}
+                />
+                <rect
+                  x={lightbox.yoloBbox.x1 * lightbox.imgW} y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.038}
+                  width={lightbox.imgW * 0.072} height={lightbox.imgH * 0.036}
+                  fill="#22c55e" rx={lightbox.imgW * 0.003}
+                />
+                <text
+                  x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.005}
+                  y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.01}
+                  fill="#000" fontSize={lightbox.imgH * 0.026} fontFamily="monospace" fontWeight="bold"
+                >
+                  {Math.round(lightbox.yoloBbox.conf * 100)}%
+                </text>
+              </svg>
+            )}
+
             {/* ── Overlay Wall Logo : déplacer (centre) + redimensionner (coins) ── */}
             {!cropMode && !adjustMode && lightbox.wallLogoSrc && lightbox.showroomDataURL && (() => {
               const pos = lightbox.wallLogoPos || { x: 0.5, y: 0.25 };
