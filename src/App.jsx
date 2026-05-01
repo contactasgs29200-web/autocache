@@ -891,27 +891,6 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     };
   }
 
-  // DEBUG : bbox YOLO en overlay vert
-  if (savedCorners && yolo) {
-    const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
-    const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
-    const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
-    const lw = Math.max(2, Math.round(c.width * 0.003));
-    ctx.save();
-    ctx.strokeStyle = 'rgba(0,220,80,0.95)';
-    ctx.lineWidth = lw;
-    ctx.strokeRect(ptl.x, ptl.y, ptr.x - ptl.x, pbl.y - ptl.y);
-    const fs = Math.max(11, Math.round(c.width * 0.016));
-    ctx.font = `bold ${fs}px monospace`;
-    ctx.fillStyle = 'rgba(0,220,80,0.95)';
-    ctx.strokeStyle = 'black';
-    ctx.lineWidth = fs * 0.18;
-    const label = `YOLO ${Math.round(yolo.conf * 100)}%`;
-    ctx.strokeText(label, ptl.x + lw + 2, ptl.y - lw - 4);
-    ctx.fillText(label, ptl.x + lw + 2, ptl.y - lw - 4);
-    ctx.restore();
-  }
-
   if (false && savedCorners && logoImg) {
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
@@ -944,7 +923,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.drawImage(tmp, 0, 0);
     ctx.restore();
   }
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners };
+  const yoloBbox = yolo ? { x1: yolo.x1, y1: yolo.y1, x2: yolo.x2, y2: yolo.y2, conf: yolo.conf } : null;
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -2516,6 +2496,32 @@ export default function AutoCache() {
                     <div key={i} style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
                         <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#1e1e1e", display: "block" }} />
+                        {r.yoloBbox && r.imgW && (
+                          <svg
+                            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                            viewBox={`0 0 ${r.imgW} ${r.imgH}`}
+                            preserveAspectRatio="xMidYMid meet"
+                          >
+                            <rect
+                              x={r.yoloBbox.x1 * r.imgW} y={r.yoloBbox.y1 * r.imgH}
+                              width={(r.yoloBbox.x2 - r.yoloBbox.x1) * r.imgW}
+                              height={(r.yoloBbox.y2 - r.yoloBbox.y1) * r.imgH}
+                              fill="none" stroke="#22c55e" strokeWidth={Math.max(3, r.imgW * 0.003)}
+                            />
+                            <rect
+                              x={r.yoloBbox.x1 * r.imgW} y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.038}
+                              width={r.imgW * 0.072} height={r.imgH * 0.036}
+                              fill="#22c55e" rx={r.imgW * 0.003}
+                            />
+                            <text
+                              x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.005}
+                              y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.01}
+                              fill="#000" fontSize={r.imgH * 0.026} fontFamily="monospace" fontWeight="bold"
+                            >
+                              {Math.round(r.yoloBbox.conf * 100)}%
+                            </text>
+                          </svg>
+                        )}
                         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4 }}>
                           <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 8, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>
                             {r.plateFound ? "✓ PLAQUE CACHÉE" : "⚠ NON DÉTECTÉE"}
