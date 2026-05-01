@@ -217,54 +217,231 @@ def _score_candidate(
     }
 
 
-def _candidates_from_mask(mask: np.ndarray, bbox_in_crop: tuple) -> list[np.ndarray]:
-    cands: list[np.ndarray] = []
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return cands
-    bx1, by1, bx2, by2 = bbox_in_crop
-    bbox_area = max(1.0, (bx2 - bx1) * (by2 - by1))
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:8]
-    for cnt in contours:
-        if cv2.contourArea(cnt) < bbox_area * 0.10:
-            continue
-        peri = cv2.arcLength(cnt, True)
-        # 4-point polygon approximation at several epsilons
-        for eps in (0.02, 0.035, 0.05, 0.07):
-            approx = cv2.approxPolyDP(cnt, eps * peri, True)
-            if len(approx) == 4:
-                quad = approx.reshape(4, 2).astype(float)
-                cands.append(_order_corners(quad))
-                break
-        # Oriented bounding box (minAreaRect) of the contour
-        rect = cv2.minAreaRect(cnt)
-        cands.append(_order_corners(cv2.boxPoints(rect).astype(float)))
-    return cands
-
-
-def _generate_candidates(gray: np.ndarray, bbox_in_crop: tuple) -> list[np.ndarray]:
+# Edge-mask builders ---------------------------------------------------
+def _build_edge_masks(gray: np.ndarray) -> list[np.ndarray]:
+    """Multi-method binary masks: Canny ×3, Otsu ±, adaptive."""
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    cands: list[np.ndarray] = []
-
-    # Canny at three sensitivities
+    masks: list[np.ndarray] = []
     for low, high in ((30, 120), (50, 150), (15, 80)):
         edges = cv2.Canny(blur, low, high)
         edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
-        cands.extend(_candidates_from_mask(edges, bbox_in_crop))
-
-    # Otsu thresholding (both polarities)
+        masks.append(edges)
     _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    cands.extend(_candidates_from_mask(otsu, bbox_in_crop))
+    masks.append(otsu)
     _, otsu_inv = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    cands.extend(_candidates_from_mask(otsu_inv, bbox_in_crop))
-
-    # Adaptive threshold (handles uneven lighting)
-    adaptive = cv2.adaptiveThreshold(
+    masks.append(otsu_inv)
+    masks.append(cv2.adaptiveThreshold(
         blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5
-    )
-    cands.extend(_candidates_from_mask(adaptive, bbox_in_crop))
+    ))
+    return masks
 
+
+def _approxpoly_quads(masks: list[np.ndarray], bbox_in_crop: tuple) -> list[np.ndarray]:
+    """4-point approxPolyDP candidates from each mask (no minAreaRect)."""
+    cands: list[np.ndarray] = []
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_area = max(1.0, (bx2 - bx1) * (by2 - by1))
+    for mask in masks:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        for cnt in sorted(contours, key=cv2.contourArea, reverse=True)[:8]:
+            if cv2.contourArea(cnt) < bbox_area * 0.10:
+                continue
+            peri = cv2.arcLength(cnt, True)
+            for eps in (0.02, 0.035, 0.05, 0.07):
+                approx = cv2.approxPolyDP(cnt, eps * peri, True)
+                if len(approx) == 4:
+                    cands.append(_order_corners(approx.reshape(4, 2).astype(float)))
+                    break
     return cands
+
+
+def _minarearect_quads(
+    masks: list[np.ndarray], bbox_in_crop: tuple, shrink: float = 0.06
+) -> list[np.ndarray]:
+    """Oriented bounding-box candidates (slightly shrunk) — last resort."""
+    cands: list[np.ndarray] = []
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_area = max(1.0, (bx2 - bx1) * (by2 - by1))
+    for mask in masks:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        for cnt in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+            if cv2.contourArea(cnt) < bbox_area * 0.15:
+                continue
+            (cx, cy), (w, h), angle = cv2.minAreaRect(cnt)
+            shrunk = ((cx, cy), (w * (1.0 - shrink), h * (1.0 - shrink)), angle)
+            cands.append(_order_corners(cv2.boxPoints(shrunk).astype(float)))
+    return cands
+
+
+def _pick_best(
+    cands: list[np.ndarray], gray: np.ndarray, bbox_in_crop: tuple
+) -> tuple[np.ndarray | None, float, dict]:
+    """Return best-scoring quad, or (None, -1, {}) if all hard-rejected."""
+    best_score = -0.5
+    best_quad: np.ndarray | None = None
+    best_info: dict = {}
+    for q in cands:
+        score, info = _score_candidate(q, gray, bbox_in_crop)
+        if score > best_score:
+            best_score, best_quad, best_info = score, q, info
+    return best_quad, best_score, best_info
+
+
+# HoughLinesP corner detection ----------------------------------------
+def _segment_angle_deg(seg) -> float:
+    """Angle of a segment, mapped to [0, 180)."""
+    x1, y1, x2, y2 = seg
+    return math.degrees(math.atan2(y2 - y1, x2 - x1)) % 180
+
+
+def _segment_length(seg) -> float:
+    x1, y1, x2, y2 = seg
+    return math.hypot(x2 - x1, y2 - y1)
+
+
+def _segment_midpoint(seg) -> tuple[float, float]:
+    x1, y1, x2, y2 = seg
+    return (x1 + x2) * 0.5, (y1 + y2) * 0.5
+
+
+def _fit_line_segments(segments: list) -> tuple | None:
+    """
+    Fit a robust line through points sampled along all segments.
+    Returns (vx, vy, x0, y0) — Hough/parametric form — or None.
+    """
+    if not segments:
+        return None
+    pts: list[list[float]] = []
+    for seg in segments:
+        x1, y1, x2, y2 = seg
+        n = max(2, int(math.hypot(x2 - x1, y2 - y1) / 2.0))
+        for t in np.linspace(0.0, 1.0, n):
+            pts.append([x1 + t * (x2 - x1), y1 + t * (y2 - y1)])
+    if len(pts) < 2:
+        return None
+    arr = np.array(pts, dtype=np.float32)
+    line = cv2.fitLine(arr, cv2.DIST_HUBER, 0, 0.01, 0.01)
+    vx, vy, x0, y0 = line.flatten()
+    return float(vx), float(vy), float(x0), float(y0)
+
+
+def _line_intersect(L1: tuple, L2: tuple) -> tuple[float, float] | None:
+    """Intersect two parametric lines (vx, vy, x0, y0). None if parallel."""
+    vx1, vy1, x1, y1 = L1
+    vx2, vy2, x2, y2 = L2
+    det = vx1 * vy2 - vy1 * vx2
+    if abs(det) < 1e-6:
+        return None
+    t = ((x2 - x1) * vy2 - (y2 - y1) * vx2) / det
+    return x1 + t * vx1, y1 + t * vy1
+
+
+def _corners_from_houghlines(
+    gray: np.ndarray, bbox_in_crop: tuple
+) -> np.ndarray | None:
+    """
+    Detect plate borders with HoughLinesP, cluster segments into 4
+    families (top/bottom/left/right) by angle + position, fit a robust
+    line per family, intersect adjacent lines → 4 real plate corners.
+
+    Returns an ordered [tl, tr, br, bl] quad in crop-pixel coords, or
+    None if any of the 4 families is missing or the resulting quad is
+    geometrically implausible (AR / area / overflow checks).
+    """
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_w    = max(1.0, bx2 - bx1)
+    bbox_h    = max(1.0, by2 - by1)
+    bbox_diag = math.hypot(bbox_w, bbox_h)
+    bbox_cx   = (bx1 + bx2) * 0.5
+    bbox_cy   = (by1 + by2) * 0.5
+
+    # Combined edge map — union of two Canny scales
+    blur  = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.bitwise_or(cv2.Canny(blur, 30, 120), cv2.Canny(blur, 50, 150))
+    edges = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
+
+    min_line_length = max(15, int(bbox_w * 0.20))
+    max_line_gap    = max(5,  int(bbox_w * 0.05))
+    threshold       = max(20, int(bbox_diag * 0.10))
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi / 180, threshold,
+        minLineLength=min_line_length, maxLineGap=max_line_gap,
+    )
+    if lines is None:
+        return None
+    segments = [tuple(float(v) for v in l[0]) for l in lines]
+
+    # Keep only segments whose midpoint is near the YOLO bbox
+    margin = max(8.0, 0.10 * bbox_diag)
+    segments = [
+        s for s in segments
+        if (bx1 - margin) <= _segment_midpoint(s)[0] <= (bx2 + margin)
+        and (by1 - margin) <= _segment_midpoint(s)[1] <= (by2 + margin)
+    ]
+    if len(segments) < 4:
+        return None
+
+    # Classify by angle (perspective-tolerant: ±25° / ±25° windows)
+    horiz, vert = [], []
+    for seg in segments:
+        a = _segment_angle_deg(seg)
+        if a <= 25 or a >= 155:
+            horiz.append(seg)
+        elif 65 <= a <= 115:
+            vert.append(seg)
+
+    # Sub-classify by position around the bbox centre
+    top    = [s for s in horiz if _segment_midpoint(s)[1] <  bbox_cy]
+    bottom = [s for s in horiz if _segment_midpoint(s)[1] >= bbox_cy]
+    left   = [s for s in vert  if _segment_midpoint(s)[0] <  bbox_cx]
+    right  = [s for s in vert  if _segment_midpoint(s)[0] >= bbox_cx]
+
+    if not (top and bottom and left and right):
+        return None
+
+    # Keep the longest segments per family (these dominate the line fit)
+    def _top_n(L, n=6):
+        return sorted(L, key=_segment_length, reverse=True)[:n]
+    top, bottom, left, right = _top_n(top), _top_n(bottom), _top_n(left), _top_n(right)
+
+    # Fit one robust line per family
+    L_top    = _fit_line_segments(top)
+    L_bottom = _fit_line_segments(bottom)
+    L_left   = _fit_line_segments(left)
+    L_right  = _fit_line_segments(right)
+    if not all((L_top, L_bottom, L_left, L_right)):
+        return None
+
+    # Intersect adjacent lines → 4 real corners
+    tl = _line_intersect(L_top,    L_left)
+    tr = _line_intersect(L_top,    L_right)
+    br = _line_intersect(L_bottom, L_right)
+    bl = _line_intersect(L_bottom, L_left)
+    if not all((tl, tr, br, bl)):
+        return None
+
+    quad = _order_corners(np.array([tl, tr, br, bl], dtype=float))
+
+    # Validate the resulting projective quad
+    H, W = gray.shape[:2]
+    ar = _quad_aspect_ratio(quad)
+    if ar < PLATE_AR_MIN_HARD or ar > PLATE_AR_MAX_HARD:
+        return None
+    bbox_area = bbox_w * bbox_h
+    area_ratio = _quad_area(quad) / max(1.0, bbox_area)
+    if area_ratio < 0.20 or area_ratio > 1.30:
+        return None
+    if _quad_inside_bbox_ratio(quad, bbox_in_crop) < 0.78:
+        return None
+    if (quad[:, 0].min() < -2 or quad[:, 1].min() < -2
+            or quad[:, 0].max() > W + 2 or quad[:, 1].max() > H + 2):
+        return None
+
+    return quad
 
 
 def _tightened_bbox_quad(
@@ -284,25 +461,19 @@ def _tightened_bbox_quad(
 
 def refine_corners(img_rgb: np.ndarray, bbox: dict, pad: float = 0.20) -> list[dict] | None:
     """
-    Crop the YOLO bbox region (with padding) and search for the
-    quadrilateral that best matches a license plate.
+    Multi-stage corner detection inside the YOLO bbox.
 
-    Multiple candidates are generated from several edge / threshold
-    pipelines (Canny ×3, Otsu, Otsu-inv, adaptive) plus
-    `minAreaRect` oriented boxes of the largest contours, then scored
-    on:
-      - aspect ratio close to ~4.7 (FR plate)         weight 2.5
-      - containment inside the YOLO bbox              weight 2.5
-      - centre proximity to the YOLO bbox centre      weight 1.5
-      - area close to ~0.75 of YOLO bbox area         weight 1.5
-      - mean brightness inside the quad               weight 1.0
-      - internal contrast (std of pixels)             weight 1.0
-
-    Hard rejects are applied for AR ∉ [3.0, 6.5], area ratio ∉ [0.25,
-    1.20] or containment < 0.80 (i.e. >20 % overflow).
-
-    Tightened YOLO-bbox quads are always added to the candidate pool so
-    the result never overflows beyond a safe baseline.
+    Order of preference:
+      1. HoughLinesP — detect edge segments, cluster into 4 families
+         (top / bottom / left / right), fit one line per family,
+         intersect adjacent lines → 4 real plate corners. Yields a
+         **true projective quadrilateral** matching the actual plate
+         even seen in 3/4 view.
+      2. approxPolyDP 4-point on the best contour from several
+         edge/threshold pipelines, scored on AR / containment / etc.
+      3. minAreaRect oriented box (slightly shrunk) — last resort,
+         only when no contour exposes 4 clean corners.
+      4. Tightened YOLO bbox — ultimate fallback so we never overflow.
 
     Returns ordered [tl, tr, br, bl] normalised corners, or None when
     the crop is too small to process.
@@ -317,49 +488,59 @@ def refine_corners(img_rgb: np.ndarray, bbox: dict, pad: float = 0.20) -> list[d
 
     crop = img_rgb[cy1:cy2, cx1:cx2]
     ch, cw = crop.shape[:2]
-    if cw < 20 or ch < 8:          # too small to process
+    if cw < 20 or ch < 8:
         return None
 
-    # YOLO bbox expressed in crop pixel coordinates
     bbox_in_crop = (
         bbox["x1"] * W - cx1,
         bbox["y1"] * H - cy1,
         bbox["x2"] * W - cx1,
         bbox["y2"] * H - cy1,
     )
-
     gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
 
-    candidates = _generate_candidates(gray, bbox_in_crop)
-    # Always include tightened-bbox baselines so we never overflow
-    candidates.append(_tightened_bbox_quad(bbox_in_crop, 0.04, 0.08))
-    candidates.append(_tightened_bbox_quad(bbox_in_crop, 0.07, 0.12))
+    quad: np.ndarray | None = None
+    method: str = ""
 
-    best_score = -1.0
-    best_quad: np.ndarray | None = None
-    best_info: dict = {}
-    for quad in candidates:
-        score, info = _score_candidate(quad, gray, bbox_in_crop)
-        if score > best_score:
-            best_score = score
-            best_quad  = quad
-            best_info  = info
+    # 1. HoughLinesP — 4 line intersections (true projective quad)
+    quad = _corners_from_houghlines(gray, bbox_in_crop)
+    if quad is not None:
+        method = "hough_lines"
 
-    # If even the tightened baselines were rejected (extreme bbox shape),
-    # fall back to a moderately tightened bbox without scoring.
-    if best_quad is None or best_score < 0:
-        best_quad = _tightened_bbox_quad(bbox_in_crop, 0.05, 0.10)
-        logger.info("All candidates rejected; using tightened-bbox fallback")
-    else:
-        logger.info(
-            f"Refinement score={best_score:.2f} "
-            f"ar={best_info.get('ar', 0):.2f} "
-            f"contain={best_info.get('contain', 0):.2f}"
-        )
+    masks: list[np.ndarray] | None = None
+
+    # 2. approxPolyDP 4-point on best contour, scored
+    if quad is None:
+        masks = _build_edge_masks(gray)
+        cands = _approxpoly_quads(masks, bbox_in_crop)
+        best, score, _ = _pick_best(cands, gray, bbox_in_crop)
+        if best is not None:
+            quad   = best
+            method = f"approx_poly score={score:.2f}"
+
+    # 3. minAreaRect (last resort, slightly shrunk)
+    if quad is None:
+        if masks is None:
+            masks = _build_edge_masks(gray)
+        cands = _minarearect_quads(masks, bbox_in_crop, shrink=0.06)
+        best, score, _ = _pick_best(cands, gray, bbox_in_crop)
+        if best is not None:
+            quad   = best
+            method = f"min_area_rect score={score:.2f}"
+
+    # 4. Ultimate fallback — tightened YOLO bbox
+    if quad is None:
+        quad   = _tightened_bbox_quad(bbox_in_crop, 0.04, 0.08)
+        method = "tightened_bbox"
+
+    logger.info(
+        f"Refinement via {method} ar={_quad_aspect_ratio(quad):.2f} "
+        f"contain={_quad_inside_bbox_ratio(quad, bbox_in_crop):.2f}"
+    )
 
     # Map crop-relative pixels → normalised full-image coords
     corners = []
-    for pt in best_quad:
+    for pt in quad:
         corners.append({
             "x": round(float(cx1 + pt[0]) / W, 4),
             "y": round(float(cy1 + pt[1]) / H, 4),
