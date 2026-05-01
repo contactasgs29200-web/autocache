@@ -218,30 +218,36 @@ def _score_candidate(
 
 
 # Edge-mask builders ---------------------------------------------------
-def _build_edge_masks(gray: np.ndarray) -> list[np.ndarray]:
-    """Multi-method binary masks: Canny ×3, Otsu ±, adaptive."""
+def _build_edge_masks(gray: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    """Multi-method binary masks: Canny ×3, Otsu ±, adaptive.
+    Returns [(method_name, mask), ...] so candidates can be tagged."""
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    masks: list[np.ndarray] = []
+    out: list[tuple[str, np.ndarray]] = []
     for low, high in ((30, 120), (50, 150), (15, 80)):
         edges = cv2.Canny(blur, low, high)
         edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
-        masks.append(edges)
+        out.append((f"canny_{low}_{high}", edges))
     _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    masks.append(otsu)
+    out.append(("otsu", otsu))
     _, otsu_inv = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    masks.append(otsu_inv)
-    masks.append(cv2.adaptiveThreshold(
-        blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5
+    out.append(("otsu_inv", otsu_inv))
+    out.append((
+        "adaptive",
+        cv2.adaptiveThreshold(
+            blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5
+        ),
     ))
-    return masks
+    return out
 
 
-def _approxpoly_quads(masks: list[np.ndarray], bbox_in_crop: tuple) -> list[np.ndarray]:
-    """4-point approxPolyDP candidates from each mask (no minAreaRect)."""
-    cands: list[np.ndarray] = []
+def _approxpoly_candidates(
+    named_masks: list[tuple[str, np.ndarray]], bbox_in_crop: tuple
+) -> list[tuple[np.ndarray, str]]:
+    """4-point approxPolyDP candidates with method-name tags."""
+    out: list[tuple[np.ndarray, str]] = []
     bx1, by1, bx2, by2 = bbox_in_crop
     bbox_area = max(1.0, (bx2 - bx1) * (by2 - by1))
-    for mask in masks:
+    for mask_name, mask in named_masks:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -252,19 +258,22 @@ def _approxpoly_quads(masks: list[np.ndarray], bbox_in_crop: tuple) -> list[np.n
             for eps in (0.02, 0.035, 0.05, 0.07):
                 approx = cv2.approxPolyDP(cnt, eps * peri, True)
                 if len(approx) == 4:
-                    cands.append(_order_corners(approx.reshape(4, 2).astype(float)))
+                    quad = _order_corners(approx.reshape(4, 2).astype(float))
+                    out.append((quad, f"approx_poly:{mask_name}:eps={eps}"))
                     break
-    return cands
+    return out
 
 
-def _minarearect_quads(
-    masks: list[np.ndarray], bbox_in_crop: tuple, shrink: float = 0.06
-) -> list[np.ndarray]:
-    """Oriented bounding-box candidates (slightly shrunk) — last resort."""
-    cands: list[np.ndarray] = []
+def _minarearect_candidates(
+    named_masks: list[tuple[str, np.ndarray]],
+    bbox_in_crop: tuple,
+    shrink: float = 0.06,
+) -> list[tuple[np.ndarray, str]]:
+    """Oriented-rectangle candidates (slightly shrunk) with method-name tags."""
+    out: list[tuple[np.ndarray, str]] = []
     bx1, by1, bx2, by2 = bbox_in_crop
     bbox_area = max(1.0, (bx2 - bx1) * (by2 - by1))
-    for mask in masks:
+    for mask_name, mask in named_masks:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
@@ -273,22 +282,9 @@ def _minarearect_quads(
                 continue
             (cx, cy), (w, h), angle = cv2.minAreaRect(cnt)
             shrunk = ((cx, cy), (w * (1.0 - shrink), h * (1.0 - shrink)), angle)
-            cands.append(_order_corners(cv2.boxPoints(shrunk).astype(float)))
-    return cands
-
-
-def _pick_best(
-    cands: list[np.ndarray], gray: np.ndarray, bbox_in_crop: tuple
-) -> tuple[np.ndarray | None, float, dict]:
-    """Return best-scoring quad, or (None, -1, {}) if all hard-rejected."""
-    best_score = -0.5
-    best_quad: np.ndarray | None = None
-    best_info: dict = {}
-    for q in cands:
-        score, info = _score_candidate(q, gray, bbox_in_crop)
-        if score > best_score:
-            best_score, best_quad, best_info = score, q, info
-    return best_quad, best_score, best_info
+            quad = _order_corners(cv2.boxPoints(shrunk).astype(float))
+            out.append((quad, f"min_area_rect:{mask_name}"))
+    return out
 
 
 # HoughLinesP corner detection ----------------------------------------
@@ -459,24 +455,41 @@ def _tightened_bbox_quad(
     ], dtype=float)
 
 
-def refine_corners(img_rgb: np.ndarray, bbox: dict, pad: float = 0.20) -> list[dict] | None:
+def refine_corners(
+    img_rgb: np.ndarray, bbox: dict, pad: float = 0.20
+) -> tuple[list[dict] | None, dict]:
     """
-    Multi-stage corner detection inside the YOLO bbox.
+    Multi-stage corner detection with full candidate-debug payload.
 
-    Order of preference:
-      1. HoughLinesP — detect edge segments, cluster into 4 families
-         (top / bottom / left / right), fit one line per family,
-         intersect adjacent lines → 4 real plate corners. Yields a
-         **true projective quadrilateral** matching the actual plate
-         even seen in 3/4 view.
-      2. approxPolyDP 4-point on the best contour from several
-         edge/threshold pipelines, scored on AR / containment / etc.
-      3. minAreaRect oriented box (slightly shrunk) — last resort,
-         only when no contour exposes 4 clean corners.
-      4. Tightened YOLO bbox — ultimate fallback so we never overflow.
+    Selection priority (the chosen candidate becomes the final quad):
+      1. HoughLinesP intersections (true projective quad)
+      2. approxPolyDP 4-point — best-scoring among edge/threshold masks
+      3. minAreaRect oriented box (slightly shrunk) — last resort
+      4. Tightened YOLO bbox — ultimate fallback
 
-    Returns ordered [tl, tr, br, bl] normalised corners, or None when
-    the crop is too small to process.
+    Every candidate is scored on the same scale (`_score_candidate`) and
+    tagged with the method that produced it. The top 5 by score (plus
+    the chosen one if it's not already in the top 5) are returned in
+    `debug.candidates` so the frontend can visualise why a particular
+    quad won.
+
+    Returns `(corners, debug)`:
+      corners = [{x,y}, …] × 4 ordered [tl, tr, br, bl] in image-
+                normalised coords, or None when the crop is too small.
+      debug   = {
+        "method":           method tag of chosen quad,
+        "total_candidates": int,
+        "candidates":       [
+          {
+            "corners":    list[dict] × 4 normalised,
+            "score":      float,
+            "sub_scores": dict (raw + normalised sub-criteria),
+            "method":     str,
+            "is_final":   bool,
+          },
+          …
+        ],
+      }
     """
     H, W = img_rgb.shape[:2]
     pw = (bbox["x2"] - bbox["x1"]) * pad
@@ -489,7 +502,7 @@ def refine_corners(img_rgb: np.ndarray, bbox: dict, pad: float = 0.20) -> list[d
     crop = img_rgb[cy1:cy2, cx1:cx2]
     ch, cw = crop.shape[:2]
     if cw < 20 or ch < 8:
-        return None
+        return None, {"method": "skipped_small_crop", "candidates": [], "total_candidates": 0}
 
     bbox_in_crop = (
         bbox["x1"] * W - cx1,
@@ -499,53 +512,117 @@ def refine_corners(img_rgb: np.ndarray, bbox: dict, pad: float = 0.20) -> list[d
     )
     gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
 
-    quad: np.ndarray | None = None
-    method: str = ""
+    # ---------- Collect every candidate (each tagged) ----------
+    all_cands: list[dict] = []   # {quad, score, sub_scores, method}
 
-    # 1. HoughLinesP — 4 line intersections (true projective quad)
-    quad = _corners_from_houghlines(gray, bbox_in_crop)
-    if quad is not None:
-        method = "hough_lines"
+    def _add(quad: np.ndarray, method: str) -> None:
+        score, info = _score_candidate(quad, gray, bbox_in_crop)
+        all_cands.append({
+            "quad": quad, "score": score, "sub_scores": info, "method": method,
+        })
 
-    masks: list[np.ndarray] | None = None
+    # 1. HoughLinesP
+    hough_quad = _corners_from_houghlines(gray, bbox_in_crop)
+    if hough_quad is not None:
+        _add(hough_quad, "hough_lines")
 
-    # 2. approxPolyDP 4-point on best contour, scored
-    if quad is None:
-        masks = _build_edge_masks(gray)
-        cands = _approxpoly_quads(masks, bbox_in_crop)
-        best, score, _ = _pick_best(cands, gray, bbox_in_crop)
-        if best is not None:
-            quad   = best
-            method = f"approx_poly score={score:.2f}"
+    # 2 & 3. approxPolyDP and minAreaRect from each edge/threshold mask
+    named_masks = _build_edge_masks(gray)
+    for q, m in _approxpoly_candidates(named_masks, bbox_in_crop):
+        _add(q, m)
+    for q, m in _minarearect_candidates(named_masks, bbox_in_crop, shrink=0.06):
+        _add(q, m)
 
-    # 3. minAreaRect (last resort, slightly shrunk)
-    if quad is None:
-        if masks is None:
-            masks = _build_edge_masks(gray)
-        cands = _minarearect_quads(masks, bbox_in_crop, shrink=0.06)
-        best, score, _ = _pick_best(cands, gray, bbox_in_crop)
-        if best is not None:
-            quad   = best
-            method = f"min_area_rect score={score:.2f}"
+    # 4. Tightened YOLO bbox baselines (always passable)
+    for sf, hf in ((0.04, 0.08), (0.07, 0.12)):
+        _add(_tightened_bbox_quad(bbox_in_crop, sf, hf),
+             f"tightened_bbox:{sf:.2f}_{hf:.2f}")
 
-    # 4. Ultimate fallback — tightened YOLO bbox
-    if quad is None:
-        quad   = _tightened_bbox_quad(bbox_in_crop, 0.04, 0.08)
-        method = "tightened_bbox"
+    # ---------- Selection logic (priority chain) ----------
+    chosen: dict | None = None
+
+    # 1) Hough preferred if it passes the hard rejects (score >= 0)
+    for c in all_cands:
+        if c["method"] == "hough_lines" and c["score"] >= 0:
+            chosen = c
+            break
+
+    # 2) Best-scoring approxPolyDP
+    if chosen is None:
+        approx = [c for c in all_cands
+                  if c["method"].startswith("approx_poly") and c["score"] >= 0]
+        if approx:
+            chosen = max(approx, key=lambda c: c["score"])
+
+    # 3) Best-scoring minAreaRect
+    if chosen is None:
+        rects = [c for c in all_cands
+                 if c["method"].startswith("min_area_rect") and c["score"] >= 0]
+        if rects:
+            chosen = max(rects, key=lambda c: c["score"])
+
+    # 4) Best-scoring tightened bbox
+    if chosen is None:
+        bbs = [c for c in all_cands if c["method"].startswith("tightened_bbox")]
+        if bbs:
+            chosen = max(bbs, key=lambda c: c["score"])
+
+    # 5) Ultimate forced fallback
+    if chosen is None:
+        forced = _tightened_bbox_quad(bbox_in_crop, 0.04, 0.08)
+        score, info = _score_candidate(forced, gray, bbox_in_crop)
+        chosen = {
+            "quad": forced, "score": score, "sub_scores": info,
+            "method": "tightened_bbox_forced",
+        }
+        all_cands.append(chosen)
+
+    chosen["is_final"] = True
+
+    # ---------- Build debug payload ----------
+    sorted_cands = sorted(all_cands, key=lambda c: c["score"], reverse=True)
+    top_n = sorted_cands[:5]
+    if chosen not in top_n:
+        top_n.append(chosen)
+
+    def _quad_to_norm(q: np.ndarray) -> list[dict]:
+        return [
+            {"x": round(float(cx1 + p[0]) / W, 4),
+             "y": round(float(cy1 + p[1]) / H, 4)}
+            for p in q
+        ]
+
+    def _round_subs(d: dict) -> dict:
+        return {
+            k: (round(float(v), 3) if isinstance(v, (int, float)) else v)
+            for k, v in d.items()
+        }
+
+    debug = {
+        "method": chosen["method"],
+        "total_candidates": len(all_cands),
+        "candidates": [
+            {
+                "corners":    _quad_to_norm(c["quad"]),
+                "score":      round(float(c["score"]), 3),
+                "sub_scores": _round_subs(c["sub_scores"]),
+                "method":     c["method"],
+                "is_final":   c.get("is_final", False),
+            }
+            for c in top_n
+        ],
+    }
+
+    final_corners = _quad_to_norm(chosen["quad"])
 
     logger.info(
-        f"Refinement via {method} ar={_quad_aspect_ratio(quad):.2f} "
-        f"contain={_quad_inside_bbox_ratio(quad, bbox_in_crop):.2f}"
+        f"Refinement via {chosen['method']} score={chosen['score']:.2f} "
+        f"ar={_quad_aspect_ratio(chosen['quad']):.2f} "
+        f"contain={_quad_inside_bbox_ratio(chosen['quad'], bbox_in_crop):.2f} "
+        f"({len(all_cands)} candidates total, top {len(top_n)} returned)"
     )
 
-    # Map crop-relative pixels → normalised full-image coords
-    corners = []
-    for pt in quad:
-        corners.append({
-            "x": round(float(cx1 + pt[0]) / W, 4),
-            "y": round(float(cy1 + pt[1]) / H, 4),
-        })
-    return corners   # [tl, tr, br, bl]
+    return final_corners, debug
 
 
 # ---------------------------------------------------------------------------
@@ -586,9 +663,9 @@ async def detect_plate(file: UploadFile = File(...)):
     }
     logger.info(f"YOLO bbox: ({bbox['x1']},{bbox['y1']})-({bbox['x2']},{bbox['y2']}) conf={conf:.2f}")
 
-    # OpenCV refinement → oriented corners
-    img_np  = np.array(img)
-    corners = refine_corners(img_np, bbox)
+    # OpenCV refinement → oriented corners + candidate debug payload
+    img_np                  = np.array(img)
+    corners, refine_debug   = refine_corners(img_np, bbox)
     if corners:
         logger.info(f"Refined corners: {corners}")
     else:
@@ -598,5 +675,6 @@ async def detect_plate(file: UploadFile = File(...)):
         "found":   True,
         "conf":    round(conf, 3),
         "bbox":    bbox,
-        "corners": corners,   # list[{x,y}] × 4 ordered [tl,tr,br,bl], or null
+        "corners": corners,        # list[{x,y}] × 4 ordered [tl,tr,br,bl], or null
+        "debug":   refine_debug,   # candidate landscape + scores + methods
     }

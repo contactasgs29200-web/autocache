@@ -837,6 +837,13 @@ async function detectPlateYOLO(imageFile) {
     const b = d.bbox;
     console.log(`YOLO bbox: (${b.x1.toFixed(3)},${b.y1.toFixed(3)})-(${b.x2.toFixed(3)},${b.y2.toFixed(3)}) conf=${d.conf}`);
     if (d.corners) console.log('Corners raffinés:', d.corners.map(p => `(${p.x.toFixed(3)},${p.y.toFixed(3)})`).join(' '));
+    if (d.debug?.candidates?.length) {
+      console.log(`YOLO debug: ${d.debug.total_candidates} candidats, méthode finale = ${d.debug.method}`);
+      d.debug.candidates.forEach((c, i) => {
+        const star = c.is_final ? '★' : ' ';
+        console.log(`  ${star} #${i+1} score=${c.score} method=${c.method} ar=${c.sub_scores.ar ?? '?'} contain=${c.sub_scores.contain ?? '?'}`);
+      });
+    }
     return d;
   } catch(e) {
     console.error('YOLO error:', e.message);
@@ -930,7 +937,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   }
   const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
   const yoloCorners = yolo?.corners ?? null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, imgW: c.width, imgH: c.height };
+  const yoloDebug   = yolo?.debug   ?? null;
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -2516,7 +2524,33 @@ export default function AutoCache() {
                               fill="none" stroke="#22c55e" strokeWidth={Math.max(2, r.imgW * 0.002)}
                               strokeDasharray={`${r.imgW * 0.01} ${r.imgW * 0.005}`}
                             />
-                            {/* Quadrilatère raffiné OpenCV — orange */}
+                            {/* Candidats alternatifs — cyan fin pointillé (debug) */}
+                            {r.yoloDebug?.candidates && r.yoloDebug.candidates
+                              .filter(c => !c.is_final)
+                              .map((c, ci) => {
+                                const ab = c.method.startsWith('hough') ? 'hough'
+                                  : c.method.startsWith('approx_poly') ? 'poly'
+                                  : c.method.startsWith('min_area_rect') ? 'rect'
+                                  : c.method.startsWith('tightened_bbox') ? 'bbox' : c.method;
+                                return (
+                                  <g key={`alt-${ci}`} opacity={0.55}>
+                                    <polygon
+                                      points={c.corners.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
+                                      fill="none" stroke="#06b6d4"
+                                      strokeWidth={Math.max(1, r.imgW * 0.0014)}
+                                      strokeDasharray={`${r.imgW * 0.004} ${r.imgW * 0.003}`}
+                                    />
+                                    <text
+                                      x={c.corners[0].x * r.imgW + r.imgW * 0.003}
+                                      y={c.corners[0].y * r.imgH - r.imgH * 0.004}
+                                      fill="#06b6d4" fontSize={r.imgH * 0.018}
+                                      fontFamily="monospace" fontWeight="bold">
+                                      {c.score.toFixed(1)} {ab}
+                                    </text>
+                                  </g>
+                                );
+                              })}
+                            {/* Quadrilatère raffiné OpenCV — orange épais */}
                             {r.yoloCorners && (
                               <polygon
                                 points={r.yoloCorners.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
@@ -2528,13 +2562,21 @@ export default function AutoCache() {
                               <circle key={i} cx={p.x * r.imgW} cy={p.y * r.imgH}
                                 r={Math.max(4, r.imgW * 0.006)} fill="#f97316" />
                             ))}
-                            {/* Badge confiance */}
+                            {/* Badge confiance + méthode finale */}
                             <rect x={r.yoloBbox.x1 * r.imgW} y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.042}
                               width={r.imgW * 0.072} height={r.imgH * 0.038} fill="#22c55e" rx={r.imgW * 0.003} />
                             <text x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.005} y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.01}
                               fill="#000" fontSize={r.imgH * 0.026} fontFamily="monospace" fontWeight="bold">
                               {Math.round(r.yoloBbox.conf * 100)}%
                             </text>
+                            {r.yoloDebug?.method && (
+                              <text x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.078}
+                                y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.012}
+                                fill="#f97316" fontSize={r.imgH * 0.022}
+                                fontFamily="monospace" fontWeight="bold">
+                                {r.yoloDebug.method.split(':')[0]}
+                              </text>
+                            )}
                           </svg>
                         )}
                         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4 }}>
@@ -2777,7 +2819,33 @@ export default function AutoCache() {
                   fill="none" stroke="#22c55e" strokeWidth={Math.max(2, lightbox.imgW * 0.002)}
                   strokeDasharray={`${lightbox.imgW * 0.01} ${lightbox.imgW * 0.005}`}
                 />
-                {/* Quadrilatère raffiné — orange */}
+                {/* Candidats alternatifs — cyan fin pointillé (debug) */}
+                {lightbox.yoloDebug?.candidates && lightbox.yoloDebug.candidates
+                  .filter(c => !c.is_final)
+                  .map((c, ci) => {
+                    const ab = c.method.startsWith('hough') ? 'hough'
+                      : c.method.startsWith('approx_poly') ? 'poly'
+                      : c.method.startsWith('min_area_rect') ? 'rect'
+                      : c.method.startsWith('tightened_bbox') ? 'bbox' : c.method;
+                    return (
+                      <g key={`alt-lb-${ci}`} opacity={0.55}>
+                        <polygon
+                          points={c.corners.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
+                          fill="none" stroke="#06b6d4"
+                          strokeWidth={Math.max(1, lightbox.imgW * 0.0014)}
+                          strokeDasharray={`${lightbox.imgW * 0.004} ${lightbox.imgW * 0.003}`}
+                        />
+                        <text
+                          x={c.corners[0].x * lightbox.imgW + lightbox.imgW * 0.003}
+                          y={c.corners[0].y * lightbox.imgH - lightbox.imgH * 0.004}
+                          fill="#06b6d4" fontSize={lightbox.imgH * 0.018}
+                          fontFamily="monospace" fontWeight="bold">
+                          {c.score.toFixed(1)} {ab}
+                        </text>
+                      </g>
+                    );
+                  })}
+                {/* Quadrilatère raffiné — orange épais */}
                 {lightbox.yoloCorners && (
                   <polygon
                     points={lightbox.yoloCorners.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
@@ -2789,13 +2857,21 @@ export default function AutoCache() {
                   <circle key={i} cx={p.x * lightbox.imgW} cy={p.y * lightbox.imgH}
                     r={Math.max(5, lightbox.imgW * 0.006)} fill="#f97316" />
                 ))}
-                {/* Badge confiance */}
+                {/* Badge confiance + méthode finale */}
                 <rect x={lightbox.yoloBbox.x1 * lightbox.imgW} y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.042}
                   width={lightbox.imgW * 0.072} height={lightbox.imgH * 0.038} fill="#22c55e" rx={lightbox.imgW * 0.003} />
                 <text x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.005} y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.01}
                   fill="#000" fontSize={lightbox.imgH * 0.026} fontFamily="monospace" fontWeight="bold">
                   {Math.round(lightbox.yoloBbox.conf * 100)}%
                 </text>
+                {lightbox.yoloDebug?.method && (
+                  <text x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.078}
+                    y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.012}
+                    fill="#f97316" fontSize={lightbox.imgH * 0.022}
+                    fontFamily="monospace" fontWeight="bold">
+                    {lightbox.yoloDebug.method.split(':')[0]}
+                  </text>
+                )}
               </svg>
             )}
 
