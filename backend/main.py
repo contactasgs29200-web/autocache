@@ -1,12 +1,10 @@
 import io
-import os
 import logging
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from ultralytics import YOLO
-from huggingface_hub import hf_hub_download
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,24 +18,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODEL_REPO = "keremberke/yolov8n-license-plate-detection"
-MODEL_FILE = "best.pt"
-CACHE_DIR = os.environ.get("MODEL_CACHE_DIR", "/tmp/models")
-
 _model: YOLO | None = None
 
 
 def get_model() -> YOLO:
     global _model
     if _model is None:
-        logger.info("Downloading model from HuggingFace…")
-        path = hf_hub_download(
-            repo_id=MODEL_REPO,
-            filename=MODEL_FILE,
-            cache_dir=CACHE_DIR,
-        )
-        logger.info(f"Model loaded from {path}")
-        _model = YOLO(path)
+        logger.info("Loading yolov8n.pt…")
+        _model = YOLO("yolov8n.pt")  # auto-téléchargé depuis ultralytics
+        logger.info("Model ready")
     return _model
 
 
