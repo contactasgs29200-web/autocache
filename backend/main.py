@@ -440,6 +440,401 @@ def _corners_from_houghlines(
     return quad
 
 
+# ---------------------------------------------------------------------------
+# Plate-aware specialized candidate generators
+# ---------------------------------------------------------------------------
+
+def _fit_line_through_points(points: list) -> tuple | None:
+    """Fit a robust line through (x, y) points → (vx, vy, x0, y0); None if < 2."""
+    if len(points) < 2:
+        return None
+    arr = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    line = cv2.fitLine(arr, cv2.DIST_HUBER, 0, 0.01, 0.01)
+    vx, vy, x0, y0 = line.flatten()
+    return float(vx), float(vy), float(x0), float(y0)
+
+
+def _detect_top_bottom_lines(
+    gray: np.ndarray, bbox_in_crop: tuple
+) -> tuple:
+    """
+    Hough-based top + bottom plate borders (parametric form).
+    Returns (L_top, L_bottom) or (None, None) if either side is missing.
+    """
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_w    = max(1.0, bx2 - bx1)
+    bbox_diag = math.hypot(bx2 - bx1, by2 - by1)
+    bbox_cy   = (by1 + by2) * 0.5
+
+    blur  = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.bitwise_or(cv2.Canny(blur, 30, 120), cv2.Canny(blur, 50, 150))
+    edges = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
+
+    min_line_length = max(15, int(bbox_w * 0.20))
+    max_line_gap    = max(5,  int(bbox_w * 0.05))
+    threshold       = max(20, int(bbox_diag * 0.10))
+    lines = cv2.HoughLinesP(
+        edges, 1, np.pi / 180, threshold,
+        minLineLength=min_line_length, maxLineGap=max_line_gap,
+    )
+    if lines is None:
+        return None, None
+
+    margin = max(8.0, 0.10 * bbox_diag)
+    segments = []
+    for ln in lines:
+        s = tuple(float(v) for v in ln[0])
+        mx, my = _segment_midpoint(s)
+        if (bx1 - margin) <= mx <= (bx2 + margin) and (by1 - margin) <= my <= (by2 + margin):
+            segments.append(s)
+
+    horiz = [s for s in segments
+             if _segment_angle_deg(s) <= 25 or _segment_angle_deg(s) >= 155]
+    top    = [s for s in horiz if _segment_midpoint(s)[1] <  bbox_cy]
+    bottom = [s for s in horiz if _segment_midpoint(s)[1] >= bbox_cy]
+    if not top or not bottom:
+        return None, None
+
+    top    = sorted(top,    key=_segment_length, reverse=True)[:6]
+    bottom = sorted(bottom, key=_segment_length, reverse=True)[:6]
+    return _fit_line_segments(top), _fit_line_segments(bottom)
+
+
+def _find_lateral_boundary_points(
+    crop_rgb: np.ndarray, gray: np.ndarray, bbox_in_crop: tuple
+) -> tuple[list, list]:
+    """
+    Collect 2D points along the actual left / right plate edges.
+    Sources, in decreasing strength:
+      • outer column of blue EU bands (very strong if visible)
+      • leftmost / rightmost columns of the bright plate body
+      • horizontal extent of the dark-character row (with a small margin)
+    Returns (left_pts, right_pts) — each a list of [x, y] in crop pixels.
+    """
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_w = max(1.0, bx2 - bx1)
+    bbox_h = max(1.0, by2 - by1)
+    H, W   = gray.shape[:2]
+
+    rx1 = int(max(0, bx1 - bbox_w * 0.06))
+    ry1 = int(max(0, by1 - bbox_h * 0.10))
+    rx2 = int(min(W, bx2 + bbox_w * 0.06))
+    ry2 = int(min(H, by2 + bbox_h * 0.10))
+    if rx2 - rx1 < 10 or ry2 - ry1 < 6:
+        return [], []
+
+    sub_rgb  = crop_rgb[ry1:ry2, rx1:rx2]
+    sub_gray = gray[ry1:ry2, rx1:rx2]
+    sub_h, sub_w = sub_gray.shape[:2]
+
+    hsv = cv2.cvtColor(sub_rgb, cv2.COLOR_RGB2HSV)
+    h_chan, s_chan, v_chan = cv2.split(hsv)
+
+    # ---- bright + desaturated plate-body mask ----
+    body = ((v_chan > 130) & (s_chan < 70)).astype(np.uint8) * 255
+    body = cv2.morphologyEx(body, cv2.MORPH_CLOSE, np.ones((3, 7), np.uint8))
+    body = cv2.morphologyEx(body, cv2.MORPH_OPEN,  np.ones((3, 3), np.uint8))
+
+    body_bbox = None
+    n_body, _, stats_body, _ = cv2.connectedComponentsWithStats(body, 8)
+    if n_body > 1:
+        idx = 1 + int(stats_body[1:, cv2.CC_STAT_AREA].argmax())
+        if stats_body[idx, cv2.CC_STAT_AREA] > 0.10 * (sub_h * sub_w):
+            x  = int(stats_body[idx, cv2.CC_STAT_LEFT])
+            y  = int(stats_body[idx, cv2.CC_STAT_TOP])
+            ww = int(stats_body[idx, cv2.CC_STAT_WIDTH])
+            hh = int(stats_body[idx, cv2.CC_STAT_HEIGHT])
+            body_bbox = (x, y, x + ww, y + hh)
+
+    # ---- blue EU-band mask ----
+    blue = ((h_chan >= 95) & (h_chan <= 135)
+            & (s_chan > 70) & (v_chan > 40)).astype(np.uint8) * 255
+    blue = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+    blue_left, blue_right = None, None
+    n_blue, _, stats_blue, _ = cv2.connectedComponentsWithStats(blue, 8)
+    for i in range(1, n_blue):
+        bx = int(stats_blue[i, cv2.CC_STAT_LEFT])
+        by = int(stats_blue[i, cv2.CC_STAT_TOP])
+        bw = int(stats_blue[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats_blue[i, cv2.CC_STAT_HEIGHT])
+        if bh < 0.40 * sub_h or bw > 0.25 * sub_w:
+            continue
+        cx_blob = bx + bw / 2.0
+        if cx_blob < sub_w * 0.30 and (blue_left is None or bx < blue_left[0]):
+            blue_left = (bx, by, bx + bw, by + bh)
+        elif cx_blob > sub_w * 0.70 and (blue_right is None or (bx + bw) > blue_right[2]):
+            blue_right = (bx, by, bx + bw, by + bh)
+
+    # ---- dark-character mask within the body ----
+    dark = (sub_gray < 110).astype(np.uint8) * 255
+    if body_bbox is not None:
+        bm = np.zeros_like(dark)
+        bm[body_bbox[1]:body_bbox[3], body_bbox[0]:body_bbox[2]] = 255
+        dark = cv2.bitwise_and(dark, bm)
+    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+
+    text_blobs = []
+    n_t, _, stats_t, _ = cv2.connectedComponentsWithStats(dark, 8)
+    for i in range(1, n_t):
+        tx = int(stats_t[i, cv2.CC_STAT_LEFT])
+        ty = int(stats_t[i, cv2.CC_STAT_TOP])
+        tw = int(stats_t[i, cv2.CC_STAT_WIDTH])
+        th = int(stats_t[i, cv2.CC_STAT_HEIGHT])
+        if th < 0.25 * sub_h or th > 0.95 * sub_h:
+            continue
+        if tw > 0.18 * sub_w or tw < 0.02 * sub_w:
+            continue
+        if th < 0.8 * tw:
+            continue
+        text_blobs.append((tx, ty, tx + tw, ty + th))
+
+    left_pts:  list = []
+    right_pts: list = []
+
+    # Body extents — 5 sample rows across height
+    if body_bbox is not None:
+        bx0, by0, bx_end, by_end = body_bbox
+        for y_frac in (0.20, 0.35, 0.50, 0.65, 0.80):
+            y = int(by0 + y_frac * (by_end - by0))
+            if 0 <= y < sub_h:
+                row = body[y]
+                xs = np.where(row > 0)[0]
+                if xs.size > 0:
+                    left_pts.append([rx1 + float(xs.min()), ry1 + float(y)])
+                    right_pts.append([rx1 + float(xs.max()), ry1 + float(y)])
+
+    # Blue-band outer columns (very strong cue)
+    if blue_left is not None:
+        bx0, by0, _, by_end = blue_left
+        for yy in (by0, (by0 + by_end) * 0.5, by_end):
+            left_pts.append([rx1 + float(bx0), ry1 + float(yy)])
+    if blue_right is not None:
+        _, by0, bx_end, by_end = blue_right
+        for yy in (by0, (by0 + by_end) * 0.5, by_end):
+            right_pts.append([rx1 + float(bx_end), ry1 + float(yy)])
+
+    # Text horizontal extents — chars span ~78% of plate width → ≈13% margin
+    if len(text_blobs) >= 3:
+        text_blobs.sort(key=lambda b: b[0])
+        leftmost  = text_blobs[0]
+        rightmost = text_blobs[-1]
+        text_top  = min(b[1] for b in text_blobs)
+        text_bot  = max(b[3] for b in text_blobs)
+        chars_w   = max(1.0, rightmost[2] - leftmost[0])
+        margin_x  = chars_w * 0.13 / 0.78
+        for yy in (text_top, (text_top + text_bot) * 0.5, text_bot):
+            left_pts.append([rx1 + float(leftmost[0])  - margin_x, ry1 + float(yy)])
+            right_pts.append([rx1 + float(rightmost[2]) + margin_x, ry1 + float(yy)])
+
+    return left_pts, right_pts
+
+
+def _hybrid_plate_quad(
+    crop_rgb: np.ndarray, gray: np.ndarray, bbox_in_crop: tuple
+) -> np.ndarray | None:
+    """
+    True projective plate quad combining:
+      • top/bottom borders detected via Hough lines (often reliable)
+      • left/right borders inferred from plate content (blue bands,
+        bright body, character extents)
+    Sides may tilt independently — NOT axis-aligned.
+    """
+    L_top, L_bottom = _detect_top_bottom_lines(gray, bbox_in_crop)
+    if L_top is None or L_bottom is None:
+        return None
+
+    left_pts, right_pts = _find_lateral_boundary_points(crop_rgb, gray, bbox_in_crop)
+    if len(left_pts) < 3 or len(right_pts) < 3:
+        return None
+
+    L_left  = _fit_line_through_points(left_pts)
+    L_right = _fit_line_through_points(right_pts)
+    if L_left is None or L_right is None:
+        return None
+
+    tl = _line_intersect(L_top,    L_left)
+    tr = _line_intersect(L_top,    L_right)
+    br = _line_intersect(L_bottom, L_right)
+    bl = _line_intersect(L_bottom, L_left)
+    if not all((tl, tr, br, bl)):
+        return None
+
+    quad = _order_corners(np.array([tl, tr, br, bl], dtype=float))
+
+    H, W = gray.shape[:2]
+    if (quad[:, 0].min() < -2 or quad[:, 1].min() < -2
+            or quad[:, 0].max() > W + 2 or quad[:, 1].max() > H + 2):
+        return None
+    ar = _quad_aspect_ratio(quad)
+    if ar < PLATE_AR_MIN_HARD or ar > PLATE_AR_MAX_HARD:
+        return None
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_area = max(1.0, (bx2 - bx1) * (by2 - by1))
+    if not (0.20 <= _quad_area(quad) / bbox_area <= 1.30):
+        return None
+    if _quad_inside_bbox_ratio(quad, bbox_in_crop) < 0.78:
+        return None
+    return quad
+
+
+def _plate_edges_candidates(
+    crop_rgb: np.ndarray, bbox_in_crop: tuple
+) -> list[tuple[np.ndarray, str]]:
+    """HSV bright + desaturated plate-body mask → contour → 4-point polygon."""
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_w = max(1.0, bx2 - bx1)
+    bbox_h = max(1.0, by2 - by1)
+    bbox_area = bbox_w * bbox_h
+    cx0 = (bx1 + bx2) * 0.5
+    cy0 = (by1 + by2) * 0.5
+
+    hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+    h_chan, s_chan, v_chan = cv2.split(hsv)
+
+    out: list[tuple[np.ndarray, str]] = []
+    for v_thr, s_thr in ((130, 70), (150, 60), (110, 90)):
+        mask = ((v_chan > v_thr) & (s_chan < s_thr)).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 7), np.uint8))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  np.ones((3, 3), np.uint8))
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in sorted(contours, key=cv2.contourArea, reverse=True)[:4]:
+            area = cv2.contourArea(cnt)
+            if area < 0.20 * bbox_area or area > 2.0 * bbox_area:
+                continue
+            x, y, w_c, h_c = cv2.boundingRect(cnt)
+            cx_c, cy_c = x + w_c * 0.5, y + h_c * 0.5
+            if abs(cx_c - cx0) > bbox_w * 0.40 or abs(cy_c - cy0) > bbox_h * 0.40:
+                continue
+            peri = cv2.arcLength(cnt, True)
+            for eps in (0.02, 0.035, 0.05, 0.07):
+                approx = cv2.approxPolyDP(cnt, eps * peri, True)
+                if len(approx) == 4:
+                    quad = _order_corners(approx.reshape(4, 2).astype(float))
+                    out.append((quad, f"plate_edges:v={v_thr}_s={s_thr}:eps={eps}"))
+                    break
+    return out
+
+
+def _blue_bands_candidates(
+    crop_rgb: np.ndarray, bbox_in_crop: tuple
+) -> list[tuple[np.ndarray, str]]:
+    """HSV blue blobs at left+right of plate → axis-aligned plate quad."""
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_w = max(1.0, bx2 - bx1)
+    bbox_h = max(1.0, by2 - by1)
+    H, W = crop_rgb.shape[:2]
+
+    rx1 = int(max(0, bx1 - bbox_w * 0.05))
+    ry1 = int(max(0, by1 - bbox_h * 0.05))
+    rx2 = int(min(W, bx2 + bbox_w * 0.05))
+    ry2 = int(min(H, by2 + bbox_h * 0.05))
+    if rx2 - rx1 < 10 or ry2 - ry1 < 6:
+        return []
+
+    sub = crop_rgb[ry1:ry2, rx1:rx2]
+    hsv = cv2.cvtColor(sub, cv2.COLOR_RGB2HSV)
+    h_chan, s_chan, v_chan = cv2.split(hsv)
+    sub_h, sub_w = sub.shape[:2]
+
+    blue = ((h_chan >= 95) & (h_chan <= 135)
+            & (s_chan > 70) & (v_chan > 40)).astype(np.uint8) * 255
+    blue = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+    n, _, stats, _ = cv2.connectedComponentsWithStats(blue, 8)
+    left_blob, right_blob = None, None
+    for i in range(1, n):
+        bx = int(stats[i, cv2.CC_STAT_LEFT])
+        by = int(stats[i, cv2.CC_STAT_TOP])
+        bw = int(stats[i, cv2.CC_STAT_WIDTH])
+        bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        if bh < 0.40 * sub_h or bw > 0.25 * sub_w:
+            continue
+        cx_blob = bx + bw / 2.0
+        if cx_blob < sub_w * 0.30 and (left_blob is None or bx < left_blob[0]):
+            left_blob = (bx, by, bx + bw, by + bh)
+        elif cx_blob > sub_w * 0.70 and (right_blob is None or (bx + bw) > right_blob[2]):
+            right_blob = (bx, by, bx + bw, by + bh)
+
+    if left_blob is None or right_blob is None:
+        return []
+    x_left  = rx1 + left_blob[0]
+    x_right = rx1 + right_blob[2]
+    y_top   = ry1 + min(left_blob[1], right_blob[1])
+    y_bot   = ry1 + max(left_blob[3], right_blob[3])
+    pad_y   = 0.05 * (y_bot - y_top)
+    y_top   = max(0, y_top - pad_y)
+    y_bot   = min(H, y_bot + pad_y)
+    quad = np.array([
+        [x_left,  y_top],
+        [x_right, y_top],
+        [x_right, y_bot],
+        [x_left,  y_bot],
+    ], dtype=float)
+    return [(quad, "blue_bands:both")]
+
+
+def _text_band_candidates(
+    gray: np.ndarray, bbox_in_crop: tuple
+) -> list[tuple[np.ndarray, str]]:
+    """Otsu-inverse → dark-character blobs → tight bbox + plate margin."""
+    bx1, by1, bx2, by2 = bbox_in_crop
+    bbox_w = max(1.0, bx2 - bx1)
+    bbox_h = max(1.0, by2 - by1)
+    H, W = gray.shape[:2]
+
+    rx1 = int(max(0, bx1 - bbox_w * 0.05))
+    ry1 = int(max(0, by1 - bbox_h * 0.05))
+    rx2 = int(min(W, bx2 + bbox_w * 0.05))
+    ry2 = int(min(H, by2 + bbox_h * 0.05))
+    sub = gray[ry1:ry2, rx1:rx2]
+    sub_h, sub_w = sub.shape[:2]
+    if sub_w < 10 or sub_h < 6:
+        return []
+
+    blur = cv2.GaussianBlur(sub, (3, 3), 0)
+    _, mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+
+    n, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    blobs = []
+    for i in range(1, n):
+        x  = int(stats[i, cv2.CC_STAT_LEFT])
+        y  = int(stats[i, cv2.CC_STAT_TOP])
+        ww = int(stats[i, cv2.CC_STAT_WIDTH])
+        hh = int(stats[i, cv2.CC_STAT_HEIGHT])
+        if hh < 0.30 * sub_h or hh > 0.90 * sub_h:
+            continue
+        if ww > 0.18 * sub_w or ww < 0.02 * sub_w:
+            continue
+        if hh < 0.8 * ww:
+            continue
+        blobs.append((x, y, x + ww, y + hh))
+
+    if len(blobs) < 4:
+        return []
+    centers_y = np.array([(b[1] + b[3]) * 0.5 for b in blobs])
+    median_y = float(np.median(centers_y))
+    blobs = [b for b, cy in zip(blobs, centers_y) if abs(cy - median_y) < sub_h * 0.25]
+    if len(blobs) < 4:
+        return []
+
+    x_min = min(b[0] for b in blobs); x_max = max(b[2] for b in blobs)
+    y_min = min(b[1] for b in blobs); y_max = max(b[3] for b in blobs)
+    chars_w  = max(1.0, x_max - x_min)
+    margin_x = chars_w * 0.13 / 0.78
+    margin_y = (y_max - y_min) * 0.18
+
+    qx1 = max(0, rx1 + x_min - margin_x)
+    qy1 = max(0, ry1 + y_min - margin_y)
+    qx2 = min(W, rx1 + x_max + margin_x)
+    qy2 = min(H, ry1 + y_max + margin_y)
+    quad = np.array([
+        [qx1, qy1], [qx2, qy1], [qx2, qy2], [qx1, qy2],
+    ], dtype=float)
+    return [(quad, f"text_band:n={len(blobs)}")]
+
+
 def _tightened_bbox_quad(
     bbox_in_crop: tuple, sx_frac: float = 0.04, sy_frac: float = 0.08
 ) -> np.ndarray:
@@ -456,7 +851,7 @@ def _tightened_bbox_quad(
 
 
 def refine_corners(
-    img_rgb: np.ndarray, bbox: dict, pad: float = 0.20
+    img_rgb: np.ndarray, bbox: dict, pad: float = 0.10
 ) -> tuple[list[dict] | None, dict]:
     """
     Multi-stage corner detection with full candidate-debug payload.
@@ -521,19 +916,33 @@ def refine_corners(
             "quad": quad, "score": score, "sub_scores": info, "method": method,
         })
 
-    # 1. HoughLinesP
+    # 1. Hybrid plate-aware projective quad (top + bottom from Hough,
+    #    left + right from plate content — sides may tilt independently)
+    hybrid_quad = _hybrid_plate_quad(crop, gray, bbox_in_crop)
+    if hybrid_quad is not None:
+        _add(hybrid_quad, "hybrid_plate_quad")
+
+    # 2. HoughLinesP all-four-sides intersections
     hough_quad = _corners_from_houghlines(gray, bbox_in_crop)
     if hough_quad is not None:
         _add(hough_quad, "hough_lines")
 
-    # 2 & 3. approxPolyDP and minAreaRect from each edge/threshold mask
+    # 3. Plate-aware specialized candidates (color/text-driven)
+    for q, m in _plate_edges_candidates(crop, bbox_in_crop):
+        _add(q, m)
+    for q, m in _blue_bands_candidates(crop, bbox_in_crop):
+        _add(q, m)
+    for q, m in _text_band_candidates(gray, bbox_in_crop):
+        _add(q, m)
+
+    # 4 & 5. Generic approxPolyDP + minAreaRect from each edge/threshold mask
     named_masks = _build_edge_masks(gray)
     for q, m in _approxpoly_candidates(named_masks, bbox_in_crop):
         _add(q, m)
     for q, m in _minarearect_candidates(named_masks, bbox_in_crop, shrink=0.06):
         _add(q, m)
 
-    # 4. Tightened YOLO bbox baselines (always passable)
+    # 6. Tightened YOLO bbox baselines (last-resort fallback)
     for sf, hf in ((0.04, 0.08), (0.07, 0.12)):
         _add(_tightened_bbox_quad(bbox_in_crop, sf, hf),
              f"tightened_bbox:{sf:.2f}_{hf:.2f}")
@@ -541,27 +950,47 @@ def refine_corners(
     # ---------- Selection logic (priority chain) ----------
     chosen: dict | None = None
 
-    # 1) Hough preferred if it passes the hard rejects (score >= 0)
+    # 1) Hybrid plate-aware projective quad (top priority — true projective
+    #    geometry recovered from plate content)
     for c in all_cands:
-        if c["method"] == "hough_lines" and c["score"] >= 0:
+        if c["method"] == "hybrid_plate_quad" and c["score"] >= 0:
             chosen = c
             break
 
-    # 2) Best-scoring approxPolyDP
+    # 2) HoughLinesP all-four-sides intersection
+    if chosen is None:
+        for c in all_cands:
+            if c["method"] == "hough_lines" and c["score"] >= 0:
+                chosen = c
+                break
+
+    # 3) Best-scoring plate-aware specialized candidate
+    if chosen is None:
+        spec = [
+            c for c in all_cands
+            if c["score"] >= 0
+            and (c["method"].startswith("plate_edges")
+                 or c["method"].startswith("blue_bands")
+                 or c["method"].startswith("text_band"))
+        ]
+        if spec:
+            chosen = max(spec, key=lambda c: c["score"])
+
+    # 4) Best-scoring approxPolyDP
     if chosen is None:
         approx = [c for c in all_cands
                   if c["method"].startswith("approx_poly") and c["score"] >= 0]
         if approx:
             chosen = max(approx, key=lambda c: c["score"])
 
-    # 3) Best-scoring minAreaRect
+    # 5) Best-scoring minAreaRect
     if chosen is None:
         rects = [c for c in all_cands
                  if c["method"].startswith("min_area_rect") and c["score"] >= 0]
         if rects:
             chosen = max(rects, key=lambda c: c["score"])
 
-    # 4) Best-scoring tightened bbox
+    # 6) Tightened bbox — last-resort fallback (always passable)
     if chosen is None:
         bbs = [c for c in all_cands if c["method"].startswith("tightened_bbox")]
         if bbs:
@@ -580,10 +1009,11 @@ def refine_corners(
     chosen["is_final"] = True
 
     # ---------- Build debug payload ----------
+    # Keep the chosen quad + only the 3 best alternative candidates
+    # to reduce visual noise on the frontend.
     sorted_cands = sorted(all_cands, key=lambda c: c["score"], reverse=True)
-    top_n = sorted_cands[:5]
-    if chosen not in top_n:
-        top_n.append(chosen)
+    alt_n = [c for c in sorted_cands if c is not chosen][:3]
+    top_n = [chosen] + alt_n
 
     def _quad_to_norm(q: np.ndarray) -> list[dict]:
         return [

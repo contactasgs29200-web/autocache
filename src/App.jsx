@@ -2572,9 +2572,12 @@ export default function AutoCache() {
                             {r.yoloDebug?.method && (
                               <text x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.078}
                                 y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.012}
-                                fill="#f97316" fontSize={r.imgH * 0.022}
+                                fill={r.yoloDebug.method.startsWith('tightened_bbox') ? '#ef4444' : '#f97316'}
+                                fontSize={r.imgH * 0.022}
                                 fontFamily="monospace" fontWeight="bold">
-                                {r.yoloDebug.method.split(':')[0]}
+                                {r.yoloDebug.method.split(':')[0] === 'hough_lines'
+                                  ? 'hough'
+                                  : r.yoloDebug.method.split(':')[0]}
                               </text>
                             )}
                           </svg>
@@ -2867,9 +2870,12 @@ export default function AutoCache() {
                 {lightbox.yoloDebug?.method && (
                   <text x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.078}
                     y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.012}
-                    fill="#f97316" fontSize={lightbox.imgH * 0.022}
+                    fill={lightbox.yoloDebug.method.startsWith('tightened_bbox') ? '#ef4444' : '#f97316'}
+                    fontSize={lightbox.imgH * 0.022}
                     fontFamily="monospace" fontWeight="bold">
-                    {lightbox.yoloDebug.method.split(':')[0]}
+                    {lightbox.yoloDebug.method.split(':')[0] === 'hough_lines'
+                      ? 'hough'
+                      : lightbox.yoloDebug.method.split(':')[0]}
                   </text>
                 )}
               </svg>
