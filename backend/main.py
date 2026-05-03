@@ -1056,32 +1056,106 @@ def refine_corners(
 
 
 # ---------------------------------------------------------------------------
+# Keypoint extraction (YOLOv8-pose direct corners)
+# ---------------------------------------------------------------------------
+
+def _model_task(model: YOLO) -> str:
+    """Return 'pose', 'detect', etc. for a loaded ultralytics model."""
+    try:
+        return getattr(model, "task", None) or "detect"
+    except Exception:
+        return "detect"
+
+
+def _keypoints_to_corners(
+    result_obj, best_idx: int, W: int, H: int
+) -> list[dict] | None:
+    """
+    Extract the 4 plate corners from a YOLOv8-pose result.
+    Returns list[{x,y}] × 4 ordered [tl, tr, br, bl] in normalised
+    image coords, or None if keypoints aren't available / valid.
+
+    Expects exactly 4 keypoints per detection — the model must have been
+    trained with `kpt_shape: [4, 3]` and corners annotated as
+    [tl, tr, br, bl]. The sum/diff ordering is reapplied defensively so
+    we still get a sensible quad even if the training labels weren't
+    perfectly consistent.
+    """
+    kpts = getattr(result_obj, "keypoints", None)
+    if kpts is None or kpts.xy is None:
+        return None
+    xy = kpts.xy
+    try:
+        xy = xy.cpu().numpy()
+    except Exception:
+        xy = np.asarray(xy)
+    if xy.ndim != 3 or xy.shape[0] <= best_idx or xy.shape[1] != 4 or xy.shape[2] != 2:
+        return None
+    pts = xy[best_idx].astype(float)
+
+    # Reject degenerate (collinear / zero-area) keypoint sets
+    area = float(abs(cv2.contourArea(pts.astype(np.float32))))
+    if area < 4.0:
+        return None
+
+    ordered = _order_corners(pts)
+    return [
+        {"x": round(float(p[0]) / W, 4), "y": round(float(p[1]) / H, 4)}
+        for p in ordered
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
 @app.get("/")
 def health():
-    return {"status": "ok", "model": str(_MODEL_PATH) if _MODEL_PATH.exists() else "yolov8n.pt"}
+    model_path = str(_MODEL_PATH) if _MODEL_PATH.exists() else "yolov8n.pt"
+    task = "?"
+    try:
+        task = _model_task(get_model())
+    except Exception:
+        pass
+    return {"status": "ok", "model": model_path, "task": task}
 
 
 @app.post("/detect-plate")
 async def detect_plate(file: UploadFile = File(...)):
+    """
+    Detect a license plate and return its 4 corners.
+
+    Source priority (high → low):
+      1. "keypoints"       — YOLOv8-pose direct corner regression. The
+                             model must be a 4-keypoint pose model with
+                             corners annotated as [tl, tr, br, bl].
+      2. "opencv_fallback" — YOLO bbox + OpenCV refinement (hybrid /
+                             hough / plate_edges / blue_bands / text_band
+                             / approx_poly / min_area_rect).
+      3. "tightened_bbox"  — last-resort axis-aligned quad just inside
+                             the YOLO bbox.
+
+    The frontend should prefer "keypoints" when available, fall back to
+    OpenCV, and finally rely on the manual Adjuster.
+    """
     try:
         img_bytes = await file.read()
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid image: {exc}")
 
-    W, H = img.size
+    W, H  = img.size
     model = get_model()
-    results = model(img, conf=0.25, verbose=False)
+    task  = _model_task(model)
 
+    results = model(img, conf=0.25, verbose=False)
     if not results or len(results[0].boxes) == 0:
         logger.info("No plate detected")
         return {"found": False}
 
-    boxes    = results[0].boxes
-    best_idx = int(boxes.conf.argmax())
+    result_obj = results[0]
+    boxes      = result_obj.boxes
+    best_idx   = int(boxes.conf.argmax())
     x1, y1, x2, y2 = boxes.xyxy[best_idx].tolist()
     conf = float(boxes.conf[best_idx])
 
@@ -1091,14 +1165,37 @@ async def detect_plate(file: UploadFile = File(...)):
         "x2": round(x2 / W, 4),
         "y2": round(y2 / H, 4),
     }
-    logger.info(f"YOLO bbox: ({bbox['x1']},{bbox['y1']})-({bbox['x2']},{bbox['y2']}) conf={conf:.2f}")
+    logger.info(
+        f"YOLO bbox: ({bbox['x1']},{bbox['y1']})-({bbox['x2']},{bbox['y2']}) "
+        f"conf={conf:.2f} task={task}"
+    )
 
-    # OpenCV refinement → oriented corners + candidate debug payload
-    img_np                  = np.array(img)
-    corners, refine_debug   = refine_corners(img_np, bbox)
-    if corners:
-        logger.info(f"Refined corners: {corners}")
+    # ---- Primary path: pose-model keypoints ------------------------
+    if task == "pose":
+        kp_corners = _keypoints_to_corners(result_obj, best_idx, W, H)
+        if kp_corners is not None:
+            logger.info(f"Keypoints corners: {kp_corners}")
+            return {
+                "found":   True,
+                "conf":    round(conf, 3),
+                "bbox":    bbox,
+                "corners": kp_corners,
+                "source":  "keypoints",
+            }
+        logger.info("Pose model loaded but keypoints unavailable — falling back to OpenCV")
+
+    # ---- Fallback: OpenCV refinement -------------------------------
+    img_np                = np.array(img)
+    corners, refine_debug = refine_corners(img_np, bbox)
+    method_tag = (refine_debug or {}).get("method", "") if refine_debug else ""
+    if corners and method_tag and not method_tag.startswith("tightened_bbox"):
+        source = "opencv_fallback"
+        logger.info(f"OpenCV refined corners ({method_tag}): {corners}")
+    elif corners:
+        source = "tightened_bbox"
+        logger.info(f"Tightened-bbox corners ({method_tag}): {corners}")
     else:
+        source = "none"
         logger.info("Corner refinement failed — returning bbox only")
 
     return {
@@ -1106,5 +1203,6 @@ async def detect_plate(file: UploadFile = File(...)):
         "conf":    round(conf, 3),
         "bbox":    bbox,
         "corners": corners,        # list[{x,y}] × 4 ordered [tl,tr,br,bl], or null
-        "debug":   refine_debug,   # candidate landscape + scores + methods
+        "source":  source,
+        "debug":   refine_debug,   # candidate landscape — only useful for OpenCV path
     }

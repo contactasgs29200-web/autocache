@@ -1,0 +1,20 @@
+# YOLOv8-pose dataset config — license-plate 4-corner keypoints
+#
+# Train with:
+#   cd backend && python train_keypoints.py
+#
+# `path` is resolved relative to ultralytics' working dir; absolute is safest.
+
+path: ./dataset
+train: images/train
+val:   images/val
+
+# 4 keypoints per plate, each with (x, y, visibility)
+kpt_shape: [4, 3]
+
+# Horizontal-flip remap. Keypoint order is [tl=0, tr=1, br=2, bl=3].
+# After a hflip: original-tl is now top-right etc., so remap to [1, 0, 3, 2].
+flip_idx: [1, 0, 3, 2]
+
+names:
+  0: plate

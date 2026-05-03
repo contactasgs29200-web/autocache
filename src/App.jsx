@@ -835,8 +835,8 @@ async function detectPlateYOLO(imageFile) {
     const d = await r.json();
     if (!d.found) { console.log('YOLO: aucune plaque détectée'); return null; }
     const b = d.bbox;
-    console.log(`YOLO bbox: (${b.x1.toFixed(3)},${b.y1.toFixed(3)})-(${b.x2.toFixed(3)},${b.y2.toFixed(3)}) conf=${d.conf}`);
-    if (d.corners) console.log('Corners raffinés:', d.corners.map(p => `(${p.x.toFixed(3)},${p.y.toFixed(3)})`).join(' '));
+    console.log(`YOLO bbox: (${b.x1.toFixed(3)},${b.y1.toFixed(3)})-(${b.x2.toFixed(3)},${b.y2.toFixed(3)}) conf=${d.conf} source=${d.source ?? '?'}`);
+    if (d.corners) console.log('Corners:', d.corners.map(p => `(${p.x.toFixed(3)},${p.y.toFixed(3)})`).join(' '));
     if (d.debug?.candidates?.length) {
       console.log(`YOLO debug: ${d.debug.total_candidates} candidats, méthode finale = ${d.debug.method}`);
       d.debug.candidates.forEach((c, i) => {
@@ -938,7 +938,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
   const yoloCorners = yolo?.corners ?? null;
   const yoloDebug   = yolo?.debug   ?? null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, imgW: c.width, imgH: c.height };
+  const yoloSource  = yolo?.source  ?? null;
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, yoloSource, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -2569,17 +2570,24 @@ export default function AutoCache() {
                               fill="#000" fontSize={r.imgH * 0.026} fontFamily="monospace" fontWeight="bold">
                               {Math.round(r.yoloBbox.conf * 100)}%
                             </text>
-                            {r.yoloDebug?.method && (
-                              <text x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.078}
-                                y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.012}
-                                fill={r.yoloDebug.method.startsWith('tightened_bbox') ? '#ef4444' : '#f97316'}
-                                fontSize={r.imgH * 0.022}
-                                fontFamily="monospace" fontWeight="bold">
-                                {r.yoloDebug.method.split(':')[0] === 'hough_lines'
-                                  ? 'hough'
-                                  : r.yoloDebug.method.split(':')[0]}
-                              </text>
-                            )}
+                            {(r.yoloSource || r.yoloDebug?.method) && (() => {
+                              const src = r.yoloSource;
+                              const method = r.yoloDebug?.method?.split(':')[0];
+                              const label = src === 'keypoints' ? 'keypoints'
+                                : src === 'tightened_bbox' ? 'tightened_bbox'
+                                : (method === 'hough_lines' ? 'hough' : method) || src || '?';
+                              const color = src === 'keypoints' ? '#22c55e'
+                                : src === 'tightened_bbox' ? '#ef4444'
+                                : '#f97316';
+                              return (
+                                <text x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.078}
+                                  y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.012}
+                                  fill={color} fontSize={r.imgH * 0.022}
+                                  fontFamily="monospace" fontWeight="bold">
+                                  {label}
+                                </text>
+                              );
+                            })()}
                           </svg>
                         )}
                         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4 }}>
@@ -2867,17 +2875,24 @@ export default function AutoCache() {
                   fill="#000" fontSize={lightbox.imgH * 0.026} fontFamily="monospace" fontWeight="bold">
                   {Math.round(lightbox.yoloBbox.conf * 100)}%
                 </text>
-                {lightbox.yoloDebug?.method && (
-                  <text x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.078}
-                    y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.012}
-                    fill={lightbox.yoloDebug.method.startsWith('tightened_bbox') ? '#ef4444' : '#f97316'}
-                    fontSize={lightbox.imgH * 0.022}
-                    fontFamily="monospace" fontWeight="bold">
-                    {lightbox.yoloDebug.method.split(':')[0] === 'hough_lines'
-                      ? 'hough'
-                      : lightbox.yoloDebug.method.split(':')[0]}
-                  </text>
-                )}
+                {(lightbox.yoloSource || lightbox.yoloDebug?.method) && (() => {
+                  const src = lightbox.yoloSource;
+                  const method = lightbox.yoloDebug?.method?.split(':')[0];
+                  const label = src === 'keypoints' ? 'keypoints'
+                    : src === 'tightened_bbox' ? 'tightened_bbox'
+                    : (method === 'hough_lines' ? 'hough' : method) || src || '?';
+                  const color = src === 'keypoints' ? '#22c55e'
+                    : src === 'tightened_bbox' ? '#ef4444'
+                    : '#f97316';
+                  return (
+                    <text x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.078}
+                      y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.012}
+                      fill={color} fontSize={lightbox.imgH * 0.022}
+                      fontFamily="monospace" fontWeight="bold">
+                      {label}
+                    </text>
+                  );
+                })()}
               </svg>
             )}
 
