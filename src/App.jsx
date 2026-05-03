@@ -1391,6 +1391,36 @@ export default function AutoCache() {
 
   const downloadOne = r => { const a = document.createElement("a"); a.href = r.showroomDataURL || r.processed; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click(); };
   const downloadAll = () => results.forEach(downloadOne);
+
+  // Export originals where YOLO detected a plate → use to build the
+  // YOLOv8-pose keypoint dataset (drop in backend/dataset/raw/ then
+  // upload to Roboflow). One sequential download per file with a
+  // small spacing so the browser doesn't drop any.
+  const exportDatasetRaw = async () => {
+    const detected = photos.filter(p =>
+      results.some(r => r.name === p.file.name && r.plateFound)
+    );
+    if (!detected.length) {
+      setError("Aucune photo avec plaque détectée à exporter pour le dataset.");
+      return;
+    }
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 16);
+    for (let i = 0; i < detected.length; i++) {
+      const p = detected[i];
+      const ext = (p.file.name.split(".").pop() || "jpg").toLowerCase();
+      const base = p.file.name.replace(/\.[^.]+$/, "");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(p.file);
+      a.download = `plate_${ts}_${String(i + 1).padStart(4, "0")}_${base}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Petit délai pour ne pas saturer le navigateur
+      await new Promise(r => setTimeout(r, 80));
+      URL.revokeObjectURL(a.href);
+    }
+    console.log(`Dataset export: ${detected.length} originaux téléchargés (préfixe plate_${ts}_*)`);
+  };
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "essential" | "pro"
   const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
@@ -2504,7 +2534,20 @@ export default function AutoCache() {
                       {results.filter(r => r.plateFound).length} détectée{results.filter(r => r.plateFound).length > 1 ? "s" : ""} · {results.filter(r => !r.plateFound).length} non détectée{results.filter(r => !r.plateFound).length > 1 ? "s" : ""}
                     </div>
                   </div>
-                  {!processing && <button onClick={downloadAll} style={{ background: "#f26522", color: "#090909", border: "none", padding: "9px 22px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3 }}>Tout télécharger ({results.length})</button>}
+                  {!processing && (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {results.some(r => r.plateFound) && (
+                        <button onClick={exportDatasetRaw}
+                          title="Exporter les photos originales où une plaque a été détectée — pour construire le dataset YOLOv8-pose"
+                          style={{ background: "transparent", color: "#888", border: "1px solid #2a2a2a", padding: "9px 16px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
+                          Export dataset ({results.filter(r => r.plateFound).length})
+                        </button>
+                      )}
+                      <button onClick={downloadAll} style={{ background: "#f26522", color: "#090909", border: "none", padding: "9px 22px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3 }}>
+                        Tout télécharger ({results.length})
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 150 : 260}px, 1fr))`, gap: isMobile ? 10 : 14 }}>
                   {results.map((r, i) => (

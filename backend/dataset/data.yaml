@@ -1,19 +1,23 @@
-# YOLOv8-pose dataset config — license-plate 4-corner keypoints
+# YOLOv8-pose dataset config — license-plate 4-corner keypoints.
 #
-# Train with:
+# Layout matches a fresh Roboflow YOLOv8 Keypoints export, so you can
+# unzip an export straight into backend/dataset/ and re-train with no
+# tweaks. Train with:
+#
 #   cd backend && python train_keypoints.py
 #
-# `path` is resolved relative to ultralytics' working dir; absolute is safest.
+# `path` is resolved relative to ultralytics' working dir; absolute is
+# safest if you run from another directory.
 
 path: ./dataset
-train: images/train
-val:   images/val
+train: train/images
+val:   valid/images
 
-# 4 keypoints per plate, each with (x, y, visibility)
+# 4 keypoints per plate, each as (x, y, visibility)
 kpt_shape: [4, 3]
 
-# Horizontal-flip remap. Keypoint order is [tl=0, tr=1, br=2, bl=3].
-# After a hflip: original-tl is now top-right etc., so remap to [1, 0, 3, 2].
+# Horizontal-flip remap. Keypoint indices: [tl=0, tr=1, br=2, bl=3].
+# After hflip: original-tl is now top-right, etc. → swap to [1, 0, 3, 2].
 flip_idx: [1, 0, 3, 2]
 
 names:
