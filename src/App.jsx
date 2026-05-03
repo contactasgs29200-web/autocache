@@ -894,7 +894,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const yolo = await detectPlateYOLO(photoFile);
   if (yolo) {
     plateFound = true;
-    // Priorité aux coins OpenCV raffinés (perspective), sinon fallback bbox YOLO
+    // Priorité aux coins renvoyés par le backend (keypoints, bbox_stable,
+    // opencv_fallback…). Si pour une raison inattendue ils sont absents,
+    // tomber sur la bbox brute pour avoir au moins un quad utilisable
+    // dans l'« Ajuster » manuel.
     if (yolo.corners && yolo.corners.length === 4) {
       savedCorners = { tl: yolo.corners[0], tr: yolo.corners[1], br: yolo.corners[2], bl: yolo.corners[3] };
     } else {
@@ -903,7 +906,16 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     }
   }
 
-  if (false && savedCorners && logoImg) {
+  // Rendu auto du cache plaque : on ne dessine le logo en perspective
+  // QUE si la source des coins est sûre — soit le modèle keypoints, soit
+  // la bbox stable (axis-aligned, toujours dans la bbox YOLO). Pour les
+  // sources OpenCV (opencv_fallback / tightened_bbox), on laisse la photo
+  // intacte et on attend que l'utilisateur passe par « Ajuster » : ces
+  // sources sont trop instables pour être appliquées sans relecture.
+  const autoRenderableSource = yolo?.source === 'keypoints'
+                            || yolo?.source === 'bbox_stable';
+
+  if (autoRenderableSource && savedCorners && logoImg) {
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
@@ -2594,18 +2606,29 @@ export default function AutoCache() {
                                   </g>
                                 );
                               })}
-                            {/* Quadrilatère raffiné OpenCV — orange épais */}
-                            {r.yoloCorners && (
-                              <polygon
-                                points={r.yoloCorners.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
-                                fill="none" stroke="#f97316" strokeWidth={Math.max(2, r.imgW * 0.003)}
-                              />
-                            )}
-                            {/* Coins — points orange */}
-                            {r.yoloCorners && r.yoloCorners.map((p, i) => (
-                              <circle key={i} cx={p.x * r.imgW} cy={p.y * r.imgH}
-                                r={Math.max(4, r.imgW * 0.006)} fill="#f97316" />
-                            ))}
+                            {/* Quadrilatère final — couleur selon source */}
+                            {r.yoloCorners && (() => {
+                              const src = r.yoloSource;
+                              // keypoints = vert, bbox_stable = bleu,
+                              // opencv_fallback = orange, tightened_bbox = rouge.
+                              const stroke = src === 'keypoints'   ? '#22c55e'
+                                          : src === 'bbox_stable'  ? '#3b82f6'
+                                          : src === 'tightened_bbox' ? '#ef4444'
+                                          : '#f97316';
+                              return (
+                                <>
+                                  <polygon
+                                    points={r.yoloCorners.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
+                                    fill="none" stroke={stroke}
+                                    strokeWidth={Math.max(2, r.imgW * 0.003)}
+                                  />
+                                  {r.yoloCorners.map((p, i) => (
+                                    <circle key={i} cx={p.x * r.imgW} cy={p.y * r.imgH}
+                                      r={Math.max(4, r.imgW * 0.006)} fill={stroke} />
+                                  ))}
+                                </>
+                              );
+                            })()}
                             {/* Badge confiance + méthode finale */}
                             <rect x={r.yoloBbox.x1 * r.imgW} y={r.yoloBbox.y1 * r.imgH - r.imgH * 0.042}
                               width={r.imgW * 0.072} height={r.imgH * 0.038} fill="#22c55e" rx={r.imgW * 0.003} />
@@ -2616,10 +2639,12 @@ export default function AutoCache() {
                             {(r.yoloSource || r.yoloDebug?.method) && (() => {
                               const src = r.yoloSource;
                               const method = r.yoloDebug?.method?.split(':')[0];
-                              const label = src === 'keypoints' ? 'keypoints'
+                              const label = src === 'keypoints'      ? 'keypoints'
+                                : src === 'bbox_stable'   ? 'bbox_stable'
                                 : src === 'tightened_bbox' ? 'tightened_bbox'
                                 : (method === 'hough_lines' ? 'hough' : method) || src || '?';
-                              const color = src === 'keypoints' ? '#22c55e'
+                              const color = src === 'keypoints'      ? '#22c55e'
+                                : src === 'bbox_stable'   ? '#3b82f6'
                                 : src === 'tightened_bbox' ? '#ef4444'
                                 : '#f97316';
                               return (
@@ -2899,18 +2924,29 @@ export default function AutoCache() {
                       </g>
                     );
                   })}
-                {/* Quadrilatère raffiné — orange épais */}
-                {lightbox.yoloCorners && (
-                  <polygon
-                    points={lightbox.yoloCorners.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
-                    fill="none" stroke="#f97316" strokeWidth={Math.max(2, lightbox.imgW * 0.003)}
-                  />
-                )}
-                {/* Coins — points orange */}
-                {lightbox.yoloCorners && lightbox.yoloCorners.map((p, i) => (
-                  <circle key={i} cx={p.x * lightbox.imgW} cy={p.y * lightbox.imgH}
-                    r={Math.max(5, lightbox.imgW * 0.006)} fill="#f97316" />
-                ))}
+                {/* Quadrilatère final — couleur selon source */}
+                {lightbox.yoloCorners && (() => {
+                  const src = lightbox.yoloSource;
+                  // keypoints = vert, bbox_stable = bleu,
+                  // opencv_fallback = orange, tightened_bbox = rouge.
+                  const stroke = src === 'keypoints'      ? '#22c55e'
+                              : src === 'bbox_stable'     ? '#3b82f6'
+                              : src === 'tightened_bbox'  ? '#ef4444'
+                              : '#f97316';
+                  return (
+                    <>
+                      <polygon
+                        points={lightbox.yoloCorners.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
+                        fill="none" stroke={stroke}
+                        strokeWidth={Math.max(2, lightbox.imgW * 0.003)}
+                      />
+                      {lightbox.yoloCorners.map((p, i) => (
+                        <circle key={i} cx={p.x * lightbox.imgW} cy={p.y * lightbox.imgH}
+                          r={Math.max(5, lightbox.imgW * 0.006)} fill={stroke} />
+                      ))}
+                    </>
+                  );
+                })()}
                 {/* Badge confiance + méthode finale */}
                 <rect x={lightbox.yoloBbox.x1 * lightbox.imgW} y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.042}
                   width={lightbox.imgW * 0.072} height={lightbox.imgH * 0.038} fill="#22c55e" rx={lightbox.imgW * 0.003} />
@@ -2921,10 +2957,12 @@ export default function AutoCache() {
                 {(lightbox.yoloSource || lightbox.yoloDebug?.method) && (() => {
                   const src = lightbox.yoloSource;
                   const method = lightbox.yoloDebug?.method?.split(':')[0];
-                  const label = src === 'keypoints' ? 'keypoints'
+                  const label = src === 'keypoints'      ? 'keypoints'
+                    : src === 'bbox_stable'   ? 'bbox_stable'
                     : src === 'tightened_bbox' ? 'tightened_bbox'
                     : (method === 'hough_lines' ? 'hough' : method) || src || '?';
-                  const color = src === 'keypoints' ? '#22c55e'
+                  const color = src === 'keypoints'      ? '#22c55e'
+                    : src === 'bbox_stable'   ? '#3b82f6'
                     : src === 'tightened_bbox' ? '#ef4444'
                     : '#f97316';
                   return (

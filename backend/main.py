@@ -1056,6 +1056,89 @@ def refine_corners(
 
 
 # ---------------------------------------------------------------------------
+# Default automatic source: bbox_stable (axis-aligned, slight padding)
+# ---------------------------------------------------------------------------
+
+# Until a real keypoint model is deployed, the default automatic source
+# for the 4 plate corners is the YOLO bbox itself with a small inward
+# pad. OpenCV refinement (`refine_corners`) still runs for diagnostics
+# and is exposed in `debug`, but it is NOT used as the final source
+# unless the strict quality gate promotes it AND `ALLOW_OPENCV_PROMOTION`
+# is True. Flip this flag once the gate is provably reliable.
+ALLOW_OPENCV_PROMOTION = False
+
+
+def _bbox_stable_corners(
+    bbox: dict, pad_frac: float = 0.03
+) -> list[dict]:
+    """
+    Stable axis-aligned 4-corner quad derived from the YOLO bbox with a
+    slight inward padding (default 3%). Always succeeds.
+
+    Returns corners in canonical order [tl, tr, br, bl], normalised to
+    image coordinates — the same shape as keypoints/OpenCV corners.
+    """
+    w  = bbox["x2"] - bbox["x1"]
+    h  = bbox["y2"] - bbox["y1"]
+    px = w * pad_frac
+    py = h * pad_frac
+    return [
+        {"x": round(bbox["x1"] + px, 4), "y": round(bbox["y1"] + py, 4)},  # tl
+        {"x": round(bbox["x2"] - px, 4), "y": round(bbox["y1"] + py, 4)},  # tr
+        {"x": round(bbox["x2"] - px, 4), "y": round(bbox["y2"] - py, 4)},  # br
+        {"x": round(bbox["x1"] + px, 4), "y": round(bbox["y2"] - py, 4)},  # bl
+    ]
+
+
+def _opencv_passes_strict_gate(
+    corners: list[dict] | None, refine_debug: dict | None
+) -> tuple[bool, str]:
+    """
+    Decide whether an OpenCV refinement result is trustworthy enough to
+    override `bbox_stable` as the final source.
+
+    Strict on purpose — better to fall back to a clean bbox quad than to
+    ship a wrong perspective. Returns (passed, reason). `reason` is a
+    short tag useful for telemetry / debug overlay even on success.
+
+    Whitelisted methods only — `min_area_rect`, `approx_poly` and
+    `tightened_bbox` never pass: rectangle-oriented quads and grille-
+    catching contours are precisely the failure modes that pushed us
+    toward `bbox_stable` in the first place.
+    """
+    if not corners or len(corners) != 4 or not refine_debug:
+        return False, "no_corners"
+
+    method = refine_debug.get("method", "") or ""
+    trusted_prefixes = (
+        "hybrid_plate_quad", "hough_lines",
+        "plate_edges", "blue_bands", "text_band",
+    )
+    if not any(method.startswith(p) for p in trusted_prefixes):
+        return False, f"untrusted_method:{method.split(':')[0] or 'unknown'}"
+
+    chosen = next(
+        (c for c in (refine_debug.get("candidates") or []) if c.get("is_final")),
+        None,
+    )
+    if not chosen:
+        return False, "no_chosen_in_debug"
+
+    sub = chosen.get("sub_scores") or {}
+    ar = sub.get("ar")
+    if ar is None or ar < 4.0 or ar > 5.5:
+        return False, f"ar_out_of_range:{ar}"
+    if (sub.get("contain") or 0) < 0.92:
+        return False, "contain_below_0.92"
+    if (sub.get("center_score") or 0) < 0.70:
+        return False, "center_score_below_0.70"
+    if (sub.get("size_score") or 0) < 0.70:
+        return False, "size_score_below_0.70"
+
+    return True, "passed"
+
+
+# ---------------------------------------------------------------------------
 # Keypoint extraction (YOLOv8-pose direct corners)
 # ---------------------------------------------------------------------------
 
@@ -1128,15 +1211,23 @@ async def detect_plate(file: UploadFile = File(...)):
     Source priority (high → low):
       1. "keypoints"       — YOLOv8-pose direct corner regression. The
                              model must be a 4-keypoint pose model with
-                             corners annotated as [tl, tr, br, bl].
-      2. "opencv_fallback" — YOLO bbox + OpenCV refinement (hybrid /
-                             hough / plate_edges / blue_bands / text_band
-                             / approx_poly / min_area_rect).
-      3. "tightened_bbox"  — last-resort axis-aligned quad just inside
-                             the YOLO bbox.
+                             corners annotated as [tl, tr, br, bl]. Used
+                             as-is for the final cache rendering.
+      2. "bbox_stable"     — DEFAULT automatic source while no pose model
+                             is deployed. Axis-aligned quad derived from
+                             the YOLO bbox with a small inward pad. Always
+                             succeeds. The frontend uses these corners
+                             directly for `drawPerspective`.
+      3. "opencv_fallback" — Only ever returned when `ALLOW_OPENCV_PROMOTION`
+                             is True AND the strict quality gate passes.
+                             Off by default — OpenCV refinement is too
+                             unreliable on real-world plates.
+      4. "tightened_bbox"  — never returned as the primary `corners` here;
+                             still appears in `debug` for visibility.
 
-    The frontend should prefer "keypoints" when available, fall back to
-    OpenCV, and finally rely on the manual Adjuster.
+    `debug` always contains the OpenCV refinement output (candidates,
+    chosen method, sub-scores) so the frontend can show the experimental
+    quad as an overlay even when it isn't promoted.
     """
     try:
         img_bytes = await file.read()
@@ -1170,7 +1261,7 @@ async def detect_plate(file: UploadFile = File(...)):
         f"conf={conf:.2f} task={task}"
     )
 
-    # ---- Primary path: pose-model keypoints ------------------------
+    # ---- Priority 1: pose-model keypoints --------------------------
     if task == "pose":
         kp_corners = _keypoints_to_corners(result_obj, best_idx, W, H)
         if kp_corners is not None:
@@ -1182,27 +1273,53 @@ async def detect_plate(file: UploadFile = File(...)):
                 "corners": kp_corners,
                 "source":  "keypoints",
             }
-        logger.info("Pose model loaded but keypoints unavailable — falling back to OpenCV")
+        logger.info(
+            "Pose model loaded but keypoints unavailable — falling back to bbox_stable"
+        )
 
-    # ---- Fallback: OpenCV refinement -------------------------------
-    img_np                = np.array(img)
-    corners, refine_debug = refine_corners(img_np, bbox)
-    method_tag = (refine_debug or {}).get("method", "") if refine_debug else ""
-    if corners and method_tag and not method_tag.startswith("tightened_bbox"):
-        source = "opencv_fallback"
-        logger.info(f"OpenCV refined corners ({method_tag}): {corners}")
-    elif corners:
-        source = "tightened_bbox"
-        logger.info(f"Tightened-bbox corners ({method_tag}): {corners}")
+    # ---- Priority 2: bbox_stable (default) -------------------------
+    bbox_corners = _bbox_stable_corners(bbox, pad_frac=0.03)
+
+    # OpenCV refinement still runs — but only for diagnostics. The
+    # candidate landscape is exposed in `debug` so the frontend can show
+    # the experimental quad as a faded overlay if desired.
+    img_np                  = np.array(img)
+    opencv_corners, refine_debug = refine_corners(img_np, bbox)
+
+    # ---- Priority 3 (gated): OpenCV promotion ---------------------
+    if ALLOW_OPENCV_PROMOTION:
+        passed, reason = _opencv_passes_strict_gate(opencv_corners, refine_debug)
+        if passed:
+            method_tag = (refine_debug or {}).get("method", "?")
+            logger.info(
+                f"OpenCV promoted (gate=passed, method={method_tag}): {opencv_corners}"
+            )
+            return {
+                "found":         True,
+                "conf":          round(conf, 3),
+                "bbox":          bbox,
+                "corners":       opencv_corners,
+                "source":        "opencv_fallback",
+                "debug":         refine_debug,
+                "gate_reason":   reason,
+                "bbox_stable":   bbox_corners,  # for overlay comparison
+            }
+        logger.info(
+            f"OpenCV refused by strict gate (reason={reason}) — using bbox_stable"
+        )
     else:
-        source = "none"
-        logger.info("Corner refinement failed — returning bbox only")
+        logger.info("ALLOW_OPENCV_PROMOTION=False — using bbox_stable as final source")
 
     return {
-        "found":   True,
-        "conf":    round(conf, 3),
-        "bbox":    bbox,
-        "corners": corners,        # list[{x,y}] × 4 ordered [tl,tr,br,bl], or null
-        "source":  source,
-        "debug":   refine_debug,   # candidate landscape — only useful for OpenCV path
+        "found":         True,
+        "conf":          round(conf, 3),
+        "bbox":          bbox,
+        "corners":       bbox_corners,
+        "source":        "bbox_stable",
+        # Diagnostics: keep the OpenCV candidate landscape and the corners
+        # it would have proposed. Useful as a debug overlay and to evaluate
+        # whether the gate is calibrated correctly before flipping
+        # ALLOW_OPENCV_PROMOTION on.
+        "debug":         refine_debug,
+        "opencv_corners": opencv_corners,
     }
