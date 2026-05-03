@@ -389,10 +389,155 @@ function autoEnhance(ctx, W, H) {
   ctx.putImageData(id, 0, 0);
 }
 
-// ── Détection des phares via GPT-4o-mini ─────────────────────────────────────
-// ── Lustrage des optiques — correction canvas ciblée ─────────────────────────
-// Approche fiable : détection de la zone phare via GPT-4o-mini, puis correction
-// colorimétrique canvas sur ces zones uniquement. Résultat garanti = même voiture.
+// ── Lustrage des optiques — retouche IA locale au masque ─────────────────────
+// Le front détecte les optiques, fabrique un masque, puis l'API réinvente
+// uniquement la lentille du phare. Le reste de la voiture reste le canvas source.
+
+const HEADLIGHT_AI_MAX_EDGE = 1792;
+const HEADLIGHT_AI_MAX_PIXELS = 2800000;
+
+function clamp01(v) {
+  return Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
+}
+
+function normalizedPoint(p) {
+  if (Array.isArray(p)) return { x: clamp01(Number(p[0])), y: clamp01(Number(p[1])) };
+  return { x: clamp01(Number(p?.x)), y: clamp01(Number(p?.y)) };
+}
+
+function normalizeHeadlight(light) {
+  const x1 = clamp01(Number(light?.x));
+  const y1 = clamp01(Number(light?.y));
+  const x2 = clamp01(Number(light?.x) + Number(light?.w));
+  const y2 = clamp01(Number(light?.y) + Number(light?.h));
+  const x = Math.min(x1, x2);
+  const y = Math.min(y1, y2);
+  const w = Math.max(0, Math.abs(x2 - x1));
+  const h = Math.max(0, Math.abs(y2 - y1));
+  const points = Array.isArray(light?.points)
+    ? light.points.map(normalizedPoint).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+    : [];
+
+  return { x, y, w, h, points };
+}
+
+function expandPointAround(cx, cy, p, amount) {
+  return {
+    x: clamp01(cx + (p.x - cx) * (1 + amount)),
+    y: clamp01(cy + (p.y - cy) * (1 + amount)),
+  };
+}
+
+function drawHeadlightShape(ctx, light, W, H, expand = 0.04) {
+  const cx = light.x + light.w / 2;
+  const cy = light.y + light.h / 2;
+
+  ctx.beginPath();
+  if (light.points.length >= 3) {
+    const pts = light.points.map(p => expandPointAround(cx, cy, p, expand));
+    ctx.moveTo(pts[0].x * W, pts[0].y * H);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * W, pts[i].y * H);
+    ctx.closePath();
+  } else {
+    const rx = Math.max(4, light.w * W * (0.56 + expand));
+    const ry = Math.max(4, light.h * H * (0.56 + expand));
+    ctx.ellipse(cx * W, cy * H, rx, ry, 0, 0, Math.PI * 2);
+  }
+  ctx.fill();
+}
+
+function drawHeadlightShapes(ctx, lights, W, H, expand = 0.04) {
+  lights.forEach(light => drawHeadlightShape(ctx, light, W, H, expand));
+}
+
+function getHeadlightWorkSize(W, H) {
+  const scale = Math.min(
+    1,
+    HEADLIGHT_AI_MAX_EDGE / Math.max(W, H),
+    Math.sqrt(HEADLIGHT_AI_MAX_PIXELS / Math.max(1, W * H))
+  );
+  const round16 = v => Math.max(64, Math.round(v / 16) * 16);
+  let workW = round16(W * scale);
+  let workH = round16(H * scale);
+
+  // gpt-image-2 accepte les tailles libres si elles sont multiples de 16
+  // et au-dessus du minimum de pixels.
+  if (workW * workH < 655360) {
+    const up = Math.sqrt(655360 / Math.max(1, workW * workH));
+    workW = round16(workW * up);
+    workH = round16(workH * up);
+  }
+
+  return {
+    workW,
+    workH,
+  };
+}
+
+function dataURLBase64(dataURL) {
+  return dataURL.split(',')[1] ?? '';
+}
+
+function createHeadlightEditAssets(ctx, W, H, lights) {
+  const { workW, workH } = getHeadlightWorkSize(W, H);
+
+  const image = document.createElement('canvas');
+  image.width = workW;
+  image.height = workH;
+  const ictx = image.getContext('2d');
+  ictx.imageSmoothingEnabled = true;
+  ictx.imageSmoothingQuality = 'high';
+  ictx.drawImage(ctx.canvas, 0, 0, workW, workH);
+
+  const mask = document.createElement('canvas');
+  mask.width = workW;
+  mask.height = workH;
+  const mctx = mask.getContext('2d');
+
+  // OpenAI mask convention: transparent = area to edit, opaque = area to preserve.
+  mctx.fillStyle = 'rgba(0,0,0,1)';
+  mctx.fillRect(0, 0, workW, workH);
+  mctx.globalCompositeOperation = 'destination-out';
+  mctx.fillStyle = 'rgba(0,0,0,1)';
+  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.003))}px)`;
+  drawHeadlightShapes(mctx, lights, workW, workH, 0.055);
+  mctx.filter = 'none';
+  drawHeadlightShapes(mctx, lights, workW, workH, 0.035);
+  mctx.globalCompositeOperation = 'source-over';
+
+  return {
+    imageBase64: dataURLBase64(image.toDataURL('image/jpeg', 0.94)),
+    imageMime: 'image/jpeg',
+    maskBase64: dataURLBase64(mask.toDataURL('image/png')),
+    size: `${workW}x${workH}`,
+  };
+}
+
+function blendEditedHeadlights(ctx, editedImg, lights, W, H) {
+  const overlay = document.createElement('canvas');
+  overlay.width = W;
+  overlay.height = H;
+  const octx = overlay.getContext('2d');
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(editedImg, 0, 0, W, H);
+
+  const alpha = document.createElement('canvas');
+  alpha.width = W;
+  alpha.height = H;
+  const actx = alpha.getContext('2d');
+  actx.fillStyle = 'rgba(255,255,255,1)';
+  actx.filter = `blur(${Math.max(3, Math.round(Math.min(W, H) * 0.0025))}px)`;
+  drawHeadlightShapes(actx, lights, W, H, 0.065);
+  actx.filter = 'none';
+  drawHeadlightShapes(actx, lights, W, H, 0.035);
+
+  octx.globalCompositeOperation = 'destination-in';
+  octx.drawImage(alpha, 0, 0);
+  octx.globalCompositeOperation = 'source-over';
+
+  ctx.drawImage(overlay, 0, 0);
+}
 
 async function detectHeadlights(b64) {
   try {
@@ -402,7 +547,9 @@ async function detectHeadlights(b64) {
       body: JSON.stringify({ b64 }),
     });
     const data = await r.json();
-    const lights = Array.isArray(data.lights) ? data.lights : [];
+    const lights = Array.isArray(data.lights)
+      ? data.lights.map(normalizeHeadlight).filter(l => l.w > 0.015 && l.h > 0.015)
+      : [];
     console.log(`[Headlights] ${lights.length} phare(s) détecté(s)`, lights);
     return lights;
   } catch(e) {
@@ -411,67 +558,32 @@ async function detectHeadlights(b64) {
   }
 }
 
-// Correction colorimétrique d'une zone rectangulaire du canvas.
-// Cible les pixels jaunes/ambrés (jaunissement UV) et les ramène vers neutre/clair.
-function correctHeadlightZone(ctx, x, y, zw, zh) {
-  const id = ctx.getImageData(x, y, zw, zh);
-  const d = id.data;
-  for (let k = 0; k < d.length; k += 4) {
-    const r = d[k], g = d[k+1], b = d[k+2];
-    const lum = r * 0.299 + g * 0.587 + b * 0.114;
+async function aiPolishHeadlights(ctx, W, H, b64Original) {
+  const lights = await detectHeadlights(b64Original);
+  if (!lights.length) {
+    console.log("[Headlights] Aucun phare détecté");
+    return;
+  }
 
-    // Teinte ambre/jaune (jaunissement UV)
-    const warmth = Math.max(0, r * 0.55 + g * 0.45 - b) / 255;
-    if (warmth < 0.04) continue;
+  try {
+    const payload = createHeadlightEditAssets(ctx, W, H, lights);
+    const r = await fetch("/api/lustrage-pro", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
 
-    // Saturation HSV
-    const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
-    const delta = cMax - cMin;
-    const sat = cMax > 0 ? delta / cMax : 0;
-
-    // Teinte (0–360°)
-    let hue = 0;
-    if (delta > 4) {
-      if (cMax === r)      hue = 60 * (((g - b) / delta) % 6);
-      else if (cMax === g) hue = 60 * ((b - r) / delta + 2);
-      else                 hue = 60 * ((r - g) / delta + 4);
-      if (hue < 0) hue += 360;
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.imageBase64) {
+      throw new Error(data.error || `HTTP ${r.status}`);
     }
 
-    // Cibler jaune/ambre : 8°–80°, saturation > 8%, lum moyenne
-    if (hue < 8 || hue > 80) continue;
-    if (sat < 0.08 || lum < 20 || lum > 245) continue;
-
-    // Intensité de correction proportionnelle au jaunissement
-    const blend = Math.min(0.82, warmth * 4.5 * Math.min(1.0, sat * 2.0));
-    if (blend < 0.06) continue;
-
-    // Cible : gris neutre (correction de teinte uniquement, pas de blanchiment)
-    const tR = lum * 0.97;
-    const tG = lum * 1.01;
-    const tB = lum * 1.03;
-
-    let nR = r + (tR - r) * blend;
-    let nG = g + (tG - g) * blend;
-    let nB = b + (tB - b) * blend;
-
-    // Légère clarté uniquement sur pixels fortement jaunes (warmth élevé)
-    const clarity = Math.max(0, warmth - 0.08) * blend * 1.2;
-    nR += (255 - nR) * clarity;
-    nG += (255 - nG) * clarity;
-    nB += (255 - nB) * clarity;
-
-    d[k]   = Math.max(0, Math.min(255, Math.round(nR)));
-    d[k+1] = Math.max(0, Math.min(255, Math.round(nG)));
-    d[k+2] = Math.max(0, Math.min(255, Math.round(nB)));
+    const editedImg = await loadImg(`data:image/png;base64,${data.imageBase64}`);
+    blendEditedHeadlights(ctx, editedImg, lights, W, H);
+    console.log("[Headlights] Lustrage IA terminé ✓");
+  } catch(e) {
+    console.warn("[Headlights] Lustrage IA indisponible:", e.message);
   }
-  ctx.putImageData(id, x, y);
-}
-
-async function aiPolishHeadlights(ctx, W, H, b64Original) {
-  // Passe unique globale — traite tous les phares de façon identique
-  correctHeadlightZone(ctx, 0, 0, W, H);
-  console.log("[Headlights] Lustrage terminé ✓");
 }
 
 // ── Lustrage carrosserie ─────────────────────────────────────────────────────
@@ -2252,7 +2364,7 @@ export default function AutoCache() {
                     toggle: () => { if (!canUseHeadlight) { setShowPlansModal(true); return; } setHeadlightPolish(p => !p); },
                     icon: "💡",
                     label: "Lustrage des optiques",
-                    sub: canUseHeadlight ? "Correction colorimétrique du jaunissement" : "Disponible dès l'abonnement Essentiel",
+                    sub: canUseHeadlight ? "Retouche IA des phares jaunis" : "Disponible dès l'abonnement Essentiel",
                     locked: !canUseHeadlight,
                   },
                   {
