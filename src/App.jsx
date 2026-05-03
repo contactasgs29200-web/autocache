@@ -906,13 +906,16 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     }
   }
 
-  // Rendu auto du cache plaque : on ne dessine le logo en perspective
-  // QUE si la source des coins est sûre — soit le modèle keypoints, soit
-  // la bbox stable (axis-aligned, toujours dans la bbox YOLO). Pour les
-  // sources OpenCV (opencv_fallback / tightened_bbox), on laisse la photo
-  // intacte et on attend que l'utilisateur passe par « Ajuster » : ces
-  // sources sont trop instables pour être appliquées sans relecture.
+  // Rendu auto du cache plaque : on dessine le logo en perspective si
+  // la source des coins est validée par le backend :
+  //   - keypoints       → modèle pose (priorité absolue)
+  //   - opencv_promoted → quad OpenCV qui a passé le quality gate ET
+  //                       montré une vraie perspective (3/4 visible)
+  //   - bbox_stable     → quad axis-aligned dérivé de la bbox YOLO
+  // Les anciennes sources (opencv_fallback / tightened_bbox) ne sont
+  // plus exposées et ne sont jamais auto-rendues.
   const autoRenderableSource = yolo?.source === 'keypoints'
+                            || yolo?.source === 'opencv_promoted'
                             || yolo?.source === 'bbox_stable';
 
   if (autoRenderableSource && savedCorners && logoImg) {
@@ -947,11 +950,15 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.drawImage(tmp, 0, 0);
     ctx.restore();
   }
-  const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
-  const yoloCorners = yolo?.corners ?? null;
-  const yoloDebug   = yolo?.debug   ?? null;
-  const yoloSource  = yolo?.source  ?? null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, yoloSource, imgW: c.width, imgH: c.height };
+  const yoloBbox          = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
+  const yoloCorners       = yolo?.corners ?? null;
+  const yoloDebug         = yolo?.debug   ?? null;
+  const yoloSource        = yolo?.source  ?? null;
+  // Quad OpenCV non promu : on l'expose pour pouvoir l'afficher en
+  // overlay « rejected_opencv » (debug uniquement) à côté du choix final.
+  const yoloOpencvCorners = yolo?.opencv_corners ?? null;
+  const yoloGateReason    = yolo?.gate_reason    ?? null;
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, yoloSource, yoloOpencvCorners, yoloGateReason, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -2606,14 +2613,31 @@ export default function AutoCache() {
                                   </g>
                                 );
                               })}
+                            {/* Quad OpenCV rejeté — debug uniquement, faible opacité */}
+                            {r.yoloSource !== 'opencv_promoted'
+                              && r.yoloOpencvCorners
+                              && r.yoloOpencvCorners.length === 4 && (
+                              <g opacity={0.40}>
+                                <polygon
+                                  points={r.yoloOpencvCorners.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
+                                  fill="none" stroke="#f97316"
+                                  strokeWidth={Math.max(1, r.imgW * 0.0015)}
+                                  strokeDasharray={`${r.imgW * 0.006} ${r.imgW * 0.004}`}
+                                />
+                              </g>
+                            )}
                             {/* Quadrilatère final — couleur selon source */}
                             {r.yoloCorners && (() => {
                               const src = r.yoloSource;
-                              // keypoints = vert, bbox_stable = bleu,
-                              // opencv_fallback = orange, tightened_bbox = rouge.
-                              const stroke = src === 'keypoints'   ? '#22c55e'
-                                          : src === 'bbox_stable'  ? '#3b82f6'
-                                          : src === 'tightened_bbox' ? '#ef4444'
+                              // keypoints = vert,
+                              // opencv_promoted = lime (orange/vert : OpenCV validé),
+                              // bbox_stable = bleu,
+                              // (legacy) opencv_fallback = orange,
+                              // tightened_bbox = rouge.
+                              const stroke = src === 'keypoints'        ? '#22c55e'
+                                          : src === 'opencv_promoted'  ? '#84cc16'
+                                          : src === 'bbox_stable'      ? '#3b82f6'
+                                          : src === 'tightened_bbox'   ? '#ef4444'
                                           : '#f97316';
                               return (
                                 <>
@@ -2639,13 +2663,15 @@ export default function AutoCache() {
                             {(r.yoloSource || r.yoloDebug?.method) && (() => {
                               const src = r.yoloSource;
                               const method = r.yoloDebug?.method?.split(':')[0];
-                              const label = src === 'keypoints'      ? 'keypoints'
-                                : src === 'bbox_stable'   ? 'bbox_stable'
-                                : src === 'tightened_bbox' ? 'tightened_bbox'
+                              const label = src === 'keypoints'        ? 'keypoints'
+                                : src === 'opencv_promoted' ? 'opencv_promoted'
+                                : src === 'bbox_stable'     ? 'bbox_stable'
+                                : src === 'tightened_bbox'  ? 'tightened_bbox'
                                 : (method === 'hough_lines' ? 'hough' : method) || src || '?';
-                              const color = src === 'keypoints'      ? '#22c55e'
-                                : src === 'bbox_stable'   ? '#3b82f6'
-                                : src === 'tightened_bbox' ? '#ef4444'
+                              const color = src === 'keypoints'        ? '#22c55e'
+                                : src === 'opencv_promoted' ? '#84cc16'
+                                : src === 'bbox_stable'     ? '#3b82f6'
+                                : src === 'tightened_bbox'  ? '#ef4444'
                                 : '#f97316';
                               return (
                                 <text x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.078}
@@ -2924,14 +2950,38 @@ export default function AutoCache() {
                       </g>
                     );
                   })}
+                {/* Quad OpenCV rejeté — debug uniquement, faible opacité */}
+                {lightbox.yoloSource !== 'opencv_promoted'
+                  && lightbox.yoloOpencvCorners
+                  && lightbox.yoloOpencvCorners.length === 4 && (
+                  <g opacity={0.40}>
+                    <polygon
+                      points={lightbox.yoloOpencvCorners.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
+                      fill="none" stroke="#f97316"
+                      strokeWidth={Math.max(1, lightbox.imgW * 0.0015)}
+                      strokeDasharray={`${lightbox.imgW * 0.006} ${lightbox.imgW * 0.004}`}
+                    />
+                    <text
+                      x={lightbox.yoloOpencvCorners[0].x * lightbox.imgW + lightbox.imgW * 0.003}
+                      y={lightbox.yoloOpencvCorners[0].y * lightbox.imgH - lightbox.imgH * 0.005}
+                      fill="#f97316" fontSize={lightbox.imgH * 0.018}
+                      fontFamily="monospace" fontWeight="bold">
+                      rejected{lightbox.yoloGateReason ? ` (${lightbox.yoloGateReason})` : ''}
+                    </text>
+                  </g>
+                )}
                 {/* Quadrilatère final — couleur selon source */}
                 {lightbox.yoloCorners && (() => {
                   const src = lightbox.yoloSource;
-                  // keypoints = vert, bbox_stable = bleu,
-                  // opencv_fallback = orange, tightened_bbox = rouge.
-                  const stroke = src === 'keypoints'      ? '#22c55e'
-                              : src === 'bbox_stable'     ? '#3b82f6'
-                              : src === 'tightened_bbox'  ? '#ef4444'
+                  // keypoints = vert,
+                  // opencv_promoted = lime (orange/vert : OpenCV validé),
+                  // bbox_stable = bleu,
+                  // (legacy) opencv_fallback = orange,
+                  // tightened_bbox = rouge.
+                  const stroke = src === 'keypoints'        ? '#22c55e'
+                              : src === 'opencv_promoted'  ? '#84cc16'
+                              : src === 'bbox_stable'      ? '#3b82f6'
+                              : src === 'tightened_bbox'   ? '#ef4444'
                               : '#f97316';
                   return (
                     <>
@@ -2957,13 +3007,15 @@ export default function AutoCache() {
                 {(lightbox.yoloSource || lightbox.yoloDebug?.method) && (() => {
                   const src = lightbox.yoloSource;
                   const method = lightbox.yoloDebug?.method?.split(':')[0];
-                  const label = src === 'keypoints'      ? 'keypoints'
-                    : src === 'bbox_stable'   ? 'bbox_stable'
-                    : src === 'tightened_bbox' ? 'tightened_bbox'
+                  const label = src === 'keypoints'        ? 'keypoints'
+                    : src === 'opencv_promoted' ? 'opencv_promoted'
+                    : src === 'bbox_stable'     ? 'bbox_stable'
+                    : src === 'tightened_bbox'  ? 'tightened_bbox'
                     : (method === 'hough_lines' ? 'hough' : method) || src || '?';
-                  const color = src === 'keypoints'      ? '#22c55e'
-                    : src === 'bbox_stable'   ? '#3b82f6'
-                    : src === 'tightened_bbox' ? '#ef4444'
+                  const color = src === 'keypoints'        ? '#22c55e'
+                    : src === 'opencv_promoted' ? '#84cc16'
+                    : src === 'bbox_stable'     ? '#3b82f6'
+                    : src === 'tightened_bbox'  ? '#ef4444'
                     : '#f97316';
                   return (
                     <text x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.078}

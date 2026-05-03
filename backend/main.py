@@ -1056,16 +1056,21 @@ def refine_corners(
 
 
 # ---------------------------------------------------------------------------
-# Default automatic source: bbox_stable (axis-aligned, slight padding)
+# Hybrid source selection: bbox_stable (front view) vs opencv_promoted (3/4)
 # ---------------------------------------------------------------------------
+#
+# Default automatic source is `bbox_stable` (axis-aligned quad inside the
+# YOLO bbox). It's clean and predictable on front-view plates, but useless
+# for 3/4-view plates that need a true projective quad. So we *also* try to
+# promote the OpenCV refinement to `opencv_promoted` — but only when it
+# both (a) passes a strict quality gate and (b) shows enough perspective
+# signal that it actually adds information over the bbox.
+#
+# `ALLOW_OPENCV_PROMOTION` is a global kill-switch kept around to disable
+# the entire promotion pipeline if needed. The gate itself is calibrated
+# strictly enough that we leave it on by default.
 
-# Until a real keypoint model is deployed, the default automatic source
-# for the 4 plate corners is the YOLO bbox itself with a small inward
-# pad. OpenCV refinement (`refine_corners`) still runs for diagnostics
-# and is exposed in `debug`, but it is NOT used as the final source
-# unless the strict quality gate promotes it AND `ALLOW_OPENCV_PROMOTION`
-# is True. Flip this flag once the gate is provably reliable.
-ALLOW_OPENCV_PROMOTION = False
+ALLOW_OPENCV_PROMOTION = True
 
 
 def _bbox_stable_corners(
@@ -1090,24 +1095,110 @@ def _bbox_stable_corners(
     ]
 
 
+# --- helpers used by the gate ------------------------------------------------
+
+def _quad_shoelace_area(quad: list[dict]) -> float:
+    """Signed-shoelace area (absolute) of a 4-corner quad in normalised coords."""
+    if not quad or len(quad) != 4:
+        return 0.0
+    s = 0.0
+    for i in range(4):
+        a = quad[i]
+        b = quad[(i + 1) % 4]
+        s += a["x"] * b["y"] - b["x"] * a["y"]
+    return abs(s) / 2.0
+
+
+def _quad_perspective_signature(corners: list[dict]) -> dict:
+    """
+    Compute geometric features that betray a perspective-tilted plate
+    (3/4 view) versus a near-frontal plate.
+
+    All angles in degrees. Skews are dimensionless [0..1].
+    """
+    if not corners or len(corners) != 4:
+        return {"is_perspective": False}
+
+    tl, tr, br, bl = corners[0], corners[1], corners[2], corners[3]
+
+    def edge_angle(p1, p2):
+        return math.degrees(math.atan2(p2["y"] - p1["y"], p2["x"] - p1["x"]))
+
+    # Top / bottom edges: ~0° if horizontal.
+    top_a    = edge_angle(tl, tr)
+    bottom_a = edge_angle(bl, br)
+    # Left / right edges: subtract 90° so ~0° if vertical.
+    left_a   = edge_angle(tl, bl) - 90.0
+    right_a  = edge_angle(tr, br) - 90.0
+
+    def length(p1, p2):
+        return math.hypot(p2["x"] - p1["x"], p2["y"] - p1["y"])
+
+    top_w    = length(tl, tr)
+    bottom_w = length(bl, br)
+    left_h   = length(tl, bl)
+    right_h  = length(tr, br)
+
+    width_skew  = (
+        abs(top_w - bottom_w) / max(top_w, bottom_w, 1e-9)
+    )
+    height_skew = (
+        abs(left_h - right_h) / max(left_h, right_h, 1e-9)
+    )
+
+    # "Visible perspective" — quad is non-trivially trapezoidal.
+    # Thresholds are intentionally low (a few degrees / a few percent).
+    is_perspective = (
+        abs(top_a) > 2.5 or abs(bottom_a) > 2.5
+        or abs(left_a) > 2.5 or abs(right_a) > 2.5
+        or width_skew > 0.05
+        or height_skew > 0.05
+    )
+
+    return {
+        "top_tilt_deg":    round(top_a, 2),
+        "bottom_tilt_deg": round(bottom_a, 2),
+        "left_tilt_deg":   round(left_a, 2),
+        "right_tilt_deg":  round(right_a, 2),
+        "width_skew":      round(width_skew, 4),
+        "height_skew":     round(height_skew, 4),
+        "is_perspective":  is_perspective,
+    }
+
+
 def _opencv_passes_strict_gate(
-    corners: list[dict] | None, refine_debug: dict | None
-) -> tuple[bool, str]:
+    opencv_corners: list[dict] | None,
+    refine_debug: dict | None,
+    bbox: dict,
+    bbox_stable: list[dict],
+) -> tuple[bool, str, dict]:
     """
-    Decide whether an OpenCV refinement result is trustworthy enough to
-    override `bbox_stable` as the final source.
+    Decide whether an OpenCV refinement is trustworthy enough to be
+    promoted as the final source. Strict on purpose — better to ship a
+    clean bbox_stable than a wrong perspective.
 
-    Strict on purpose — better to fall back to a clean bbox quad than to
-    ship a wrong perspective. Returns (passed, reason). `reason` is a
-    short tag useful for telemetry / debug overlay even on success.
+    Returns ``(passed, reason, telemetry)``. ``telemetry`` is always
+    populated with the values we measured so the frontend can show why
+    a promotion was accepted or rejected.
 
-    Whitelisted methods only — `min_area_rect`, `approx_poly` and
-    `tightened_bbox` never pass: rectangle-oriented quads and grille-
-    catching contours are precisely the failure modes that pushed us
-    toward `bbox_stable` in the first place.
+    Criteria (all must hold):
+      * method ∈ {hybrid_plate_quad, hough_lines, plate_edges,
+        blue_bands, text_band} — never tightened_bbox / approx_poly /
+        min_area_rect.
+      * aspect ratio in [3.8, 6.0]
+      * containment in YOLO bbox ≥ 0.85
+      * center within 18% of bbox dim from bbox center
+      * area in [60%, 115%] of bbox_stable
+      * no corner more than 10% of bbox dim outside the YOLO bbox
+      * top/bottom edges and left/right edges agree within 14° each
+      * absolute tilt of top/bottom ≤ 18°
     """
-    if not corners or len(corners) != 4 or not refine_debug:
-        return False, "no_corners"
+    telemetry: dict = {}
+
+    if not opencv_corners or len(opencv_corners) != 4:
+        return False, "no_corners", telemetry
+    if not refine_debug:
+        return False, "no_debug", telemetry
 
     method = refine_debug.get("method", "") or ""
     trusted_prefixes = (
@@ -1115,27 +1206,79 @@ def _opencv_passes_strict_gate(
         "plate_edges", "blue_bands", "text_band",
     )
     if not any(method.startswith(p) for p in trusted_prefixes):
-        return False, f"untrusted_method:{method.split(':')[0] or 'unknown'}"
+        tag = method.split(":")[0] or "unknown"
+        return False, f"untrusted_method:{tag}", telemetry
 
     chosen = next(
         (c for c in (refine_debug.get("candidates") or []) if c.get("is_final")),
         None,
     )
     if not chosen:
-        return False, "no_chosen_in_debug"
+        return False, "no_chosen_in_debug", telemetry
 
     sub = chosen.get("sub_scores") or {}
     ar = sub.get("ar")
-    if ar is None or ar < 4.0 or ar > 5.5:
-        return False, f"ar_out_of_range:{ar}"
-    if (sub.get("contain") or 0) < 0.92:
-        return False, "contain_below_0.92"
-    if (sub.get("center_score") or 0) < 0.70:
-        return False, "center_score_below_0.70"
-    if (sub.get("size_score") or 0) < 0.70:
-        return False, "size_score_below_0.70"
+    telemetry["ar"] = ar
+    if ar is None or ar < 3.8 or ar > 6.0:
+        return False, f"ar_out_of_range:{ar}", telemetry
 
-    return True, "passed"
+    contain = sub.get("contain") or 0.0
+    telemetry["contain"] = round(float(contain), 3)
+    if contain < 0.85:
+        return False, f"contain_below_0.85:{contain:.2f}", telemetry
+
+    bbox_w = bbox["x2"] - bbox["x1"]
+    bbox_h = bbox["y2"] - bbox["y1"]
+    if bbox_w <= 0 or bbox_h <= 0:
+        return False, "bbox_zero", telemetry
+
+    bbox_cx = (bbox["x1"] + bbox["x2"]) / 2.0
+    bbox_cy = (bbox["y1"] + bbox["y2"]) / 2.0
+    quad_cx = sum(p["x"] for p in opencv_corners) / 4.0
+    quad_cy = sum(p["y"] for p in opencv_corners) / 4.0
+    dx_norm = abs(quad_cx - bbox_cx) / bbox_w
+    dy_norm = abs(quad_cy - bbox_cy) / bbox_h
+    telemetry["center_dx_norm"] = round(dx_norm, 3)
+    telemetry["center_dy_norm"] = round(dy_norm, 3)
+    if dx_norm > 0.18 or dy_norm > 0.18:
+        return False, f"center_off:{dx_norm:.2f},{dy_norm:.2f}", telemetry
+
+    a_opencv = _quad_shoelace_area(opencv_corners)
+    a_stable = _quad_shoelace_area(bbox_stable)
+    area_ratio = a_opencv / a_stable if a_stable > 1e-9 else 0.0
+    telemetry["area_ratio"] = round(area_ratio, 3)
+    if area_ratio < 0.60 or area_ratio > 1.15:
+        return False, f"area_ratio_out:{area_ratio:.2f}", telemetry
+
+    max_outside = 0.0
+    for p in opencv_corners:
+        ox = max(0.0, bbox["x1"] - p["x"], p["x"] - bbox["x2"]) / bbox_w
+        oy = max(0.0, bbox["y1"] - p["y"], p["y"] - bbox["y2"]) / bbox_h
+        max_outside = max(max_outside, ox, oy)
+    telemetry["max_corner_outside"] = round(max_outside, 3)
+    if max_outside > 0.10:
+        return False, f"corner_too_far:{max_outside:.2f}", telemetry
+
+    persp = _quad_perspective_signature(opencv_corners)
+    telemetry["perspective"] = persp
+    top_a    = persp.get("top_tilt_deg",    0.0) or 0.0
+    bottom_a = persp.get("bottom_tilt_deg", 0.0) or 0.0
+    left_a   = persp.get("left_tilt_deg",   0.0) or 0.0
+    right_a  = persp.get("right_tilt_deg",  0.0) or 0.0
+
+    if abs(top_a - bottom_a) > 14.0:
+        return False, f"top_bottom_inconsistent:{abs(top_a - bottom_a):.1f}", telemetry
+    if abs(left_a - right_a) > 14.0:
+        return False, f"left_right_inconsistent:{abs(left_a - right_a):.1f}", telemetry
+    if max(abs(top_a), abs(bottom_a)) > 18.0:
+        return False, f"too_tilted:{max(abs(top_a), abs(bottom_a)):.1f}", telemetry
+
+    if (sub.get("center_score") or 0.0) < 0.65:
+        return False, "center_score_below_0.65", telemetry
+    if (sub.get("size_score") or 0.0) < 0.65:
+        return False, "size_score_below_0.65", telemetry
+
+    return True, "passed", telemetry
 
 
 # ---------------------------------------------------------------------------
@@ -1208,26 +1351,30 @@ async def detect_plate(file: UploadFile = File(...)):
     """
     Detect a license plate and return its 4 corners.
 
-    Source priority (high → low):
-      1. "keypoints"       — YOLOv8-pose direct corner regression. The
-                             model must be a 4-keypoint pose model with
-                             corners annotated as [tl, tr, br, bl]. Used
-                             as-is for the final cache rendering.
-      2. "bbox_stable"     — DEFAULT automatic source while no pose model
-                             is deployed. Axis-aligned quad derived from
-                             the YOLO bbox with a small inward pad. Always
-                             succeeds. The frontend uses these corners
-                             directly for `drawPerspective`.
-      3. "opencv_fallback" — Only ever returned when `ALLOW_OPENCV_PROMOTION`
-                             is True AND the strict quality gate passes.
-                             Off by default — OpenCV refinement is too
-                             unreliable on real-world plates.
-      4. "tightened_bbox"  — never returned as the primary `corners` here;
-                             still appears in `debug` for visibility.
+    Hybrid source selection (high → low):
+      1. "keypoints"       — YOLOv8-pose direct corner regression. Used
+                             as-is for the final cache rendering. Wins
+                             whenever a pose model is loaded and emits
+                             4 valid keypoints for the best detection.
+      2. "opencv_promoted" — `refine_corners()` quad, BUT only when:
+                              (a) it passes `_opencv_passes_strict_gate`,
+                              AND
+                              (b) `_quad_perspective_signature` flags
+                                  visible perspective (3/4 view).
+                             On near-frontal plates the gate may pass but
+                             the quad doesn't add value over `bbox_stable`,
+                             so we don't promote it.
+      3. "bbox_stable"     — Default fallback. Axis-aligned quad inside
+                             the YOLO bbox with 3% inward pad. Always
+                             succeeds, always safe to render directly.
 
-    `debug` always contains the OpenCV refinement output (candidates,
-    chosen method, sub-scores) so the frontend can show the experimental
-    quad as an overlay even when it isn't promoted.
+    Anything else from `refine_corners` (`tightened_bbox`, `approx_poly`,
+    `min_area_rect`) never becomes the final source — they only appear in
+    `debug.candidates` for diagnostic overlay.
+
+    The response always carries `opencv_corners`, `gate_reason` and
+    `gate_telemetry` so the frontend can show the rejected quad as a
+    faded overlay alongside the chosen one.
     """
     try:
         img_bytes = await file.read()
@@ -1274,52 +1421,68 @@ async def detect_plate(file: UploadFile = File(...)):
                 "source":  "keypoints",
             }
         logger.info(
-            "Pose model loaded but keypoints unavailable — falling back to bbox_stable"
+            "Pose model loaded but keypoints unavailable — running bbox/OpenCV path"
         )
 
-    # ---- Priority 2: bbox_stable (default) -------------------------
-    bbox_corners = _bbox_stable_corners(bbox, pad_frac=0.03)
-
-    # OpenCV refinement still runs — but only for diagnostics. The
-    # candidate landscape is exposed in `debug` so the frontend can show
-    # the experimental quad as a faded overlay if desired.
-    img_np                  = np.array(img)
+    # ---- Compute both candidates ----------------------------------
+    bbox_corners                 = _bbox_stable_corners(bbox, pad_frac=0.03)
+    img_np                       = np.array(img)
     opencv_corners, refine_debug = refine_corners(img_np, bbox)
 
-    # ---- Priority 3 (gated): OpenCV promotion ---------------------
-    if ALLOW_OPENCV_PROMOTION:
-        passed, reason = _opencv_passes_strict_gate(opencv_corners, refine_debug)
-        if passed:
-            method_tag = (refine_debug or {}).get("method", "?")
-            logger.info(
-                f"OpenCV promoted (gate=passed, method={method_tag}): {opencv_corners}"
-            )
-            return {
-                "found":         True,
-                "conf":          round(conf, 3),
-                "bbox":          bbox,
-                "corners":       opencv_corners,
-                "source":        "opencv_fallback",
-                "debug":         refine_debug,
-                "gate_reason":   reason,
-                "bbox_stable":   bbox_corners,  # for overlay comparison
-            }
-        logger.info(
-            f"OpenCV refused by strict gate (reason={reason}) — using bbox_stable"
-        )
-    else:
-        logger.info("ALLOW_OPENCV_PROMOTION=False — using bbox_stable as final source")
+    method_tag = (refine_debug or {}).get("method", "?")
 
+    # ---- Priority 2: opencv_promoted (gated + perspective) --------
+    promote_reason = "promotion_disabled"
+    gate_telemetry: dict = {}
+    if ALLOW_OPENCV_PROMOTION:
+        passed, gate_reason, gate_telemetry = _opencv_passes_strict_gate(
+            opencv_corners, refine_debug, bbox, bbox_corners,
+        )
+        promote_reason = gate_reason
+        if passed:
+            persp = gate_telemetry.get("perspective", {}) or {}
+            has_perspective = bool(persp.get("is_perspective", False))
+            if has_perspective:
+                logger.info(
+                    f"OpenCV promoted (method={method_tag}, "
+                    f"persp=top:{persp.get('top_tilt_deg')}° "
+                    f"bot:{persp.get('bottom_tilt_deg')}° "
+                    f"area_ratio={gate_telemetry.get('area_ratio')})"
+                )
+                return {
+                    "found":          True,
+                    "conf":           round(conf, 3),
+                    "bbox":           bbox,
+                    "corners":        opencv_corners,
+                    "source":         "opencv_promoted",
+                    "debug":          refine_debug,
+                    "gate_reason":    "passed_with_perspective",
+                    "gate_telemetry": gate_telemetry,
+                    "bbox_stable":    bbox_corners,
+                }
+            promote_reason = "passed_but_near_frontal"
+            logger.info(
+                f"OpenCV gate passed but plate near-frontal "
+                f"(method={method_tag}) — using bbox_stable"
+            )
+        else:
+            logger.info(
+                f"OpenCV refused by gate "
+                f"(reason={gate_reason}, method={method_tag}) — using bbox_stable"
+            )
+
+    # ---- Priority 3: bbox_stable (default) -------------------------
     return {
-        "found":         True,
-        "conf":          round(conf, 3),
-        "bbox":          bbox,
-        "corners":       bbox_corners,
-        "source":        "bbox_stable",
-        # Diagnostics: keep the OpenCV candidate landscape and the corners
-        # it would have proposed. Useful as a debug overlay and to evaluate
-        # whether the gate is calibrated correctly before flipping
-        # ALLOW_OPENCV_PROMOTION on.
-        "debug":         refine_debug,
-        "opencv_corners": opencv_corners,
+        "found":           True,
+        "conf":            round(conf, 3),
+        "bbox":            bbox,
+        "corners":         bbox_corners,
+        "source":          "bbox_stable",
+        # Diagnostics: surface the OpenCV proposal even when not promoted
+        # so the frontend can show it as a faded "rejected_opencv" overlay
+        # and we can calibrate the gate from real traffic.
+        "debug":           refine_debug,
+        "opencv_corners":  opencv_corners,
+        "gate_reason":     promote_reason,
+        "gate_telemetry":  gate_telemetry,
     }
