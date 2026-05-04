@@ -50,7 +50,6 @@ export default async function handler(req, res) {
     maskBase64,
     imageMime = 'image/jpeg',
     quality = 'medium',
-    size = null,
     prompt = DEFAULT_PROMPT,
   } = req.body ?? {};
 
@@ -61,24 +60,22 @@ export default async function handler(req, res) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set' });
 
-  const model = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2';
+  const model = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5';
   const mime = normalizeMime(imageMime);
   const imageBuffer = Buffer.from(imageBase64, 'base64');
   const maskBuffer = Buffer.from(maskBase64, 'base64');
   const boundary = '----AutoCacheOpenAI' + Date.now();
 
   const fields = [
-    part(boundary, 'image[]', filenameForMime(mime), mime, imageBuffer),
+    part(boundary, 'image', filenameForMime(mime), mime, imageBuffer),
     part(boundary, 'mask', 'headlight-mask.png', 'image/png', maskBuffer),
     field(boundary, 'model', model),
     field(boundary, 'prompt', prompt),
     field(boundary, 'quality', quality),
     field(boundary, 'output_format', 'png'),
+    field(boundary, 'size', 'auto'),
     field(boundary, 'n', '1'),
   ];
-  if (model === 'gpt-image-2' && typeof size === 'string' && /^\d+x\d+$/.test(size)) {
-    fields.push(field(boundary, 'size', size));
-  }
   fields.push(Buffer.from(`--${boundary}--\r\n`));
 
   const body = Buffer.concat(fields);
