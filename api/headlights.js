@@ -16,6 +16,45 @@ function extractJSON(txt) {
   return null;
 }
 
+function fallbackLights(reason) {
+  const lights = [
+    {
+      x: 0.145,
+      y: 0.355,
+      w: 0.255,
+      h: 0.225,
+      confidence: 0.45,
+      fallback: true,
+      points: [
+        { x: 0.155, y: 0.445 },
+        { x: 0.230, y: 0.375 },
+        { x: 0.360, y: 0.390 },
+        { x: 0.395, y: 0.505 },
+        { x: 0.310, y: 0.570 },
+        { x: 0.165, y: 0.540 },
+      ],
+    },
+    {
+      x: 0.600,
+      y: 0.355,
+      w: 0.255,
+      h: 0.225,
+      confidence: 0.45,
+      fallback: true,
+      points: [
+        { x: 0.605, y: 0.505 },
+        { x: 0.640, y: 0.390 },
+        { x: 0.770, y: 0.375 },
+        { x: 0.845, y: 0.445 },
+        { x: 0.835, y: 0.540 },
+        { x: 0.690, y: 0.570 },
+      ],
+    },
+  ];
+  console.warn(`headlights: fallback boxes used (${reason})`, lights);
+  return lights;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -69,7 +108,7 @@ Return ONLY valid JSON, no explanation:
     const data = await response.json();
     if (!response.ok) {
       console.error('OpenAI headlights error:', data);
-      return res.json({ lights: [], error: 'OpenAI API error', details: data });
+      return res.json({ lights: fallbackLights('OpenAI API error'), error: 'OpenAI API error', details: data });
     }
 
     const text = data.choices?.[0]?.message?.content ?? '';
@@ -77,7 +116,7 @@ Return ONLY valid JSON, no explanation:
     const raw = extractJSON(text);
     if (!raw) {
       console.error('headlights: no JSON in response:', text);
-      return res.json({ lights: [], error: 'No JSON in response' });
+      return res.json({ lights: fallbackLights('No JSON in response'), error: 'No JSON in response' });
     }
 
     const gpt = JSON.parse(raw);
@@ -98,11 +137,12 @@ Return ONLY valid JSON, no explanation:
       }))
     : [];
 
-    console.log(`headlights: detected ${lights.length} light(s)`, lights);
-    return res.json({ lights });
+    const safeLights = lights.length ? lights : fallbackLights('empty detection');
+    console.log(`headlights: detected ${safeLights.length} light(s)`, safeLights);
+    return res.json({ lights: safeLights });
 
   } catch (e) {
     console.error('headlights.js error:', e);
-    return res.json({ lights: [], error: e.message });
+    return res.json({ lights: fallbackLights(e.message), error: e.message });
   }
 }
