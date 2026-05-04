@@ -53,7 +53,6 @@ Return ONLY valid JSON, no explanation:
         model: process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini',
         max_tokens: 700,
         temperature: 0.1,
-        response_format: { type: 'json_object' },
         messages: [{
           role: 'user',
           content: [
@@ -69,13 +68,17 @@ Return ONLY valid JSON, no explanation:
 
     const data = await response.json();
     if (!response.ok) {
-      return res.status(500).json({ error: 'OpenAI API error', details: data });
+      console.error('OpenAI headlights error:', data);
+      return res.json({ lights: [], error: 'OpenAI API error', details: data });
     }
 
     const text = data.choices?.[0]?.message?.content ?? '';
     console.log('headlights detection response:', text);
     const raw = extractJSON(text);
-    if (!raw) return res.status(500).json({ error: 'No JSON in response', text });
+    if (!raw) {
+      console.error('headlights: no JSON in response:', text);
+      return res.json({ lights: [], error: 'No JSON in response' });
+    }
 
     const gpt = JSON.parse(raw);
     const lights = Array.isArray(gpt.lights) ? gpt.lights
@@ -100,6 +103,6 @@ Return ONLY valid JSON, no explanation:
 
   } catch (e) {
     console.error('headlights.js error:', e);
-    return res.status(500).json({ error: e.message });
+    return res.json({ lights: [], error: e.message });
   }
 }
