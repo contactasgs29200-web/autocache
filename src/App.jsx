@@ -1006,10 +1006,44 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const yolo = await detectPlateYOLO(photoFile);
   if (yolo) {
     plateFound = true;
-    // Priorité aux coins renvoyés par le backend (keypoints, bbox_stable,
-    // opencv_fallback…). Si pour une raison inattendue ils sont absents,
-    // tomber sur la bbox brute pour avoir au moins un quad utilisable
-    // dans l'« Ajuster » manuel.
+    // ── Diagnostic console : qui pilote la pose du cache plaque, et
+    // ── pourquoi (utile pour calibrer le gate sur photos réelles).
+    try {
+      const gt = yolo.gate_telemetry || {};
+      const top_rej = (gt.rejection_reasons || []).slice(0, 5).map(r => ({
+        method: r.method, reason: r.reason, score: r.score,
+        ar: r.ar, contain: r.contain, area_ratio: r.area_ratio,
+        center: [r.center_dx_norm, r.center_dy_norm],
+        max_corner_outside: r.max_corner_outside,
+        center_score: r.center_score, size_score: r.size_score,
+        is_perspective: r.is_perspective,
+        tilts: [r.top_tilt_deg, r.bottom_tilt_deg, r.left_tilt_deg, r.right_tilt_deg],
+        skews: [r.width_skew, r.height_skew],
+        gate_failed_on: r.gate_failed_on,
+      }));
+      // eslint-disable-next-line no-console
+      console.log('[YOLO]', photoFile.name, {
+        render_source:    yolo.render_source ?? yolo.source,
+        quad_source:      yolo.quad_source,
+        promotion_reason: yolo.promotion_reason,
+        rejection_reason: yolo.rejection_reason,
+        best_candidate:   gt.chosen_method,
+        best_score:       gt.chosen_score,
+        passes_count:     gt.passes_count,
+        persp_count:      gt.persp_count,
+        candidates_seen:  gt.candidates_seen,
+        render_corners:   yolo.corners,
+        bbox_stable:      yolo.bbox_stable,
+        opencv_corners:   yolo.opencv_corners,
+        picks:            gt.picks,
+        rejection_reasons: top_rej,
+      });
+    } catch (e) { /* logging is best-effort */ }
+    // ── Render geometry — priorité absolue à `yolo.corners` (le quad
+    // ── que le backend a élu : keypoints, opencv_promoted ou
+    // ── bbox_stable). Ce champ EST `render_corners` — drawPerspective
+    // ── est piloté par lui. La bbox n'est utilisée qu'en dernier recours
+    // ── pour fournir un savedCorners utilisable dans « Ajuster » manuel.
     if (yolo.corners && yolo.corners.length === 4) {
       savedCorners = { tl: yolo.corners[0], tr: yolo.corners[1], br: yolo.corners[2], bl: yolo.corners[3] };
     } else {
@@ -1062,15 +1096,23 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     ctx.drawImage(tmp, 0, 0);
     ctx.restore();
   }
-  const yoloBbox          = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
-  const yoloCorners       = yolo?.corners ?? null;
-  const yoloDebug         = yolo?.debug   ?? null;
-  const yoloSource        = yolo?.source  ?? null;
-  // Quad OpenCV non promu : on l'expose pour pouvoir l'afficher en
-  // overlay « rejected_opencv » (debug uniquement) à côté du choix final.
-  const yoloOpencvCorners = yolo?.opencv_corners ?? null;
-  const yoloGateReason    = yolo?.gate_reason    ?? null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, yoloSource, yoloOpencvCorners, yoloGateReason, imgW: c.width, imgH: c.height };
+  const yoloBbox             = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
+  const yoloCorners          = yolo?.corners ?? null;       // = render_corners
+  const yoloDebug            = yolo?.debug   ?? null;
+  const yoloSource           = yolo?.source  ?? null;
+  // Render-geometry telemetry — qui pilote le cache plaque, et pourquoi.
+  const yoloRenderSource     = yolo?.render_source    ?? yolo?.source ?? null;
+  const yoloQuadSource       = yolo?.quad_source      ?? null;  // ex. "plate_edges:v=2_s=3:eps=0.04"
+  const yoloPromotionReason  = yolo?.promotion_reason ?? null;
+  const yoloRejectionReason  = yolo?.rejection_reason ?? null;
+  // Quad OpenCV historique (« chosen » de refine_corners) ET quad
+  // bbox_stable (filet axe-aligné) — exposés pour les overlays debug
+  // « rejected_opencv » (orange dashed) et « bbox_stable » (bleu dashed).
+  const yoloOpencvCorners    = yolo?.opencv_corners   ?? null;
+  const yoloBboxStable       = yolo?.bbox_stable      ?? null;
+  // Telemetry agrégée du gate (picks, rejection_reasons[], counts).
+  const yoloGateTelemetry    = yolo?.gate_telemetry   ?? null;
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, yoloSource, yoloRenderSource, yoloQuadSource, yoloPromotionReason, yoloRejectionReason, yoloOpencvCorners, yoloBboxStable, yoloGateTelemetry, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -2699,6 +2741,21 @@ export default function AutoCache() {
                               fill="none" stroke="#22c55e" strokeWidth={Math.max(2, r.imgW * 0.002)}
                               strokeDasharray={`${r.imgW * 0.01} ${r.imgW * 0.005}`}
                             />
+                            {/* bbox_stable (filet axe-aligné) — bleu pointillé,
+                                debug uniquement, affiché quand la render
+                                geometry est autre chose (pour comparer). */}
+                            {r.yoloRenderSource !== 'bbox_stable'
+                              && r.yoloBboxStable
+                              && r.yoloBboxStable.length === 4 && (
+                              <g opacity={0.40}>
+                                <polygon
+                                  points={r.yoloBboxStable.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
+                                  fill="none" stroke="#3b82f6"
+                                  strokeWidth={Math.max(1, r.imgW * 0.0015)}
+                                  strokeDasharray={`${r.imgW * 0.005} ${r.imgW * 0.004}`}
+                                />
+                              </g>
+                            )}
                             {/* Candidats alternatifs — cyan fin pointillé (debug) */}
                             {r.yoloDebug?.candidates && r.yoloDebug.candidates
                               .filter(c => !c.is_final)
@@ -2725,25 +2782,37 @@ export default function AutoCache() {
                                   </g>
                                 );
                               })}
-                            {/* Quad OpenCV rejeté — debug uniquement, faible opacité */}
-                            {r.yoloSource !== 'opencv_promoted'
-                              && r.yoloOpencvCorners
-                              && r.yoloOpencvCorners.length === 4 && (
-                              <g opacity={0.40}>
-                                <polygon
-                                  points={r.yoloOpencvCorners.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
-                                  fill="none" stroke="#f97316"
-                                  strokeWidth={Math.max(1, r.imgW * 0.0015)}
-                                  strokeDasharray={`${r.imgW * 0.006} ${r.imgW * 0.004}`}
-                                />
-                              </g>
-                            )}
-                            {/* Quadrilatère final — couleur selon source */}
+                            {/* Quad OpenCV historique (chosen de refine_corners)
+                                — debug uniquement, en orange dashed faible
+                                opacité, dès qu'il diffère du quad réellement
+                                rendu. Sert à voir l'écart entre l'ancien
+                                « chosen » et la render geometry promue. */}
+                            {(() => {
+                              const oc = r.yoloOpencvCorners;
+                              const fc = r.yoloCorners;
+                              if (!oc || oc.length !== 4) return null;
+                              const differs = !fc || fc.length !== 4
+                                || oc.some((p, i) =>
+                                     Math.abs(p.x - fc[i].x) > 5e-4
+                                  || Math.abs(p.y - fc[i].y) > 5e-4);
+                              if (!differs) return null;
+                              return (
+                                <g opacity={0.40}>
+                                  <polygon
+                                    points={oc.map(p => `${p.x * r.imgW},${p.y * r.imgH}`).join(' ')}
+                                    fill="none" stroke="#f97316"
+                                    strokeWidth={Math.max(1, r.imgW * 0.0015)}
+                                    strokeDasharray={`${r.imgW * 0.006} ${r.imgW * 0.004}`}
+                                  />
+                                </g>
+                              );
+                            })()}
+                            {/* Quadrilatère final — couleur selon render_source. */}
                             {r.yoloCorners && (() => {
-                              const src = r.yoloSource;
+                              const src = r.yoloRenderSource || r.yoloSource;
                               // keypoints = vert,
-                              // opencv_promoted = lime (orange/vert : OpenCV validé),
-                              // bbox_stable = bleu,
+                              // opencv_promoted = lime (OpenCV validé perspective-aware),
+                              // bbox_stable = bleu (filet axe-aligné),
                               // (legacy) opencv_fallback = orange,
                               // tightened_bbox = rouge.
                               const stroke = src === 'keypoints'        ? '#22c55e'
@@ -2772,14 +2841,22 @@ export default function AutoCache() {
                               fill="#000" fontSize={r.imgH * 0.026} fontFamily="monospace" fontWeight="bold">
                               {Math.round(r.yoloBbox.conf * 100)}%
                             </text>
-                            {(r.yoloSource || r.yoloDebug?.method) && (() => {
-                              const src = r.yoloSource;
+                            {(r.yoloRenderSource || r.yoloSource || r.yoloDebug?.method) && (() => {
+                              const src = r.yoloRenderSource || r.yoloSource;
                               const method = r.yoloDebug?.method?.split(':')[0];
-                              const label = src === 'keypoints'        ? 'keypoints'
+                              let label = src === 'keypoints'        ? 'keypoints'
                                 : src === 'opencv_promoted' ? 'opencv_promoted'
                                 : src === 'bbox_stable'     ? 'bbox_stable'
                                 : src === 'tightened_bbox'  ? 'tightened_bbox'
                                 : (method === 'hough_lines' ? 'hough' : method) || src || '?';
+                              // Sub-label : quad_source pour opencv_promoted,
+                              //             rejection_reason pour bbox_stable.
+                              if (src === 'opencv_promoted' && r.yoloQuadSource) {
+                                label = `opencv_promoted (${r.yoloQuadSource.split(':')[0]})`;
+                              } else if (src === 'bbox_stable' && r.yoloRejectionReason) {
+                                const reason = r.yoloRejectionReason.split(':').slice(0, 2).join(':');
+                                label = `bbox_stable — ${reason}`;
+                              }
                               const color = src === 'keypoints'        ? '#22c55e'
                                 : src === 'opencv_promoted' ? '#84cc16'
                                 : src === 'bbox_stable'     ? '#3b82f6'
@@ -3036,6 +3113,29 @@ export default function AutoCache() {
                   fill="none" stroke="#22c55e" strokeWidth={Math.max(2, lightbox.imgW * 0.002)}
                   strokeDasharray={`${lightbox.imgW * 0.01} ${lightbox.imgW * 0.005}`}
                 />
+                {/* bbox_stable (filet axe-aligné) — bleu pointillé, debug
+                    uniquement, affiché quand la render geometry est autre
+                    chose (pour comparer visuellement le quad précis vs
+                    le filet axe-aligné). */}
+                {lightbox.yoloRenderSource !== 'bbox_stable'
+                  && lightbox.yoloBboxStable
+                  && lightbox.yoloBboxStable.length === 4 && (
+                  <g opacity={0.40}>
+                    <polygon
+                      points={lightbox.yoloBboxStable.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
+                      fill="none" stroke="#3b82f6"
+                      strokeWidth={Math.max(1, lightbox.imgW * 0.0015)}
+                      strokeDasharray={`${lightbox.imgW * 0.005} ${lightbox.imgW * 0.004}`}
+                    />
+                    <text
+                      x={lightbox.yoloBboxStable[0].x * lightbox.imgW + lightbox.imgW * 0.003}
+                      y={lightbox.yoloBboxStable[0].y * lightbox.imgH - lightbox.imgH * 0.005}
+                      fill="#3b82f6" fontSize={lightbox.imgH * 0.018}
+                      fontFamily="monospace" fontWeight="bold">
+                      bbox_stable
+                    </text>
+                  </g>
+                )}
                 {/* Candidats alternatifs — cyan fin pointillé (debug) */}
                 {lightbox.yoloDebug?.candidates && lightbox.yoloDebug.candidates
                   .filter(c => !c.is_final)
@@ -3062,32 +3162,48 @@ export default function AutoCache() {
                       </g>
                     );
                   })}
-                {/* Quad OpenCV rejeté — debug uniquement, faible opacité */}
-                {lightbox.yoloSource !== 'opencv_promoted'
-                  && lightbox.yoloOpencvCorners
-                  && lightbox.yoloOpencvCorners.length === 4 && (
-                  <g opacity={0.40}>
-                    <polygon
-                      points={lightbox.yoloOpencvCorners.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
-                      fill="none" stroke="#f97316"
-                      strokeWidth={Math.max(1, lightbox.imgW * 0.0015)}
-                      strokeDasharray={`${lightbox.imgW * 0.006} ${lightbox.imgW * 0.004}`}
-                    />
-                    <text
-                      x={lightbox.yoloOpencvCorners[0].x * lightbox.imgW + lightbox.imgW * 0.003}
-                      y={lightbox.yoloOpencvCorners[0].y * lightbox.imgH - lightbox.imgH * 0.005}
-                      fill="#f97316" fontSize={lightbox.imgH * 0.018}
-                      fontFamily="monospace" fontWeight="bold">
-                      rejected{lightbox.yoloGateReason ? ` (${lightbox.yoloGateReason})` : ''}
-                    </text>
-                  </g>
-                )}
-                {/* Quadrilatère final — couleur selon source */}
+                {/* Quad OpenCV historique (chosen de refine_corners) —
+                    debug uniquement, en orange dashed faible opacité, dès
+                    qu'il diffère du quad réellement rendu. */}
+                {(() => {
+                  const oc = lightbox.yoloOpencvCorners;
+                  const fc = lightbox.yoloCorners;
+                  if (!oc || oc.length !== 4) return null;
+                  const differs = !fc || fc.length !== 4
+                    || oc.some((p, i) =>
+                         Math.abs(p.x - fc[i].x) > 5e-4
+                      || Math.abs(p.y - fc[i].y) > 5e-4);
+                  if (!differs) return null;
+                  // Annotation : pourquoi le chosen historique a été écarté ?
+                  // - rejection_reason si on est tombé sur bbox_stable
+                  // - promotion_reason si on a promu un autre candidat
+                  const annot = lightbox.yoloRejectionReason
+                    || lightbox.yoloPromotionReason
+                    || '';
+                  return (
+                    <g opacity={0.40}>
+                      <polygon
+                        points={oc.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
+                        fill="none" stroke="#f97316"
+                        strokeWidth={Math.max(1, lightbox.imgW * 0.0015)}
+                        strokeDasharray={`${lightbox.imgW * 0.006} ${lightbox.imgW * 0.004}`}
+                      />
+                      <text
+                        x={oc[0].x * lightbox.imgW + lightbox.imgW * 0.003}
+                        y={oc[0].y * lightbox.imgH - lightbox.imgH * 0.005}
+                        fill="#f97316" fontSize={lightbox.imgH * 0.018}
+                        fontFamily="monospace" fontWeight="bold">
+                        rejected_opencv{annot ? ` (${annot})` : ''}
+                      </text>
+                    </g>
+                  );
+                })()}
+                {/* Quadrilatère final — couleur selon render_source. */}
                 {lightbox.yoloCorners && (() => {
-                  const src = lightbox.yoloSource;
+                  const src = lightbox.yoloRenderSource || lightbox.yoloSource;
                   // keypoints = vert,
-                  // opencv_promoted = lime (orange/vert : OpenCV validé),
-                  // bbox_stable = bleu,
+                  // opencv_promoted = lime (OpenCV validé perspective-aware),
+                  // bbox_stable = bleu (filet axe-aligné),
                   // (legacy) opencv_fallback = orange,
                   // tightened_bbox = rouge.
                   const stroke = src === 'keypoints'        ? '#22c55e'
@@ -3116,14 +3232,22 @@ export default function AutoCache() {
                   fill="#000" fontSize={lightbox.imgH * 0.026} fontFamily="monospace" fontWeight="bold">
                   {Math.round(lightbox.yoloBbox.conf * 100)}%
                 </text>
-                {(lightbox.yoloSource || lightbox.yoloDebug?.method) && (() => {
-                  const src = lightbox.yoloSource;
+                {(lightbox.yoloRenderSource || lightbox.yoloSource || lightbox.yoloDebug?.method) && (() => {
+                  const src = lightbox.yoloRenderSource || lightbox.yoloSource;
                   const method = lightbox.yoloDebug?.method?.split(':')[0];
-                  const label = src === 'keypoints'        ? 'keypoints'
+                  let label = src === 'keypoints'        ? 'keypoints'
                     : src === 'opencv_promoted' ? 'opencv_promoted'
                     : src === 'bbox_stable'     ? 'bbox_stable'
                     : src === 'tightened_bbox'  ? 'tightened_bbox'
                     : (method === 'hough_lines' ? 'hough' : method) || src || '?';
+                  // Sub-label : quad_source pour opencv_promoted,
+                  //             rejection_reason pour bbox_stable.
+                  if (src === 'opencv_promoted' && lightbox.yoloQuadSource) {
+                    label = `opencv_promoted (${lightbox.yoloQuadSource.split(':')[0]})`;
+                  } else if (src === 'bbox_stable' && lightbox.yoloRejectionReason) {
+                    const reason = lightbox.yoloRejectionReason.split(':').slice(0, 2).join(':');
+                    label = `bbox_stable — ${reason}`;
+                  }
                   const color = src === 'keypoints'        ? '#22c55e'
                     : src === 'opencv_promoted' ? '#84cc16'
                     : src === 'bbox_stable'     ? '#3b82f6'
