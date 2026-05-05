@@ -513,7 +513,14 @@ function createHeadlightEditAssets(ctx, W, H, lights) {
   };
 }
 
-function blendEditedHeadlights(ctx, editedImg, lights, W, H) {
+function blendEditedHeadlights(ctx, editedImg, lights, W, H, blendParams = null) {
+  const params = {
+    expandOuter: 0.065,
+    expandInner: 0.035,
+    edgeBlur: 0.0025,
+    aiOpacity: 1.0,
+    ...(blendParams || {}),
+  };
   const overlay = document.createElement('canvas');
   overlay.width = W;
   overlay.height = H;
@@ -527,16 +534,66 @@ function blendEditedHeadlights(ctx, editedImg, lights, W, H) {
   alpha.height = H;
   const actx = alpha.getContext('2d');
   actx.fillStyle = 'rgba(255,255,255,1)';
-  actx.filter = `blur(${Math.max(3, Math.round(Math.min(W, H) * 0.0025))}px)`;
-  drawHeadlightShapes(actx, lights, W, H, 0.065);
+  actx.filter = `blur(${Math.max(3, Math.round(Math.min(W, H) * params.edgeBlur))}px)`;
+  drawHeadlightShapes(actx, lights, W, H, params.expandOuter);
   actx.filter = 'none';
-  drawHeadlightShapes(actx, lights, W, H, 0.035);
+  drawHeadlightShapes(actx, lights, W, H, params.expandInner);
 
   octx.globalCompositeOperation = 'destination-in';
   octx.drawImage(alpha, 0, 0);
   octx.globalCompositeOperation = 'source-over';
 
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = params.aiOpacity;
   ctx.drawImage(overlay, 0, 0);
+  ctx.globalAlpha = prevAlpha;
+}
+
+// Legacy local polish — only runs when the server explicitly authorizes it
+// via HEADLIGHT_AI_FALLBACK_LOCAL=true. Kept on purpose minimal: it does NOT
+// claim to produce a premium AI render. It only cleans the masked region with
+// a desaturate+brighten pass so the photo is still usable when the AI is down.
+function localPolishHeadlights(ctx, W, H, lights) {
+  if (!lights.length) return;
+  const region = document.createElement('canvas');
+  region.width = W;
+  region.height = H;
+  const rctx = region.getContext('2d');
+  rctx.drawImage(ctx.canvas, 0, 0);
+
+  const id = rctx.getImageData(0, 0, W, H);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    const desat = lum + (r - lum) * 0.3;
+    d[i]     = Math.min(255, desat * 1.05);
+    d[i + 1] = Math.min(255, (lum + (g - lum) * 0.3) * 1.05);
+    d[i + 2] = Math.min(255, (lum + (b - lum) * 0.3) * 1.08);
+    // suppress amber tint when channel imbalance suggests oxidation
+    if (r > 150 && g > 120 && b < 140 && (max - min) > 20) {
+      d[i + 2] = Math.min(255, d[i + 2] + 18);
+      d[i + 1] = Math.min(255, d[i + 1] + 4);
+      d[i]     = Math.min(255, d[i] - 6);
+    }
+  }
+  rctx.putImageData(id, 0, 0);
+
+  const alpha = document.createElement('canvas');
+  alpha.width = W;
+  alpha.height = H;
+  const actx = alpha.getContext('2d');
+  actx.fillStyle = 'rgba(255,255,255,1)';
+  actx.filter = `blur(${Math.max(3, Math.round(Math.min(W, H) * 0.003))}px)`;
+  drawHeadlightShapes(actx, lights, W, H, 0.06);
+  actx.filter = 'none';
+  drawHeadlightShapes(actx, lights, W, H, 0.03);
+
+  rctx.globalCompositeOperation = 'destination-in';
+  rctx.drawImage(alpha, 0, 0);
+  rctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(region, 0, 0);
 }
 
 async function detectHeadlights(b64) {
@@ -558,32 +615,65 @@ async function detectHeadlights(b64) {
   }
 }
 
-async function aiPolishHeadlights(ctx, W, H, b64Original) {
+// AI inpainting pipeline: detect → mask → call provider → composite.
+// `mode` is fixed to "ai" — local pixel filtering is only re-enabled when the
+// API explicitly tells us so via `fallback: "local"` (gated server-side by
+// HEADLIGHT_AI_FALLBACK_LOCAL).
+async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
+  const { strength = "medium" } = opts;
   const lights = await detectHeadlights(b64Original);
   if (!lights.length) {
     console.log("[Headlights] Aucun phare détecté");
-    return;
+    return { ok: false, reason: "no-lights" };
   }
 
+  const assets = createHeadlightEditAssets(ctx, W, H, lights);
+  const payload = {
+    imageBase64: assets.imageBase64,
+    imageMime: assets.imageMime,
+    maskBase64: assets.maskBase64,
+    size: assets.size,
+    mode: "ai",
+    strength,
+  };
+
+  let data = null;
+  let httpOk = false;
   try {
-    const payload = createHeadlightEditAssets(ctx, W, H, lights);
     const r = await fetch("/api/lustrage-pro", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.imageBase64) {
-      throw new Error(data.error || `HTTP ${r.status}`);
-    }
-
-    const editedImg = await loadImg(`data:image/png;base64,${data.imageBase64}`);
-    blendEditedHeadlights(ctx, editedImg, lights, W, H);
-    console.log("[Headlights] Lustrage IA terminé ✓");
-  } catch(e) {
-    console.warn("[Headlights] Lustrage IA indisponible:", e.message);
+    httpOk = r.ok;
+    data = await r.json().catch(() => ({}));
+  } catch (e) {
+    console.warn("[Headlights] Network error:", e.message);
+    return { ok: false, reason: "network", error: e.message };
   }
+
+  if (httpOk && data?.imageBase64) {
+    try {
+      const editedImg = await loadImg(`data:image/png;base64,${data.imageBase64}`);
+      blendEditedHeadlights(ctx, editedImg, lights, W, H, data.blend);
+      console.log(`[Headlights] Lustrage IA terminé ✓ (provider=${data.provider}, model=${data.model}, strength=${data.strength})`);
+      return { ok: true, provider: data.provider, model: data.model };
+    } catch (e) {
+      console.warn("[Headlights] Composite error:", e.message);
+      return { ok: false, reason: "composite", error: e.message };
+    }
+  }
+
+  // Server failed. Only run the legacy local polish if the server explicitly
+  // authorized it (HEADLIGHT_AI_FALLBACK_LOCAL=true).
+  if (data?.fallback === "local") {
+    console.warn("[Headlights] AI failed, running local fallback (server-authorized)");
+    localPolishHeadlights(ctx, W, H, lights);
+    return { ok: true, provider: "local-fallback", model: null };
+  }
+
+  console.warn("[Headlights] Lustrage IA indisponible:", data?.error || "unknown error");
+  return { ok: false, reason: "ai-failed", error: data?.error || "ai-failed" };
 }
 
 // ── Lustrage carrosserie ─────────────────────────────────────────────────────
