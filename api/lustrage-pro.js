@@ -2,28 +2,13 @@
 //
 // Headlight restoration endpoint — AI inpainting / image-to-image only.
 //
-// The pipeline is:
-//   1. The front-end detects the headlights (api/headlights.js → polygons)
-//   2. The front-end builds a precise mask + the source image and POSTs them
-//      to this endpoint together with `mode` and `strength`.
-//   3. We delegate to a HeadlightRestorationProvider (OpenAI / Replicate /
-//      Stability — selected via HEADLIGHT_AI_PROVIDER).
-//   4. The front-end re-composites the AI output on top of the original
-//      using the blending parameters returned in the response.
+// New diagnostic features (added during the no-op investigation):
+//   - Verbose server logs for every request (env, mode, strength, mask
+//     coverage, AI dimensions, success/failure).
+//   - `?debug=1` query: response also returns the mask + raw AI image so
+//     the client can render them for inspection.
 //
-// We never replace yellow pixels with white pixels here: the AI does the
-// work. If the AI call fails:
-//   - by default we surface the error.
-//   - if HEADLIGHT_AI_FALLBACK_LOCAL=true the response carries a
-//     `fallback: "local"` flag so the front-end can run its legacy
-//     canvas-only polish as a graceful degradation.
-//
-// Env vars (see docs/HEADLIGHT_RESTORATION.md):
-//   HEADLIGHT_AI_ENABLED          true | false  (default: true)
-//   HEADLIGHT_AI_PROVIDER         openai | replicate | stability
-//   HEADLIGHT_AI_API_KEY          provider API key
-//   HEADLIGHT_AI_MODEL            provider-specific model id
-//   HEADLIGHT_AI_FALLBACK_LOCAL   true | false  (default: false)
+// Env vars (see docs/HEADLIGHT_RESTORATION.md).
 
 import {
   restoreHeadlights,
@@ -42,6 +27,12 @@ function normalizeMime(mime) {
   return SUPPORTED_MIME.has(mime) ? mime : 'image/jpeg';
 }
 
+function isDebugRequest(req) {
+  const url = req.url || '';
+  if (url.includes('debug=1') || url.includes('debug=true')) return true;
+  return req.body?.debug === true || req.body?.debug === 1 || req.body?.debug === '1';
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -56,7 +47,28 @@ export default async function handler(req, res) {
     size = null,
     prompt,
     negativePrompt,
+    maskCoverage = null,
   } = req.body ?? {};
+
+  const debug = isDebugRequest(req);
+
+  console.log('[lustrage-pro] request', {
+    mode,
+    strength,
+    size,
+    imageMime,
+    imageBytes: imageBase64 ? Math.floor((imageBase64.length * 3) / 4) : 0,
+    maskBytes: maskBase64 ? Math.floor((maskBase64.length * 3) / 4) : 0,
+    maskCoverage,
+    debug,
+    env: {
+      HEADLIGHT_AI_ENABLED: process.env.HEADLIGHT_AI_ENABLED ?? '(unset, default true)',
+      HEADLIGHT_AI_PROVIDER: process.env.HEADLIGHT_AI_PROVIDER ?? '(unset, default openai)',
+      HEADLIGHT_AI_MODEL: process.env.HEADLIGHT_AI_MODEL ?? '(unset, default gpt-image-1)',
+      HEADLIGHT_AI_API_KEY: process.env.HEADLIGHT_AI_API_KEY ? '(set)' : (process.env.OPENAI_API_KEY ? '(via OPENAI_API_KEY)' : '(MISSING)'),
+      HEADLIGHT_AI_FALLBACK_LOCAL: process.env.HEADLIGHT_AI_FALLBACK_LOCAL ?? '(unset, default false)',
+    },
+  });
 
   if (!imageBase64 || !maskBase64) {
     return res.status(400).json({ error: 'Missing imageBase64 or maskBase64' });
@@ -77,9 +89,10 @@ export default async function handler(req, res) {
       prompt,
       negativePrompt,
       strength,
+      maskCoverage,
     });
 
-    return res.json({
+    const payload = {
       imageBase64: result.imageBase64,
       provider: result.provider,
       model: result.model,
@@ -87,7 +100,22 @@ export default async function handler(req, res) {
       blend: result.blend,
       attempts: result.attempts,
       mode: 'ai',
-    });
+      outDims: result.outDims,
+    };
+
+    if (debug) {
+      payload.debug = {
+        maskBase64,
+        rawAiBase64: result.imageBase64,
+        promptUsed: prompt ?? null,
+        env: {
+          provider: process.env.HEADLIGHT_AI_PROVIDER ?? 'openai',
+          model: process.env.HEADLIGHT_AI_MODEL ?? 'gpt-image-1',
+        },
+      };
+    }
+
+    return res.json(payload);
   } catch (e) {
     const status = e instanceof ProviderConfigError ? 500
       : e instanceof ProviderRequestError ? (e.status || 502)
@@ -100,8 +128,11 @@ export default async function handler(req, res) {
       fallback: allowFallback ? 'local' : null,
       blend: allowFallback ? blendParamsFor(resolveStrength(strength)) : null,
     };
+    if (debug) {
+      payload.debug = { maskBase64, env: process.env.HEADLIGHT_AI_PROVIDER || 'openai' };
+    }
 
-    console.error('lustrage-pro AI error:', status, payload);
+    console.error('[lustrage-pro] AI error', { status, error: e.message, details: e.details });
     return res.status(status).json(payload);
   }
 }

@@ -1,23 +1,14 @@
-// Server-side validation that the AI returned an image we can safely composite.
-//
-// The actual blending happens client-side (canvas) because the source image
-// is already on the client. This file is the "guard rail" that:
-//   - decodes the PNG dimensions returned by the AI
-//   - rejects responses whose size differs from the input we sent
-//   - exposes a pure helper that selects what fraction of the output we
-//     should keep — used for the final blend.
+// Server-side validation of the AI return + diff helpers used to detect
+// "no visible change" failures.
 
 import { resolveStrength } from './prompts.js';
 
 /**
  * Inspect a PNG signature/IHDR and return its dimensions.
- * Returns null if the buffer isn't a PNG we can parse.
  */
 export function readPngSize(base64) {
   try {
     const buf = Buffer.from(base64, 'base64');
-    // PNG: 8-byte signature + IHDR chunk starting at offset 8.
-    // IHDR layout: length(4) | "IHDR"(4) | width(4) | height(4) | ...
     if (buf.length < 24) return null;
     if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47) return null;
     if (buf.toString('ascii', 12, 16) !== 'IHDR') return null;
@@ -29,10 +20,6 @@ export function readPngSize(base64) {
   }
 }
 
-/**
- * Compare the AI output dimensions against the request's expected size string
- * ("WxH"). Tolerance accounts for providers that round to multiples of 8/16.
- */
 export function dimensionsMatch(out, expected, tolerance = 16) {
   if (!out || !expected) return false;
   const m = /^(\d+)x(\d+)$/.exec(expected);
@@ -43,17 +30,28 @@ export function dimensionsMatch(out, expected, tolerance = 16) {
       && Math.abs(out.height - expH) <= tolerance;
 }
 
-/**
- * Build the blend descriptor that the front-end uses when re-compositing
- * the AI result on top of the original. Centralized here so any provider
- * keeps the same look & feel.
- */
 export function blendParamsFor(strength) {
   const preset = resolveStrength(strength);
   return {
-    expandOuter: 0.065,    // outer alpha mask (feathered)
-    expandInner: 0.035,    // inner alpha mask (full opacity)
-    edgeBlur: 0.0025,      // relative blur on the alpha edges
+    expandOuter: 0.065,
+    expandInner: 0.035,
+    edgeBlur: 0.0025,
     aiOpacity: preset.label === 'low' ? 0.85 : 1.0,
   };
+}
+
+/**
+ * "No visible change" detector. The full pixel diff is computed CLIENT-SIDE
+ * (where the original canvas already lives), but the server still does a
+ * cheap byte-level signature comparison so it can refuse a response that's
+ * literally identical to the input we sent.
+ */
+export function isLikelySameAsInput(inputBase64, outputBase64) {
+  if (!inputBase64 || !outputBase64) return false;
+  if (inputBase64 === outputBase64) return true;
+  // Very cheap heuristic: same length & same first/last 64 bytes.
+  if (Math.abs(inputBase64.length - outputBase64.length) > 4) return false;
+  const head = inputBase64.slice(0, 64) === outputBase64.slice(0, 64);
+  const tail = inputBase64.slice(-64) === outputBase64.slice(-64);
+  return head && tail;
 }

@@ -1,36 +1,43 @@
 // Shared prompts and parameter mapping for headlight restoration.
-// Kept in a single file so every provider speaks the same product language.
+// Strong, directive prompt: the goal is a clearly visible restoration,
+// not a subtle color correction.
 
 export const DEFAULT_PROMPT = [
-  'Restore the car headlights only.',
-  'Make the headlight lenses crystal clear, transparent, glossy and realistic,',
-  'with depth, internal reflectors, bulbs, natural highlights and reflections',
-  'on the polycarbonate/glass surface.',
-  'Preserve the exact shape, perspective, reflections, lighting and surrounding car body.',
-  'Remove yellow oxidation and cloudy haze.',
-  'Do not change the car body, license plate, background, wheels or paint.',
-  'Photorealistic automotive photography.',
+  'Reconstruct and restore only the car headlights.',
+  'The current headlights are yellow, cloudy and oxidized.',
+  'Make the lenses visibly crystal clear, transparent, glossy and renewed,',
+  'like professionally restored headlights.',
+  'Add realistic internal depth, lens reflections, clear plastic texture and sharp highlights.',
+  'Remove yellow oxidation and foggy haze.',
+  'Preserve the exact headlight shape, vehicle body, license plate, paint, wheels, background and perspective.',
+  'The improvement must be clearly visible but photorealistic.',
 ].join(' ');
 
 export const DEFAULT_NEGATIVE_PROMPT = [
+  'unchanged headlights',
+  'no visible difference',
+  'yellow cloudy headlights',
   'white opaque headlights',
   'flat white pixels',
-  'cartoon',
-  'unrealistic',
-  'changed car body',
+  'plastic blob',
   'changed license plate',
-  'distorted car shape',
-  'overexposed',
-  'blurry',
+  'changed car paint',
+  'distorted body',
   'artifacts',
+  'cartoon',
+  'overexposed',
 ].join(', ');
 
 // Strength controls how aggressive the model is allowed to redraw the masked area.
-// Each provider maps this to its own knob (image_edit quality, denoising strength, etc.)
+// `openaiQuality` maps to /v1/images/edits `quality` (image detail).
+// `openaiFidelity` maps to /v1/images/edits `input_fidelity`:
+//    high → preserve the input look (subtle change)
+//    low  → let the model diverge from the input (dramatic change)
+// Default ("medium") leans toward visible change since the user asked for it.
 export const STRENGTH_PRESETS = {
-  low:    { label: 'low',    denoise: 0.55, openaiQuality: 'low'    },
-  medium: { label: 'medium', denoise: 0.75, openaiQuality: 'medium' },
-  high:   { label: 'high',   denoise: 0.92, openaiQuality: 'high'   },
+  low:    { label: 'low',    denoise: 0.55, openaiQuality: 'medium', openaiFidelity: 'high' },
+  medium: { label: 'medium', denoise: 0.80, openaiQuality: 'high',   openaiFidelity: 'low'  },
+  high:   { label: 'high',   denoise: 0.95, openaiQuality: 'high',   openaiFidelity: 'low'  },
 };
 
 export function resolveStrength(strength) {

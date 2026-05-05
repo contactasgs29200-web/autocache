@@ -1,13 +1,4 @@
 // Public entry point for the headlight restoration pipeline.
-//
-// The flow:
-//   1. resolveProviderConfig() reads HEADLIGHT_AI_* env vars.
-//   2. getProvider() instantiates the right adapter.
-//   3. restoreHeadlights() calls provider.restoreHeadlightsWithAI() and
-//      validates the output before handing it back.
-//
-// The caller (api/lustrage-pro.js) handles the HTTP request/response shape,
-// the front-end (App.jsx) builds the mask and re-composites the result.
 
 import {
   getProvider,
@@ -17,22 +8,13 @@ import {
 } from './providers/index.js';
 import { ProviderRequestError, ProviderConfigError } from './providers/base.js';
 import { DEFAULT_PROMPT, DEFAULT_NEGATIVE_PROMPT, resolveStrength } from './prompts.js';
-import { readPngSize, dimensionsMatch, blendParamsFor } from './composite.js';
+import {
+  readPngSize,
+  dimensionsMatch,
+  blendParamsFor,
+  isLikelySameAsInput,
+} from './composite.js';
 
-/**
- * @param {object} args
- * @param {string} args.imageBase64
- * @param {string} args.maskBase64
- * @param {string} [args.imageMime]
- * @param {string} [args.size]               "WxH" we asked for. Used to
- *                                            validate the model didn't
- *                                            silently shrink the image.
- * @param {string} [args.prompt]
- * @param {string} [args.negativePrompt]
- * @param {string} [args.strength]           low | medium | high
- * @param {object} [args.env]                env override (tests).
- * @param {object} [args.providerOverrides]  test hook for getProvider().
- */
 export async function restoreHeadlights(args) {
   const env = args.env || process.env;
   const provider = getProvider(env, args.providerOverrides);
@@ -44,6 +26,36 @@ export async function restoreHeadlights(args) {
   const prompt = args.prompt || DEFAULT_PROMPT;
   const negativePrompt = args.negativePrompt || DEFAULT_NEGATIVE_PROMPT;
 
+  console.log('[headlight] restoreHeadlights', {
+    provider: provider.name,
+    model: provider.model,
+    strength: strength.label,
+    size: args.size || null,
+    imageBytes: args.imageBase64 ? Math.floor((args.imageBase64.length * 3) / 4) : 0,
+    maskBytes: args.maskBase64 ? Math.floor((args.maskBase64.length * 3) / 4) : 0,
+    maskCoverage: typeof args.maskCoverage === 'number' ? args.maskCoverage : null,
+    promptHead: prompt.slice(0, 80) + '...',
+  });
+
+  // Refuse empty / suspicious masks server-side so we never burn an API call
+  // for a no-op edit.
+  if (typeof args.maskCoverage === 'number') {
+    if (args.maskCoverage <= 0.0005) {
+      throw new ProviderRequestError(
+        `Mask covers ${Math.round(args.maskCoverage * 10000) / 100}% of the image — refusing to call the AI for an empty mask.`,
+        422,
+        { maskCoverage: args.maskCoverage },
+      );
+    }
+    if (args.maskCoverage > 0.5) {
+      throw new ProviderRequestError(
+        `Mask covers ${Math.round(args.maskCoverage * 100)}% of the image — that's far more than headlights, refusing to call the AI.`,
+        422,
+        { maskCoverage: args.maskCoverage },
+      );
+    }
+  }
+
   const result = await provider.restoreHeadlightsWithAI({
     imageBase64: args.imageBase64,
     imageMime: args.imageMime || 'image/jpeg',
@@ -54,19 +66,35 @@ export async function restoreHeadlights(args) {
     size: args.size,
   });
 
-  // Dimension guard: a model that shrinks/upsizes the image would make the
-  // composite step misalign — reject it loudly so the caller can fall back
-  // (only if HEADLIGHT_AI_FALLBACK_LOCAL=true) instead of pretending it worked.
+  // Dimension guard.
+  let outDims = null;
   if (args.size) {
-    const out = readPngSize(result.imageBase64);
-    if (out && !dimensionsMatch(out, args.size)) {
+    outDims = readPngSize(result.imageBase64);
+    if (outDims && !dimensionsMatch(outDims, args.size)) {
       throw new ProviderRequestError(
-        `AI output dimensions ${out.width}x${out.height} do not match requested ${args.size}`,
+        `AI output dimensions ${outDims.width}x${outDims.height} do not match requested ${args.size}`,
         502,
-        { requested: args.size, received: out },
+        { requested: args.size, received: outDims },
       );
     }
   }
+
+  // Cheap server-side signature check: if the AI returned literally the same
+  // bytes we sent, fail loudly instead of pretending the AI did its job.
+  // (Real pixel-level diff is done client-side on the masked region.)
+  if (isLikelySameAsInput(args.imageBase64, result.imageBase64)) {
+    throw new ProviderRequestError(
+      'AI returned an output that looks identical to the input — likely a no-op edit',
+      502,
+      { provider: provider.name, model: result.model },
+    );
+  }
+
+  console.log('[headlight] restoreHeadlights ok', {
+    provider: provider.name,
+    model: result.model,
+    outDims,
+  });
 
   return {
     imageBase64: result.imageBase64,
@@ -76,6 +104,7 @@ export async function restoreHeadlights(args) {
     blend: blendParamsFor(strength),
     raw: result.raw ?? null,
     attempts: result.attempts || [],
+    outDims,
   };
 }
 

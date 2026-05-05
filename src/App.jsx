@@ -478,6 +478,18 @@ function dataURLBase64(dataURL) {
   return dataURL.split(',')[1] ?? '';
 }
 
+function computeMaskCoverage(maskCanvas) {
+  const { width, height } = maskCanvas;
+  const ctx = maskCanvas.getContext('2d');
+  const data = ctx.getImageData(0, 0, width, height).data;
+  let transparent = 0;
+  // alpha channel = data[i+3]; transparent (= editable) when < 8 (some feathered edges)
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 8) transparent++;
+  }
+  return transparent / (width * height);
+}
+
 function createHeadlightEditAssets(ctx, W, H, lights) {
   const { workW, workH } = getHeadlightWorkSize(W, H);
 
@@ -505,12 +517,40 @@ function createHeadlightEditAssets(ctx, W, H, lights) {
   drawHeadlightShapes(mctx, lights, workW, workH, 0.035);
   mctx.globalCompositeOperation = 'source-over';
 
+  const maskCoverage = computeMaskCoverage(mask);
+
   return {
     imageBase64: dataURLBase64(image.toDataURL('image/jpeg', 0.94)),
     imageMime: 'image/jpeg',
     maskBase64: dataURLBase64(mask.toDataURL('image/png')),
+    maskCoverage,
     size: `${workW}x${workH}`,
+    workW,
+    workH,
+    imageCanvas: image,
+    maskCanvas: mask,
   };
+}
+
+// Compute mean per-pixel diff (0-255) between two same-sized canvases inside
+// the masked area only. Used to detect "no visible change" failures.
+function diffInsideMask(beforeCanvas, afterCanvas, maskCanvas) {
+  const W = beforeCanvas.width;
+  const H = beforeCanvas.height;
+  const before = beforeCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const after = afterCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const mask = maskCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  let total = 0;
+  let count = 0;
+  for (let i = 0; i < before.length; i += 4) {
+    if (mask[i + 3] >= 8) continue; // not a masked (editable) pixel
+    const d = Math.abs(before[i] - after[i])
+            + Math.abs(before[i + 1] - after[i + 1])
+            + Math.abs(before[i + 2] - after[i + 2]);
+    total += d / 3;
+    count++;
+  }
+  return count ? total / count : 0;
 }
 
 function blendEditedHeadlights(ctx, editedImg, lights, W, H, blendParams = null) {
@@ -615,12 +655,28 @@ async function detectHeadlights(b64) {
   }
 }
 
+// Debug mode is enabled by appending ?headlightDebug=1 to the URL. When on:
+//   - the server returns the mask + raw AI output
+//   - we expose the original/mask/AI/composite canvases on
+//     `window.__headlightDebug` for inspection in the devtools console.
+function isHeadlightDebugEnabled() {
+  if (typeof window === "undefined") return false;
+  try {
+    return new URLSearchParams(window.location.search).get("headlightDebug") === "1";
+  } catch { return false; }
+}
+
+// Threshold below which we consider the AI returned no visible change in the
+// masked region. Mean per-pixel RGB delta on a 0–255 scale.
+const HEADLIGHT_NOOP_THRESHOLD = 4;
+
 // AI inpainting pipeline: detect → mask → call provider → composite.
 // `mode` is fixed to "ai" — local pixel filtering is only re-enabled when the
 // API explicitly tells us so via `fallback: "local"` (gated server-side by
 // HEADLIGHT_AI_FALLBACK_LOCAL).
 async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   const { strength = "medium" } = opts;
+  const debug = isHeadlightDebugEnabled();
   const lights = await detectHeadlights(b64Original);
   if (!lights.length) {
     console.log("[Headlights] Aucun phare détecté");
@@ -628,24 +684,45 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   }
 
   const assets = createHeadlightEditAssets(ctx, W, H, lights);
+  console.log("[Headlights] mask built", {
+    workSize: `${assets.workW}x${assets.workH}`,
+    maskCoveragePct: (assets.maskCoverage * 100).toFixed(2) + "%",
+    lights: lights.length,
+  });
+
+  if (debug) {
+    window.__headlightDebug = window.__headlightDebug || {};
+    window.__headlightDebug.lights = lights;
+    window.__headlightDebug.maskCanvas = assets.maskCanvas;
+    window.__headlightDebug.imageSent = assets.imageCanvas;
+    window.__headlightDebug.maskCoverage = assets.maskCoverage;
+    console.log("[Headlights:debug] mask + image stored on window.__headlightDebug");
+    console.log("[Headlights:debug] preview mask in console: copy and run:");
+    console.log('  document.body.appendChild(window.__headlightDebug.maskCanvas)');
+  }
+
   const payload = {
     imageBase64: assets.imageBase64,
     imageMime: assets.imageMime,
     maskBase64: assets.maskBase64,
     size: assets.size,
+    maskCoverage: assets.maskCoverage,
     mode: "ai",
     strength,
   };
 
   let data = null;
   let httpOk = false;
+  let httpStatus = 0;
   try {
-    const r = await fetch("/api/lustrage-pro", {
+    const url = debug ? "/api/lustrage-pro?debug=1" : "/api/lustrage-pro";
+    const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     httpOk = r.ok;
+    httpStatus = r.status;
     data = await r.json().catch(() => ({}));
   } catch (e) {
     console.warn("[Headlights] Network error:", e.message);
@@ -655,9 +732,63 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   if (httpOk && data?.imageBase64) {
     try {
       const editedImg = await loadImg(`data:image/png;base64,${data.imageBase64}`);
+      console.log("[Headlights] AI response", {
+        provider: data.provider,
+        model: data.model,
+        strength: data.strength,
+        outDims: data.outDims,
+        editedNaturalSize: `${editedImg.naturalWidth}x${editedImg.naturalHeight}`,
+      });
+
+      // Snapshot the canvas BEFORE the composite for the diff check.
+      const before = document.createElement("canvas");
+      before.width = W;
+      before.height = H;
+      before.getContext("2d").drawImage(ctx.canvas, 0, 0);
+
       blendEditedHeadlights(ctx, editedImg, lights, W, H, data.blend);
-      console.log(`[Headlights] Lustrage IA terminé ✓ (provider=${data.provider}, model=${data.model}, strength=${data.strength})`);
-      return { ok: true, provider: data.provider, model: data.model };
+
+      // Snapshot AFTER, then diff inside the headlight region only.
+      const after = document.createElement("canvas");
+      after.width = W;
+      after.height = H;
+      after.getContext("2d").drawImage(ctx.canvas, 0, 0);
+
+      const fullMask = document.createElement("canvas");
+      fullMask.width = W;
+      fullMask.height = H;
+      const fmctx = fullMask.getContext("2d");
+      fmctx.fillStyle = "rgba(0,0,0,1)";
+      fmctx.fillRect(0, 0, W, H);
+      fmctx.globalCompositeOperation = "destination-out";
+      drawHeadlightShapes(fmctx, lights, W, H, 0.04);
+      fmctx.globalCompositeOperation = "source-over";
+
+      const meanDiff = diffInsideMask(before, after, fullMask);
+      console.log("[Headlights] post-AI diff (masked region only):", meanDiff.toFixed(2), "/255");
+
+      if (debug) {
+        window.__headlightDebug.beforeCanvas = before;
+        window.__headlightDebug.afterCanvas = after;
+        window.__headlightDebug.fullMask = fullMask;
+        window.__headlightDebug.aiRawBase64 = data.debug?.rawAiBase64 || data.imageBase64;
+        window.__headlightDebug.meanDiff = meanDiff;
+        console.log("[Headlights:debug] before/after/fullMask + diff stored on window.__headlightDebug");
+      }
+
+      if (meanDiff < HEADLIGHT_NOOP_THRESHOLD) {
+        // The AI returned essentially the same pixels in the masked region.
+        // Roll back the composite so the user gets their original photo back
+        // and surface the issue clearly.
+        ctx.clearRect(0, 0, W, H);
+        ctx.drawImage(before, 0, 0);
+        const msg = `AI restoration produced no visible change (mean diff ${meanDiff.toFixed(1)}/255 < ${HEADLIGHT_NOOP_THRESHOLD})`;
+        console.warn("[Headlights] " + msg);
+        return { ok: false, reason: "no-visible-change", meanDiff, provider: data.provider, model: data.model };
+      }
+
+      console.log(`[Headlights] Lustrage IA terminé ✓ (provider=${data.provider}, model=${data.model}, strength=${data.strength}, meanDiff=${meanDiff.toFixed(1)})`);
+      return { ok: true, provider: data.provider, model: data.model, meanDiff };
     } catch (e) {
       console.warn("[Headlights] Composite error:", e.message);
       return { ok: false, reason: "composite", error: e.message };
@@ -672,8 +803,8 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     return { ok: true, provider: "local-fallback", model: null };
   }
 
-  console.warn("[Headlights] Lustrage IA indisponible:", data?.error || "unknown error");
-  return { ok: false, reason: "ai-failed", error: data?.error || "ai-failed" };
+  console.warn(`[Headlights] Lustrage IA indisponible (HTTP ${httpStatus}):`, data?.error || "unknown error", data?.details ?? "");
+  return { ok: false, reason: "ai-failed", status: httpStatus, error: data?.error || "ai-failed", details: data?.details };
 }
 
 // ── Lustrage carrosserie ─────────────────────────────────────────────────────
