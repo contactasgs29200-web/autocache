@@ -1197,8 +1197,10 @@ def _validate_candidate(
       * center within 22% of bbox dim from bbox center
       * area_ratio (vs bbox_stable) in [0.45, 1.15]
       * no corner more than 12% of bbox dim outside the YOLO bbox
-      * |top − bottom tilt| ≤ 14°, |left − right tilt| ≤ 14°
-      * max(|top|, |bottom| tilt) ≤ 18°
+      * |top − bottom tilt| ≤ 22°, |left − right tilt| ≤ 22°
+        (heavy 3/4 views can show 10–20° divergence between parallel
+         edges — tighter than 22° was rejecting valid plate quads).
+      * max(|top|, |bottom| tilt) ≤ 25°
       * center_score ≥ 0.55, size_score ≥ 0.50
     """
     telemetry: dict = {"gate_failed_on": None}
@@ -1274,11 +1276,11 @@ def _validate_candidate(
     left_a   = persp.get("left_tilt_deg",   0.0) or 0.0
     right_a  = persp.get("right_tilt_deg",  0.0) or 0.0
 
-    if abs(top_a - bottom_a) > 14.0:
+    if abs(top_a - bottom_a) > 22.0:
         return _fail(f"top_bottom_inconsistent:{abs(top_a - bottom_a):.1f}")
-    if abs(left_a - right_a) > 14.0:
+    if abs(left_a - right_a) > 22.0:
         return _fail(f"left_right_inconsistent:{abs(left_a - right_a):.1f}")
-    if max(abs(top_a), abs(bottom_a)) > 18.0:
+    if max(abs(top_a), abs(bottom_a)) > 25.0:
         return _fail(f"too_tilted:{max(abs(top_a), abs(bottom_a)):.1f}")
 
     cs = float(sub.get("center_score") or 0.0)
@@ -1373,6 +1375,13 @@ def _pick_best_render_quad(
         "rejection_reasons": [],
         "chosen_method":     None,
         "chosen_score":      None,
+        # Strongest perspective near-miss : the candidate that showed the
+        # most tilt, ordered by the perspective signature, regardless of
+        # whether it passed the gate. This is the candidate the user
+        # most likely sees in cyan/orange and expects to be promoted —
+        # surfacing it (with its failure reason) is what makes the gate
+        # decision auditable from the frontend.
+        "near_miss":         None,
     }
 
     if not refine_debug:
@@ -1384,6 +1393,7 @@ def _pick_best_render_quad(
         return None, "no_candidates", telemetry
 
     survivors: list[tuple[float, float, dict, dict]] = []  # (score, persp_strength, cand, val_tel)
+    near_miss_best: tuple[float, dict] | None = None  # (persp_strength, diag)
 
     def _flat_diag(method: str, score: float, val_tel: dict) -> dict:
         """Flatten the val_tel into a single record + the perspective
@@ -1416,13 +1426,25 @@ def _pick_best_render_quad(
         method = cand.get("method", "?")
         score  = float(cand.get("score") or 0.0)
         diag   = _flat_diag(method, score, val_tel)
+        persp  = (val_tel.get("perspective") or {})
+        # Track the strongest perspective candidate we *saw*, regardless
+        # of pass/fail. This is the diagnostic anchor for "why didn't
+        # the obviously-tilted candidate get promoted?".
+        cand_persp = _candidate_perspective_strength(persp)
+        if persp and (near_miss_best is None or cand_persp > near_miss_best[0]):
+            nm_diag = dict(diag)
+            nm_diag["reason"] = reason if not passes else (
+                "no_perspective" if not persp.get("is_perspective") else "passed"
+            )
+            nm_diag["persp_strength"] = round(cand_persp, 2)
+            nm_diag["corners"] = cand.get("corners") or None
+            near_miss_best = (cand_persp, nm_diag)
 
         if not passes:
             diag["reason"] = reason
             telemetry["rejection_reasons"].append(diag)
             continue
         telemetry["passes_count"] += 1
-        persp = (val_tel.get("perspective") or {})
         if not persp.get("is_perspective"):
             diag["reason"] = "no_perspective"
             telemetry["rejection_reasons"].append(diag)
@@ -1434,6 +1456,9 @@ def _pick_best_render_quad(
             cand,
             val_tel,
         ))
+
+    if near_miss_best is not None:
+        telemetry["near_miss"] = near_miss_best[1]
 
     if not survivors:
         # Distinguish "nobody passed the gate" from "passed but all axis-aligned".
@@ -1606,15 +1631,26 @@ async def detect_plate(file: UploadFile = File(...)):
         if kp_corners is not None:
             logger.info(f"Keypoints corners: {kp_corners}")
             return {
-                "found":            True,
-                "conf":             round(conf, 3),
-                "bbox":             bbox,
-                "corners":          kp_corners,
-                "source":           "keypoints",
-                "render_source":    "keypoints",
-                "quad_source":      None,
-                "promotion_reason": None,
-                "rejection_reason": None,
+                "found":                          True,
+                "conf":                           round(conf, 3),
+                "bbox":                           bbox,
+                "corners":                        kp_corners,
+                "render_corners":                 kp_corners,
+                "source":                         "keypoints",
+                "render_source":                  "keypoints",
+                "quad_source":                    None,
+                "promotion_reason":               None,
+                "rejection_reason":               None,
+                "gate_reason":                    "keypoints_path",
+                "gate_failed_on":                 None,
+                "best_opencv_candidate_corners":  None,
+                "best_opencv_candidate_method":   None,
+                "best_opencv_candidate_score":    None,
+                "rejected_opencv_corners":        None,
+                "opencv_corners":                 None,
+                "bbox_stable_corners":            None,
+                "bbox_stable":                    None,
+                "gate_telemetry":                 None,
             }
         logger.info(
             "Pose model loaded but keypoints unavailable — running bbox/OpenCV path"
@@ -1637,6 +1673,14 @@ async def detect_plate(file: UploadFile = File(...)):
             None, "promotion_disabled", {},
         )
 
+    # Build a uniform diagnostic payload shared by both opencv_promoted
+    # and bbox_stable branches. Frontend logs depend on these fields.
+    near_miss      = (pick_telemetry or {}).get("near_miss") or {}
+    nm_method      = near_miss.get("method")
+    nm_score       = near_miss.get("score")
+    nm_corners     = near_miss.get("corners")
+    nm_failed_on   = near_miss.get("gate_failed_on") or near_miss.get("reason")
+
     if render_quad is not None:
         quad_source = pick_telemetry.get("chosen_method") or chosen_method
         logger.info(
@@ -1647,44 +1691,69 @@ async def detect_plate(file: UploadFile = File(...)):
             f"persp_count={pick_telemetry.get('persp_count')})"
         )
         return {
-            "found":            True,
-            "conf":             round(conf, 3),
-            "bbox":             bbox,
-            "corners":          render_quad,
-            "source":           "opencv_promoted",
-            "render_source":    "opencv_promoted",
-            "quad_source":      quad_source,
-            "promotion_reason": pick_reason,
-            "rejection_reason": None,
-            # Diagnostics
-            "debug":            refine_debug,
-            "opencv_corners":   opencv_corners,
-            "bbox_stable":      bbox_corners,
-            "gate_telemetry":   pick_telemetry,
+            "found":                          True,
+            "conf":                           round(conf, 3),
+            "bbox":                           bbox,
+            # Render geometry — the only quad that drives drawPerspective.
+            "corners":                        render_quad,
+            "render_corners":                 render_quad,
+            "source":                         "opencv_promoted",
+            "render_source":                  "opencv_promoted",
+            # Provenance of the picked quad.
+            "quad_source":                    quad_source,
+            "promotion_reason":               pick_reason,
+            "rejection_reason":               None,
+            "gate_reason":                    pick_reason,
+            "gate_failed_on":                 None,
+            # OpenCV best candidate that won the gate.
+            "best_opencv_candidate_corners":  render_quad,
+            "best_opencv_candidate_method":   quad_source,
+            "best_opencv_candidate_score":    pick_telemetry.get("chosen_score"),
+            # Historical chosen quad from refine_corners (for overlay).
+            "rejected_opencv_corners":        opencv_corners,
+            "opencv_corners":                 opencv_corners,
+            # Safety quad (axis-aligned).
+            "bbox_stable_corners":            bbox_corners,
+            "bbox_stable":                    bbox_corners,
+            # Full diagnostic landscape.
+            "debug":                          refine_debug,
+            "gate_telemetry":                 pick_telemetry,
         }
 
     # ---- Priority 3: bbox_stable (safety fallback) -----------------
     logger.info(
         f"No promotable candidate (reason={pick_reason}, "
-        f"chosen_by_refine={chosen_method}) — using bbox_stable"
+        f"chosen_by_refine={chosen_method}, "
+        f"near_miss_method={nm_method}, near_miss_score={nm_score}, "
+        f"near_miss_failed_on={nm_failed_on}) — using bbox_stable"
     )
     return {
-        "found":            True,
-        "conf":             round(conf, 3),
-        "bbox":             bbox,
-        "corners":          bbox_corners,
-        "source":           "bbox_stable",
-        "render_source":    "bbox_stable",
-        "quad_source":      None,
-        "promotion_reason": None,
-        "rejection_reason": pick_reason,
-        # Diagnostics: surface the OpenCV proposal even when not promoted
-        # so the frontend can show it as a faded "rejected_opencv" overlay
-        # and we can calibrate the gate from real traffic. Also expose
-        # bbox_stable explicitly (== corners here) so the frontend keys
-        # are uniform across all three render paths.
-        "debug":            refine_debug,
-        "opencv_corners":   opencv_corners,
-        "bbox_stable":      bbox_corners,
-        "gate_telemetry":   pick_telemetry,
+        "found":                          True,
+        "conf":                           round(conf, 3),
+        "bbox":                           bbox,
+        # Render geometry — falls back to bbox_stable.
+        "corners":                        bbox_corners,
+        "render_corners":                 bbox_corners,
+        "source":                         "bbox_stable",
+        "render_source":                  "bbox_stable",
+        "quad_source":                    None,
+        "promotion_reason":               None,
+        "rejection_reason":               pick_reason,
+        # Top-level gate decision summary (so the user can read it
+        # straight from the JSON without unpacking gate_telemetry).
+        "gate_reason":                    pick_reason,
+        "gate_failed_on":                 nm_failed_on,
+        # Strongest perspective candidate that we *would have* promoted.
+        "best_opencv_candidate_corners":  nm_corners,
+        "best_opencv_candidate_method":   nm_method,
+        "best_opencv_candidate_score":    nm_score,
+        # Historical chosen from refine_corners.
+        "rejected_opencv_corners":        opencv_corners,
+        "opencv_corners":                 opencv_corners,
+        # Safety quad (== corners here).
+        "bbox_stable_corners":            bbox_corners,
+        "bbox_stable":                    bbox_corners,
+        # Full diagnostic landscape.
+        "debug":                          refine_debug,
+        "gate_telemetry":                 pick_telemetry,
     }

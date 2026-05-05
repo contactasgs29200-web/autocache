@@ -1008,6 +1008,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     plateFound = true;
     // ── Diagnostic console : qui pilote la pose du cache plaque, et
     // ── pourquoi (utile pour calibrer le gate sur photos réelles).
+    // ── On expose tous les champs de diagnostic du backend pour que la
+    // ── trace soit auto-suffisante : on doit pouvoir lire UNE seule
+    // ── ligne de log et savoir pourquoi le rendu est ce qu'il est.
     try {
       const gt = yolo.gate_telemetry || {};
       const top_rej = (gt.rejection_reasons || []).slice(0, 5).map(r => ({
@@ -1023,20 +1026,33 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
       }));
       // eslint-disable-next-line no-console
       console.log('[YOLO]', photoFile.name, {
-        render_source:    yolo.render_source ?? yolo.source,
-        quad_source:      yolo.quad_source,
-        promotion_reason: yolo.promotion_reason,
-        rejection_reason: yolo.rejection_reason,
-        best_candidate:   gt.chosen_method,
-        best_score:       gt.chosen_score,
-        passes_count:     gt.passes_count,
-        persp_count:      gt.persp_count,
-        candidates_seen:  gt.candidates_seen,
-        render_corners:   yolo.corners,
-        bbox_stable:      yolo.bbox_stable,
-        opencv_corners:   yolo.opencv_corners,
-        picks:            gt.picks,
-        rejection_reasons: top_rej,
+        // Décision finale
+        source:                            yolo.source,
+        render_source:                     yolo.render_source ?? yolo.source,
+        gate_reason:                       yolo.gate_reason,
+        gate_failed_on:                    yolo.gate_failed_on,
+        quad_source:                       yolo.quad_source,
+        promotion_reason:                  yolo.promotion_reason,
+        rejection_reason:                  yolo.rejection_reason,
+        // Géométries (toutes accessibles côté frontend pour cross-check)
+        bbox:                              yolo.bbox,
+        corners:                           yolo.corners,
+        render_corners:                    yolo.render_corners ?? yolo.corners,
+        bbox_stable_corners:               yolo.bbox_stable_corners ?? yolo.bbox_stable,
+        opencv_corners:                    yolo.opencv_corners,
+        rejected_opencv_corners:           yolo.rejected_opencv_corners ?? yolo.opencv_corners,
+        best_opencv_candidate_corners:     yolo.best_opencv_candidate_corners,
+        best_opencv_candidate_method:      yolo.best_opencv_candidate_method,
+        best_opencv_candidate_score:       yolo.best_opencv_candidate_score,
+        // Telemetry agrégée
+        passes_count:                      gt.passes_count,
+        persp_count:                       gt.persp_count,
+        candidates_seen:                   gt.candidates_seen,
+        chosen_method:                     gt.chosen_method,
+        chosen_score:                      gt.chosen_score,
+        near_miss:                         gt.near_miss,
+        picks:                             gt.picks,
+        rejection_reasons:                 top_rej,
       });
     } catch (e) { /* logging is best-effort */ }
     // ── Render geometry — priorité absolue à `yolo.corners` (le quad
@@ -1068,6 +1084,32 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
+
+    // ── Diagnostic : cross-check label vs render. Si le label dit
+    // ── opencv_promoted mais que ces 4 coins forment un axis-aligned
+    // ── rectangle, on sait que la chaîne casse entre yolo.corners et
+    // ── savedCorners. Si le label dit bbox_stable et que ces 4 coins
+    // ── sont en perspective, idem inverse.
+    try {
+      const eps = 1.5; // px
+      const isAxisAligned =
+        Math.abs(ptl.y - ptr.y) < eps &&
+        Math.abs(pbl.y - pbr.y) < eps &&
+        Math.abs(ptl.x - pbl.x) < eps &&
+        Math.abs(ptr.x - pbr.x) < eps;
+      // eslint-disable-next-line no-console
+      console.log('[draw]', photoFile.name, {
+        label_source:       yolo.render_source ?? yolo.source,
+        gate_reason:        yolo.gate_reason,
+        savedCorners_norm:  savedCorners,
+        drawPerspective_px: { tl: ptl, tr: ptr, br: pbr, bl: pbl },
+        is_axis_aligned:    isAxisAligned,
+        // Sanity check : ces deux jeux de coins doivent être identiques.
+        same_as_render:     JSON.stringify([
+          savedCorners.tl, savedCorners.tr, savedCorners.br, savedCorners.bl,
+        ]) === JSON.stringify(yolo.corners || []),
+      });
+    } catch (e) { /* best-effort */ }
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -3240,13 +3282,24 @@ export default function AutoCache() {
                     : src === 'bbox_stable'     ? 'bbox_stable'
                     : src === 'tightened_bbox'  ? 'tightened_bbox'
                     : (method === 'hough_lines' ? 'hough' : method) || src || '?';
-                  // Sub-label : quad_source pour opencv_promoted,
-                  //             rejection_reason pour bbox_stable.
+                  // Sub-label :
+                  //  - opencv_promoted → quad_source (la méthode du
+                  //    candidat promu, ex. plate_edges).
+                  //  - bbox_stable → rejection_reason + near-miss method
+                  //    + gate_failed_on (pour montrer DIRECTEMENT à
+                  //    l'écran quel candidat a failli passer et sur
+                  //    quel critère il a échoué).
                   if (src === 'opencv_promoted' && lightbox.yoloQuadSource) {
                     label = `opencv_promoted (${lightbox.yoloQuadSource.split(':')[0]})`;
-                  } else if (src === 'bbox_stable' && lightbox.yoloRejectionReason) {
-                    const reason = lightbox.yoloRejectionReason.split(':').slice(0, 2).join(':');
-                    label = `bbox_stable — ${reason}`;
+                  } else if (src === 'bbox_stable') {
+                    const reason  = (lightbox.yoloRejectionReason || '').split(':').slice(0, 2).join(':');
+                    const nm      = lightbox.yoloGateTelemetry?.near_miss;
+                    const nmTag   = nm
+                      ? `${(nm.method || '').split(':')[0]}:${nm.gate_failed_on || nm.reason || '?'}`
+                      : null;
+                    label = nmTag
+                      ? `bbox_stable — ${reason} [nm:${nmTag}]`
+                      : `bbox_stable — ${reason || 'no_reason'}`;
                   }
                   const color = src === 'keypoints'        ? '#22c55e'
                     : src === 'opencv_promoted' ? '#84cc16'
