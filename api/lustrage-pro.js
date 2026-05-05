@@ -5,11 +5,12 @@
 export const config = { api: { bodyParser: { sizeLimit: '30mb' } } };
 
 const DEFAULT_PROMPT = [
-  'Retouch only the masked headlight lens covers.',
-  'Restore yellowed, oxidized, foggy plastic into crystal clear transparent polycarbonate headlight lenses.',
-  'Keep realistic glass depth, sharp inner reflectors, bulbs, natural highlights, and reflections.',
+  'Retouch only the masked front headlight lens covers.',
+  'The result must be visibly different: remove every yellow, amber, brown, oxidized, foggy, or cloudy tint from the masked headlights.',
+  'Recreate crystal clear transparent polycarbonate headlight lenses with realistic glass depth, crisp inner reflectors, bulbs, natural highlights, and reflections.',
+  'Make the lens look cleaned and polished like a professional headlight restoration, not color-corrected pixels.',
   'Preserve the exact car model, paint, body panels, panel gaps, shadows, background, camera angle, and lighting.',
-  'Do not make the headlights white, opaque, cloudy, painted, or flat.',
+  'Do not make the headlights white, opaque, cloudy, painted, flat, milky, or overexposed.',
   'Do not alter the license plate area, logos, wheels, grille, bumper, or any unmasked area.',
 ].join(' ');
 
@@ -18,28 +19,56 @@ function normalizeMime(mime) {
   return 'image/jpeg';
 }
 
-function filenameForMime(mime) {
-  if (mime === 'image/png') return 'car.png';
-  if (mime === 'image/webp') return 'car.webp';
-  return 'car.jpg';
-}
-
-function part(boundary, name, filename, contentType, data) {
-  const CRLF = '\r\n';
-  const header =
-    `--${boundary}${CRLF}` +
-    `Content-Disposition: form-data; name="${name}"; filename="${filename}"${CRLF}` +
-    `Content-Type: ${contentType}${CRLF}${CRLF}`;
-  return Buffer.concat([Buffer.from(header), data, Buffer.from(CRLF)]);
-}
-
-function field(boundary, name, value) {
-  const CRLF = '\r\n';
-  return Buffer.from(
-    `--${boundary}${CRLF}` +
-    `Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}` +
-    `${value}${CRLF}`
+function uniqueModels(primary) {
+  return [primary, 'gpt-image-1', 'gpt-image-1-mini'].filter((model, index, list) =>
+    model && list.indexOf(model) === index
   );
+}
+
+async function callImageEdit({ apiKey, model, prompt, imageBase64, maskBase64, imageMime, quality }) {
+  const response = await fetch('https://api.openai.com/v1/images/edits', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      images: [{ image_url: `data:${imageMime};base64,${imageBase64}` }],
+      mask: { image_url: `data:image/png;base64,${maskBase64}` },
+      input_fidelity: 'high',
+      quality,
+      output_format: 'png',
+      size: 'auto',
+      moderation: 'low',
+      n: 1,
+    }),
+  });
+
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const details = data?.error?.message || text || response.statusText;
+    const error = new Error(details);
+    error.status = response.status;
+    throw error;
+  }
+
+  const b64 = data?.data?.[0]?.b64_json;
+  if (!b64) {
+    const error = new Error('OpenAI response did not include an image');
+    error.status = 502;
+    throw error;
+  }
+
+  return { b64, data };
 }
 
 export default async function handler(req, res) {
@@ -60,63 +89,37 @@ export default async function handler(req, res) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY not set' });
 
-  const model = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1.5';
+  const preferredModel = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
   const mime = normalizeMime(imageMime);
-  const imageBuffer = Buffer.from(imageBase64, 'base64');
-  const maskBuffer = Buffer.from(maskBase64, 'base64');
-  const boundary = '----AutoCacheOpenAI' + Date.now();
+  const attempts = [];
 
-  const fields = [
-    part(boundary, 'image', filenameForMime(mime), mime, imageBuffer),
-    part(boundary, 'mask', 'headlight-mask.png', 'image/png', maskBuffer),
-    field(boundary, 'model', model),
-    field(boundary, 'prompt', prompt),
-    field(boundary, 'quality', quality),
-    field(boundary, 'output_format', 'png'),
-    field(boundary, 'size', 'auto'),
-    field(boundary, 'n', '1'),
-  ];
-  fields.push(Buffer.from(`--${boundary}--\r\n`));
-
-  const body = Buffer.concat(fields);
-
-  try {
-    const response = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-      },
-      body,
-    });
-
-    const text = await response.text();
-    let data = null;
+  for (const model of uniqueModels(preferredModel)) {
     try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      data = null;
-    }
+      const { b64, data } = await callImageEdit({
+        apiKey,
+        model,
+        prompt,
+        imageBase64,
+        maskBase64,
+        imageMime: mime,
+        quality,
+      });
 
-    if (!response.ok) {
-      const details = data?.error?.message || text || response.statusText;
-      console.error('OpenAI image edit error:', response.status, details);
-      return res.status(response.status).json({ error: details });
+      return res.json({
+        imageBase64: b64,
+        model,
+        attempts,
+        usage: data?.usage ?? null,
+      });
+    } catch (e) {
+      attempts.push({ model, status: e.status ?? 500, error: e.message });
+      console.error('OpenAI image edit error:', model, e.status ?? 500, e.message);
     }
-
-    const b64 = data?.data?.[0]?.b64_json;
-    if (!b64) {
-      console.error('OpenAI image edit: missing b64_json', data);
-      return res.status(502).json({ error: 'OpenAI response did not include an image' });
-    }
-
-    return res.json({
-      imageBase64: b64,
-      model,
-      usage: data?.usage ?? null,
-    });
-  } catch (e) {
-    console.error('lustrage-pro error:', e);
-    return res.status(500).json({ error: e.message });
   }
+
+  const last = attempts[attempts.length - 1];
+  return res.status(last?.status || 500).json({
+    error: last?.error || 'OpenAI image edit failed',
+    attempts,
+  });
 }
