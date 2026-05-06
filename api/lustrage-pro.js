@@ -101,6 +101,8 @@ export default async function handler(req, res) {
       attempts: result.attempts,
       mode: 'ai',
       outDims: result.outDims,
+      requestedSize: result.requestedSize,
+      effectiveSize: result.effectiveSize,
     };
 
     if (debug) {

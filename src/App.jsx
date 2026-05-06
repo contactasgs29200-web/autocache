@@ -393,9 +393,6 @@ function autoEnhance(ctx, W, H) {
 // Le front détecte les optiques, fabrique un masque, puis l'API réinvente
 // uniquement la lentille du phare. Le reste de la voiture reste le canvas source.
 
-const HEADLIGHT_AI_MAX_EDGE = 1792;
-const HEADLIGHT_AI_MAX_PIXELS = 2800000;
-
 function clamp01(v) {
   return Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
 }
@@ -450,28 +447,18 @@ function drawHeadlightShapes(ctx, lights, W, H, expand = 0.04) {
   lights.forEach(light => drawHeadlightShape(ctx, light, W, H, expand));
 }
 
+// OpenAI Image Edit (gpt-image-1) only accepts these output sizes:
+//   1024x1024, 1536x1024 (landscape), 1024x1536 (portrait), or auto.
+// We snap the work canvas to the closest supported aspect ratio so the
+// image+mask we send share the same proportions as the AI output. The
+// final composite scales back to W×H of the original photo, so any slight
+// horizontal/vertical squash from this snap is unwound before the user
+// sees the result.
 function getHeadlightWorkSize(W, H) {
-  const scale = Math.min(
-    1,
-    HEADLIGHT_AI_MAX_EDGE / Math.max(W, H),
-    Math.sqrt(HEADLIGHT_AI_MAX_PIXELS / Math.max(1, W * H))
-  );
-  const round16 = v => Math.max(64, Math.round(v / 16) * 16);
-  let workW = round16(W * scale);
-  let workH = round16(H * scale);
-
-  // gpt-image-2 accepte les tailles libres si elles sont multiples de 16
-  // et au-dessus du minimum de pixels.
-  if (workW * workH < 655360) {
-    const up = Math.sqrt(655360 / Math.max(1, workW * workH));
-    workW = round16(workW * up);
-    workH = round16(workH * up);
-  }
-
-  return {
-    workW,
-    workH,
-  };
+  const ratio = W / Math.max(1, H);
+  if (ratio > 1.2)  return { workW: 1536, workH: 1024 };
+  if (ratio < 0.83) return { workW: 1024, workH: 1536 };
+  return { workW: 1024, workH: 1024 };
 }
 
 function dataURLBase64(dataURL) {

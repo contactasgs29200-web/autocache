@@ -66,15 +66,18 @@ export async function restoreHeadlights(args) {
     size: args.size,
   });
 
-  // Dimension guard.
+  // Dimension guard: compare the AI output to the size the PROVIDER actually
+  // used (which may differ from `args.size` after snapping to provider-supported
+  // values). For "auto" we just record the dimensions without enforcing match.
   let outDims = null;
-  if (args.size) {
+  const effectiveSize = result.size || args.size;
+  if (effectiveSize) {
     outDims = readPngSize(result.imageBase64);
-    if (outDims && !dimensionsMatch(outDims, args.size)) {
+    if (outDims && effectiveSize !== 'auto' && !dimensionsMatch(outDims, effectiveSize)) {
       throw new ProviderRequestError(
-        `AI output dimensions ${outDims.width}x${outDims.height} do not match requested ${args.size}`,
+        `AI output dimensions ${outDims.width}x${outDims.height} do not match expected ${effectiveSize}`,
         502,
-        { requested: args.size, received: outDims },
+        { expected: effectiveSize, requested: args.size, received: outDims },
       );
     }
   }
@@ -105,6 +108,8 @@ export async function restoreHeadlights(args) {
     raw: result.raw ?? null,
     attempts: result.attempts || [],
     outDims,
+    requestedSize: args.size || null,
+    effectiveSize: effectiveSize || null,
   };
 }
 
