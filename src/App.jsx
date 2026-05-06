@@ -447,12 +447,31 @@ function drawHeadlightShapes(ctx, lights, W, H, expand = 0.04) {
   lights.forEach(light => drawHeadlightShape(ctx, light, W, H, expand));
 }
 
+// ── Headlight restoration pipeline ──────────────────────────────────────────
+//
+// PRIMARY MODE = full-image edit:
+//   the whole photo is sent to the inpainting API with a tight mask that
+//   covers ONLY the headlight optics. The strict prompt tells the model
+//   to leave everything else alone. The result is validated by comparing
+//   diffs inside vs outside the headlight regions: if the model touched
+//   anything outside the masked area, we reject and retry once with an
+//   even stricter prompt. If both attempts fail validation we fall back
+//   to the per-headlight crop pipeline (kept available below).
+//
+// FALLBACK MODE = per-headlight crops:
+//   one independent inpaint call per optic, each on a tight crop around
+//   the headlight. Used only when the full-image mode is rejected by the
+//   validator twice in a row.
+//
+// Why this order:
+//   the user reported that the per-headlight crop pipeline produced
+//   visible seams, missing optics, or grey blobs, while the full-image
+//   ChatGPT-style prompt gave a premium-feeling result. Full-image is
+//   now the default; per-headlight is a safety net.
+
 // ── Per-headlight crop math (mirrors api/_lib/headlight/crop.js) ────────────
-// We send ONE crop per headlight to the inpainting API instead of the whole
-// car. This stops the model from redesigning one optic to a different model
-// (the symptom we observed) because each call sees only a single optic plus
-// minimal context.
-const HEADLIGHT_CROP_MARGIN = 0.6; // 60% extra around bbox on each side
+// Used by the FALLBACK pipeline only.
+const HEADLIGHT_CROP_MARGIN = 0.6;
 
 function pickHeadlightAspect(ratio) {
   if (ratio > 1.2)  return { workW: 1536, workH: 1024, size: '1536x1024' };
@@ -708,6 +727,272 @@ function isHeadlightDebugEnabled() {
 // masked region. Mean per-pixel RGB delta on a 0–255 scale.
 const HEADLIGHT_NOOP_THRESHOLD = 4;
 
+// ── Full-image mode (PRIMARY) ───────────────────────────────────────────────
+
+// OpenAI gpt-image-1 supported edit sizes. We snap the work canvas to the
+// closest aspect so the image+mask we send share the AI output's proportions.
+function getFullImageWorkSize(W, H) {
+  const ratio = W / Math.max(1, H);
+  if (ratio > 1.2)  return { workW: 1536, workH: 1024, size: '1536x1024' };
+  if (ratio < 0.83) return { workW: 1024, workH: 1536, size: '1024x1536' };
+  return { workW: 1024, workH: 1024, size: '1024x1024' };
+}
+
+// Build the (image, mask) pair for the full-image edit:
+//   - image: full photo, downsampled to the work size
+//   - mask: opaque black everywhere EXCEPT the headlight polygons, which
+//           are punched transparent (= editable). Light feather to avoid
+//           a hard seam at the edges.
+function createFullImageEditAssets(ctx, W, H, lights) {
+  const { workW, workH, size } = getFullImageWorkSize(W, H);
+
+  const image = document.createElement('canvas');
+  image.width = workW;
+  image.height = workH;
+  const ictx = image.getContext('2d');
+  ictx.imageSmoothingEnabled = true;
+  ictx.imageSmoothingQuality = 'high';
+  ictx.drawImage(ctx.canvas, 0, 0, workW, workH);
+
+  const mask = document.createElement('canvas');
+  mask.width = workW;
+  mask.height = workH;
+  const mctx = mask.getContext('2d');
+  mctx.fillStyle = 'rgba(0,0,0,1)';
+  mctx.fillRect(0, 0, workW, workH);
+  mctx.globalCompositeOperation = 'destination-out';
+  mctx.fillStyle = 'rgba(0,0,0,1)';
+  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.0025))}px)`;
+  drawHeadlightShapes(mctx, lights, workW, workH, 0.05);
+  mctx.filter = 'none';
+  drawHeadlightShapes(mctx, lights, workW, workH, 0.025);
+  mctx.globalCompositeOperation = 'source-over';
+
+  const maskCoverage = computeMaskCoverage(mask);
+
+  return {
+    imageCanvas: image,
+    maskCanvas: mask,
+    imageBase64: dataURLBase64(image.toDataURL('image/jpeg', 0.95)),
+    imageMime: 'image/jpeg',
+    maskBase64: dataURLBase64(mask.toDataURL('image/png')),
+    maskCoverage,
+    workW,
+    workH,
+    size,
+  };
+}
+
+// Validate that the AI only changed pixels INSIDE the headlight polygons.
+// Returns { ok, reasons: [], stats: {meanIn, meanOut, pctHighOut} }.
+//   - meanOut < OUTSIDE_MEAN_LIMIT  → the rest of the photo is preserved
+//   - meanIn  > NOOP_THRESHOLD      → the headlights actually changed
+//   - pctHighOut < BLEED_PCT_LIMIT  → no big region was redesigned outside
+function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
+  const W = beforeCanvas.width;
+  const H = beforeCanvas.height;
+  // Build a binary headlight mask at the same size (1 = inside headlight).
+  const hl = document.createElement('canvas');
+  hl.width = W;
+  hl.height = H;
+  const hctx = hl.getContext('2d');
+  hctx.fillStyle = 'rgba(0,0,0,0)';
+  hctx.fillRect(0, 0, W, H);
+  hctx.fillStyle = 'rgba(255,255,255,1)';
+  drawHeadlightShapes(hctx, lights, W, H, 0.05);
+
+  const before = beforeCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const after = afterCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const mask = hctx.getImageData(0, 0, W, H).data;
+
+  let sumIn = 0, countIn = 0;
+  let sumOut = 0, countOut = 0;
+  let highOut = 0;
+
+  for (let i = 0; i < before.length; i += 4) {
+    const d = (Math.abs(before[i]     - after[i])
+             + Math.abs(before[i + 1] - after[i + 1])
+             + Math.abs(before[i + 2] - after[i + 2])) / 3;
+    if (mask[i + 3] > 8) {
+      sumIn += d; countIn++;
+    } else {
+      sumOut += d; countOut++;
+      if (d > 40) highOut++;
+    }
+  }
+
+  const meanIn = countIn ? sumIn / countIn : 0;
+  const meanOut = countOut ? sumOut / countOut : 0;
+  const pctHighOut = countOut ? (highOut / countOut) * 100 : 0;
+
+  const OUTSIDE_MEAN_LIMIT = 8;
+  const NOOP_THRESHOLD = 4;
+  const BLEED_PCT_LIMIT = 3;
+
+  const reasons = [];
+  if (meanOut > OUTSIDE_MEAN_LIMIT) {
+    reasons.push(`outside-changed: meanDiff ${meanOut.toFixed(1)} > ${OUTSIDE_MEAN_LIMIT}`);
+  }
+  if (pctHighOut > BLEED_PCT_LIMIT) {
+    reasons.push(`bleed: ${pctHighOut.toFixed(2)}% of pixels outside the headlights have a strong diff`);
+  }
+  if (meanIn < NOOP_THRESHOLD) {
+    reasons.push(`no-op: meanDiff inside ${meanIn.toFixed(1)} < ${NOOP_THRESHOLD}`);
+  }
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    stats: { meanIn, meanOut, pctHighOut },
+  };
+}
+
+// Composite a full-image AI result back into the source canvas, only inside
+// the feathered headlight mask. Identical strategy to the per-headlight
+// variant but at full canvas dimensions.
+function compositeFullImageResult(ctx, editedImg, lights, W, H, blendParams = null) {
+  const params = {
+    expandOuter: 0.06,
+    expandInner: 0.03,
+    edgeBlur: 0.0025,
+    aiOpacity: 1.0,
+    ...(blendParams || {}),
+  };
+
+  const overlay = document.createElement('canvas');
+  overlay.width = W;
+  overlay.height = H;
+  const octx = overlay.getContext('2d');
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(editedImg, 0, 0, W, H);
+
+  const alpha = document.createElement('canvas');
+  alpha.width = W;
+  alpha.height = H;
+  const actx = alpha.getContext('2d');
+  actx.fillStyle = 'rgba(255,255,255,1)';
+  actx.filter = `blur(${Math.max(3, Math.round(Math.min(W, H) * params.edgeBlur))}px)`;
+  drawHeadlightShapes(actx, lights, W, H, params.expandOuter);
+  actx.filter = 'none';
+  drawHeadlightShapes(actx, lights, W, H, params.expandInner);
+
+  octx.globalCompositeOperation = 'destination-in';
+  octx.drawImage(alpha, 0, 0);
+  octx.globalCompositeOperation = 'source-over';
+
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = params.aiOpacity;
+  ctx.drawImage(overlay, 0, 0);
+  ctx.globalAlpha = prevAlpha;
+}
+
+// One full-image attempt. Returns { ok, validation, ... } without committing
+// the composite to ctx — the caller commits only on success.
+async function tryFullImageRestoration(ctx, W, H, lights, opts) {
+  const { strength = 'restore', strictPrompt = null, debug = false, attempt } = opts;
+  const assets = createFullImageEditAssets(ctx, W, H, lights);
+  console.log(`[Headlights] full-image attempt ${attempt}`, {
+    workSize: assets.size,
+    maskCoveragePct: (assets.maskCoverage * 100).toFixed(2) + '%',
+    lights: lights.length,
+    strictPrompt: !!strictPrompt,
+  });
+
+  const url = debug ? '/api/lustrage-pro?debug=1' : '/api/lustrage-pro';
+  const payload = {
+    imageBase64: assets.imageBase64,
+    imageMime: assets.imageMime,
+    maskBase64: assets.maskBase64,
+    size: assets.size,
+    maskCoverage: assets.maskCoverage,
+    mode: 'ai',
+    strength,
+  };
+  if (strictPrompt) payload.prompt = strictPrompt;
+
+  let r, data;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    data = await r.json().catch(() => ({}));
+  } catch (e) {
+    console.warn(`[Headlights] full-image attempt ${attempt} network error:`, e.message);
+    return { ok: false, reason: 'network', error: e.message, assets };
+  }
+
+  if (!r.ok || !data?.imageBase64) {
+    console.warn(`[Headlights] full-image attempt ${attempt} API failed`,
+      { status: r.status, error: data?.error });
+    return {
+      ok: false,
+      reason: 'ai-failed',
+      status: r.status,
+      error: data?.error,
+      details: data?.details,
+      fallback: data?.fallback,
+      assets,
+    };
+  }
+
+  console.log(`[Headlights] full-image attempt ${attempt} AI response`, {
+    provider: data.provider,
+    model: data.model,
+    strength: data.strength,
+    outDims: data.outDims,
+    effectiveSize: data.effectiveSize,
+  });
+
+  const editedImg = await loadImg(`data:image/png;base64,${data.imageBase64}`);
+
+  // Render the AI output onto a W×H canvas so we can compare pixel-for-pixel
+  // with the original (which is already at W×H on `ctx`).
+  const aiAtSourceSize = document.createElement('canvas');
+  aiAtSourceSize.width = W;
+  aiAtSourceSize.height = H;
+  const aictx = aiAtSourceSize.getContext('2d');
+  aictx.imageSmoothingEnabled = true;
+  aictx.imageSmoothingQuality = 'high';
+  aictx.drawImage(editedImg, 0, 0, W, H);
+
+  const beforeCanvas = document.createElement('canvas');
+  beforeCanvas.width = W;
+  beforeCanvas.height = H;
+  beforeCanvas.getContext('2d').drawImage(ctx.canvas, 0, 0);
+
+  // Validation BEFORE compositing. We compare the AI output as-rendered
+  // (full frame) against the original — this surfaces any change that
+  // the model did outside the headlights, which the alpha-mask composite
+  // would otherwise hide from the user.
+  const validation = validateFullImageResult(beforeCanvas, aiAtSourceSize, lights);
+  console.log(`[Headlights] full-image attempt ${attempt} validation`, {
+    ok: validation.ok,
+    reasons: validation.reasons,
+    stats: {
+      meanIn: validation.stats.meanIn.toFixed(2),
+      meanOut: validation.stats.meanOut.toFixed(2),
+      pctHighOut: validation.stats.pctHighOut.toFixed(3) + '%',
+    },
+  });
+
+  return {
+    ok: validation.ok,
+    reason: validation.ok ? null : 'validation',
+    assets,
+    editedImg,
+    aiAtSourceSize,
+    beforeCanvas,
+    validation,
+    aiResponse: data,
+    attempt,
+  };
+}
+
+// ── Per-headlight fallback (FALLBACK ONLY) ──────────────────────────────────
+
 // One independent API call per headlight, in parallel. Each call sees only
 // a tight crop around ONE optic, so the model can't redesign anything else.
 // Compositing is done sequentially after all calls return.
@@ -740,14 +1025,9 @@ async function callHeadlightApiForLight(idx, assets, strength, debug) {
   }
 }
 
-async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
+async function aiPolishHeadlightsPerLight(ctx, W, H, lights, opts = {}) {
   const { strength = "restore" } = opts;
-  const debug = isHeadlightDebugEnabled();
-  const lights = await detectHeadlights(b64Original);
-  if (!lights.length) {
-    console.log("[Headlights] Aucun phare détecté");
-    return { ok: false, reason: "no-lights" };
-  }
+  const debug = opts.debug || isHeadlightDebugEnabled();
 
   // 1. Compute crops + assets for each headlight (synchronous, snapshots ctx).
   const tasks = lights.map((light, idx) => {
@@ -763,9 +1043,14 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   });
 
   if (debug) {
-    window.__headlightDebug = { strategy: "per-headlight", count: tasks.length, lights: [] };
+    window.__headlightDebug = window.__headlightDebug || {};
+    window.__headlightDebug.fallback = {
+      strategy: "per-headlight",
+      count: tasks.length,
+      lights: [],
+    };
     for (const t of tasks) {
-      window.__headlightDebug.lights.push({
+      window.__headlightDebug.fallback.lights.push({
         idx: t.idx,
         light: t.light,
         crop: t.crop,
@@ -774,9 +1059,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
         maskCoverage: t.assets.maskCoverage,
       });
     }
-    console.log("[Headlights:debug] window.__headlightDebug populated. Try:");
-    console.log("  document.body.appendChild(window.__headlightDebug.lights[0].sentImage)");
-    console.log("  document.body.appendChild(window.__headlightDebug.lights[0].sentMask)");
+    console.log("[Headlights:debug] per-headlight debug stored at window.__headlightDebug.fallback");
   }
 
   // 2. Parallel API calls (one per headlight).
@@ -787,7 +1070,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   for (let i = 0; i < tasks.length; i++) {
     const t = tasks[i];
     const apiR = apiResults[i];
-    const dbg = debug ? window.__headlightDebug.lights[i] : null;
+    const dbg = debug ? window.__headlightDebug.fallback.lights[i] : null;
 
     if (!apiR.ok) {
       console.warn(`[Headlights:#${i}] skipped — API failed`);
@@ -886,6 +1169,127 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     provider: perLight.find(r => r.ok)?.provider,
     model: perLight.find(r => r.ok)?.model,
   };
+}
+
+// ── Top-level orchestrator (PRIMARY = full-image, FALLBACK = per-light) ─────
+//
+// Order:
+//   1. full-image attempt #1 with the default strict prompt
+//   2. validate: meanDiff outside <8, pctHighDiffOutside <3%, meanDiff inside >4
+//   3. on failure, full-image attempt #2 with the STRICT_RETRY_PROMPT
+//   4. on second failure, fallback to per-headlight crops
+//   5. if even per-headlight fails AND the server authorizes local fallback,
+//      run the legacy canvas-only filter
+async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
+  const { strength = "restore" } = opts;
+  const debug = isHeadlightDebugEnabled();
+
+  const lights = await detectHeadlights(b64Original);
+  if (!lights.length) {
+    console.log("[Headlights] Aucun phare détecté");
+    return { ok: false, reason: "no-lights" };
+  }
+
+  if (debug) {
+    window.__headlightDebug = {
+      strategy: null,
+      lights,
+      attempts: [],
+    };
+  }
+
+  // ── Attempt 1: full-image with the default strict prompt ──
+  console.log("[Headlights] mode=full-image attempt=1");
+  const a1 = await tryFullImageRestoration(ctx, W, H, lights, {
+    strength, debug, strictPrompt: null, attempt: 1,
+  });
+  if (debug) {
+    window.__headlightDebug.attempts.push({
+      mode: "full-image",
+      attempt: 1,
+      validation: a1.validation,
+      sentImage: a1.assets?.imageCanvas,
+      sentMask: a1.assets?.maskCanvas,
+      aiAtSourceSize: a1.aiAtSourceSize,
+      ok: a1.ok,
+      reason: a1.reason,
+    });
+  }
+  if (a1.ok) {
+    compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
+    if (debug) window.__headlightDebug.strategy = "full-image:1";
+    console.log("[Headlights] ✓ full-image attempt 1 accepted by validator");
+    return {
+      ok: true,
+      mode: "full-image",
+      attempt: 1,
+      provider: a1.aiResponse?.provider,
+      model: a1.aiResponse?.model,
+      validation: a1.validation,
+    };
+  }
+  console.warn("[Headlights] ✗ full-image attempt 1 rejected:", a1.reason, a1.validation?.reasons || a1.error || "");
+
+  // ── Attempt 2: full-image with STRICT_RETRY_PROMPT ──
+  // Only retry if the first failure was a validation issue (i.e. we got a
+  // response from the API). For network/API errors, skip straight to the
+  // per-headlight fallback or the local fallback.
+  if (a1.reason === 'validation') {
+    console.log("[Headlights] mode=full-image attempt=2 (stricter prompt)");
+    const STRICTER_PROMPT_FROM_USER = [
+      "Restore ONLY the polycarbonate lens covers of the front headlights:",
+      "remove the yellow oxidation, make them clearer, cleaner and more transparent.",
+      "Do NOT change anything else: the car body, paint color, bumper, grille, hood,",
+      "wheels, license plate, windows, mirrors, background, ground, walls, shadows,",
+      "lighting, framing and camera angle MUST remain pixel-identical to the input.",
+      "Do NOT redesign or reinterpret the headlight shape or internal layout.",
+      "Preserve the exact original headlight model, reflectors, bulbs and lens curvature.",
+      "The output must be visually indistinguishable from the input outside the headlight lenses.",
+    ].join(" ");
+    const a2 = await tryFullImageRestoration(ctx, W, H, lights, {
+      strength, debug, strictPrompt: STRICTER_PROMPT_FROM_USER, attempt: 2,
+    });
+    if (debug) {
+      window.__headlightDebug.attempts.push({
+        mode: "full-image",
+        attempt: 2,
+        validation: a2.validation,
+        sentImage: a2.assets?.imageCanvas,
+        sentMask: a2.assets?.maskCanvas,
+        aiAtSourceSize: a2.aiAtSourceSize,
+        ok: a2.ok,
+        reason: a2.reason,
+      });
+    }
+    if (a2.ok) {
+      compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
+      if (debug) window.__headlightDebug.strategy = "full-image:2";
+      console.log("[Headlights] ✓ full-image attempt 2 accepted by validator");
+      return {
+        ok: true,
+        mode: "full-image",
+        attempt: 2,
+        provider: a2.aiResponse?.provider,
+        model: a2.aiResponse?.model,
+        validation: a2.validation,
+      };
+    }
+    console.warn("[Headlights] ✗ full-image attempt 2 rejected:", a2.reason, a2.validation?.reasons || a2.error || "");
+  }
+
+  // ── Fallback: per-headlight crops ──
+  console.warn("[Headlights] mode=per-headlight (fallback)");
+  if (debug) window.__headlightDebug.strategy = "per-headlight-fallback";
+  const fallback = await aiPolishHeadlightsPerLight(ctx, W, H, lights, { strength, debug });
+  if (fallback.ok) {
+    return { ...fallback, mode: "per-headlight" };
+  }
+
+  // ── Last-resort: server-authorized local filter ──
+  // (handled inside aiPolishHeadlightsPerLight already; if we get here it
+  //  means the per-light pipeline returned ok=false too)
+  console.warn("[Headlights] all strategies failed:", fallback);
+  return { ok: false, mode: "all-failed", perLight: fallback.perLight };
 }
 
 // ── Lustrage carrosserie ─────────────────────────────────────────────────────

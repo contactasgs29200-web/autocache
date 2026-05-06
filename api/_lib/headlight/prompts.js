@@ -1,15 +1,38 @@
 // Shared prompts and parameter mapping for headlight restoration.
-// The pipeline now sends ONE crop per headlight (not the whole car) so the
-// prompt is phrased in the singular: the model sees one optic and is told to
-// restore it without redesigning anything around it.
+//
+// Primary mode is FULL-IMAGE edit: we send the whole car photo with a mask
+// covering only the front headlights and ask the model to restore them
+// without touching anything else. The prompt below is intentionally very
+// strict and reads like the user's reference ChatGPT prompt:
+//   "sur cette voiture, rends ces optiques moins jaunis et plus
+//    transparents, sans modifier le reste de la photo".
 
 export const DEFAULT_PROMPT = [
-  'On this car, make the headlight in this image less yellow and more transparent,',
-  'without changing the rest of the photo.',
-  'Preserve the exact original headlight model, shape, internal design,',
-  'perspective, reflections, and surrounding bodywork.',
-  'Only restore the lens so it looks clearer, cleaner, and less oxidized.',
-  'Do not redesign the headlight.',
+  'Edit this car photo.',
+  'Make the front headlights less yellow, clearer, cleaner, and more transparent,',
+  'as if professionally restored, while preserving the exact headlight model,',
+  'shape, internal design, reflections, perspective, and alignment.',
+  'Do not redesign, replace, or reinterpret the headlights.',
+  'Do not modify the car body, bumper, grille, hood, paint color, wheels,',
+  'windows, background, floor, wall, shadows, lighting, framing, camera angle,',
+  'or any other part of the image.',
+  'The result must look like the same original photo, with only the',
+  'oxidation/yellowing of the front headlights reduced and the lenses appearing',
+  'cleaner and more transparent.',
+].join(' ');
+
+// Used on the second attempt when the first full-image edit failed validation
+// (typically because the model touched something outside the headlights).
+// Doubles down on the "do not change anything else" instruction.
+export const STRICT_RETRY_PROMPT = [
+  'Restore ONLY the polycarbonate lens covers of the front headlights:',
+  'remove the yellow oxidation, make them clearer, cleaner and more transparent.',
+  'Do NOT change anything else: the car body, paint color, bumper, grille, hood,',
+  'wheels, license plate, windows, mirrors, background, ground, walls, shadows,',
+  'lighting, framing and camera angle MUST remain pixel-identical to the input.',
+  'Do NOT redesign or reinterpret the headlight shape or internal layout.',
+  'Preserve the exact original headlight model, reflectors, bulbs and lens curvature.',
+  'The output must be visually indistinguishable from the input outside the headlight lenses.',
 ].join(' ');
 
 export const DEFAULT_NEGATIVE_PROMPT = [
@@ -18,23 +41,20 @@ export const DEFAULT_NEGATIVE_PROMPT = [
   'changed car body',
   'changed bumper',
   'changed grille',
+  'changed paint color',
+  'changed background',
+  'changed framing',
   'changed license plate',
   'fake headlight',
   'distorted geometry',
   'unrealistic lighting',
   'artifacts',
   'blurry result',
+  'painted-over panel',
+  'grey blob',
 ].join(', ');
 
 // Strength controls how aggressive the model is allowed to redraw the masked area.
-// `openaiQuality`  → /v1/images/edits `quality`        (image detail)
-// `openaiFidelity` → /v1/images/edits `input_fidelity` (preserve input look)
-//
-// "restore" is the new default for the per-headlight pipeline:
-//   - high fidelity to keep the existing optic geometry
-//   - medium quality to avoid the model re-imagining details
-// "low/medium/high" are kept for callers who want more aggressive changes
-// (full-frame use cases, future providers, etc.).
 export const STRENGTH_PRESETS = {
   restore: { label: 'restore', denoise: 0.40, openaiQuality: 'medium', openaiFidelity: 'high' },
   low:     { label: 'low',     denoise: 0.55, openaiQuality: 'medium', openaiFidelity: 'high' },

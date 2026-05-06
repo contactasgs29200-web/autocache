@@ -12,13 +12,16 @@ is left **bit-identical** thanks to client-side compositing.
 
 ---
 
-## Pipeline overview — per-headlight crops
+## Pipeline overview — full-image edit (primary), per-headlight crops (fallback)
 
-We send **one tight crop per detected headlight** to the inpainting
-model, not the whole car. Sending the whole front gave the model too
-much creative freedom: it could (and did) redesign one optic to a
-different model, or skip restoring one of the two. With per-headlight
-crops the surrounding context is too constrained for that to happen.
+We tried per-headlight crops as the primary mode (it stops the model
+from redesigning ONE optic differently from the other), but on real
+photos the result showed seams, hue mismatches between the AI crop and
+the rest of the body, or grey blobs on missed optics. The full-image
+ChatGPT-style prompt — "make the headlights less yellow and more
+transparent, without changing the rest of the photo" — gave a
+noticeably better premium feel, so it's now the primary mode and
+per-headlight is a safety net.
 
 ```
 [1] Photo (front)
@@ -27,32 +30,43 @@ crops the surrounding context is too constrained for that to happen.
 [2] api/headlights.js          — detects each front headlight (polygon + bbox)
        │
        ▼
-[3] For EACH headlight (parallel):
-    ├─ computeLightCrop(light, W, H)
-    │     tight crop with 60% margin, snapped to OpenAI aspect
-    │     (1024x1024, 1024x1536 or 1536x1024)
-    ├─ createSingleHeadlightAssets(ctx, light, crop, W, H)
-    │     • downsampled image of the crop
-    │     • feathered alpha mask covering ONLY this optic
+[3] FULL-IMAGE attempt 1 (default strict prompt)
+    ├─ createFullImageEditAssets(ctx, W, H, lights)
+    │     • photo downsampled to 1024² / 1024×1536 / 1536×1024
+    │     • mask: opaque everywhere EXCEPT the headlight polygons
     └─ POST /api/lustrage-pro { imageBase64, maskBase64, size, mode:"ai", strength:"restore" }
        │
        ▼
-[4] HeadlightRestorationProvider
-       └─ openai     → /v1/images/edits  (gpt-image-1, multipart)
-       └─ replicate  → SD inpainting     (configurable)
-       └─ stability  → v2beta inpaint
+[4] HeadlightRestorationProvider (openai / replicate / stability)
        │
        ▼
-[5] api/_lib/headlight/composite.js
-       — validates AI output dimensions match the provider's effective size
-       — refuses byte-identical echoes (no-op detection)
+[5] validateFullImageResult(beforeCanvas, aiCanvas, lights)
+       • mean RGB diff inside  the headlight polygons → must be > 4
+       • mean RGB diff outside the headlight polygons → must be < 8
+       • % of pixels with strong diff (>40) outside → must be < 3%
+       │ ok? ───────────────────────► composite at full canvas, return
        │
-       ▼
-[6] App.jsx — sequential composite:
-       • drawImage(aiResult, sourceX, sourceY) at the crop's source rect
-       • alpha-blend via the headlight mask only
-       • per-headlight meanDiff check (rolls back that optic if < 4/255)
-       • final canvas keeps the rest of the photo bit-identical
+       ▼ rejected
+[6] FULL-IMAGE attempt 2 (STRICT_RETRY_PROMPT)
+       • same image+mask, even stricter prompt
+       • re-validate; if ok, composite, return
+       │
+       ▼ rejected again
+[7] PER-HEADLIGHT CROP fallback
+       • one independent inpaint per optic on a tight crop
+       • per-optic meanDiff check; rollback any optic that didn't change
+       │
+       ▼ if all per-headlight optics fail AND the server returned
+         fallback="local" (HEADLIGHT_AI_FALLBACK_LOCAL=true), run the
+         legacy canvas-only filter as last resort
+```
+
+Logs surface the path taken explicitly:
+```
+[Headlights] mode=full-image attempt=1
+[Headlights] full-image attempt 1 validation { ok:false, reasons:[...], stats:{...} }
+[Headlights] mode=full-image attempt=2 (stricter prompt)
+[Headlights] mode=per-headlight (fallback)
 ```
 
 ---
