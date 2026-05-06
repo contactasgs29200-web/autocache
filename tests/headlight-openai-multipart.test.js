@@ -49,8 +49,10 @@ test('OpenAI provider posts multipart/form-data with image+mask file fields', as
   // Required fields
   assert.equal(body.get('model'), 'gpt-image-1');
   assert.equal(body.get('prompt'), 'restore headlights');
-  assert.equal(body.get('quality'), 'high');             // medium strength → high quality
-  assert.equal(body.get('input_fidelity'), 'low');       // medium strength → low fidelity (more change)
+  // medium strength preset (post-restore introduction): high quality, high fidelity.
+  // The "restore" preset is the new default; "high" is the only one that lowers fidelity.
+  assert.equal(body.get('quality'), 'high');
+  assert.equal(body.get('input_fidelity'), 'high');
   assert.equal(body.get('size'), '1024x1024');
   assert.equal(body.get('n'), '1');
   assert.equal(body.get('output_format'), 'png');

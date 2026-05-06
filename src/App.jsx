@@ -447,18 +447,65 @@ function drawHeadlightShapes(ctx, lights, W, H, expand = 0.04) {
   lights.forEach(light => drawHeadlightShape(ctx, light, W, H, expand));
 }
 
-// OpenAI Image Edit (gpt-image-1) only accepts these output sizes:
-//   1024x1024, 1536x1024 (landscape), 1024x1536 (portrait), or auto.
-// We snap the work canvas to the closest supported aspect ratio so the
-// image+mask we send share the same proportions as the AI output. The
-// final composite scales back to W×H of the original photo, so any slight
-// horizontal/vertical squash from this snap is unwound before the user
-// sees the result.
-function getHeadlightWorkSize(W, H) {
-  const ratio = W / Math.max(1, H);
-  if (ratio > 1.2)  return { workW: 1536, workH: 1024 };
-  if (ratio < 0.83) return { workW: 1024, workH: 1536 };
-  return { workW: 1024, workH: 1024 };
+// ── Per-headlight crop math (mirrors api/_lib/headlight/crop.js) ────────────
+// We send ONE crop per headlight to the inpainting API instead of the whole
+// car. This stops the model from redesigning one optic to a different model
+// (the symptom we observed) because each call sees only a single optic plus
+// minimal context.
+const HEADLIGHT_CROP_MARGIN = 0.6; // 60% extra around bbox on each side
+
+function pickHeadlightAspect(ratio) {
+  if (ratio > 1.2)  return { workW: 1536, workH: 1024, size: '1536x1024' };
+  if (ratio < 0.83) return { workW: 1024, workH: 1536, size: '1024x1536' };
+  return { workW: 1024, workH: 1024, size: '1024x1024' };
+}
+
+function computeLightCrop(light, W, H, margin = HEADLIGHT_CROP_MARGIN) {
+  const bx = light.x * W;
+  const by = light.y * H;
+  const bw = Math.max(1, light.w * W);
+  const bh = Math.max(1, light.h * H);
+  const cx = bx + bw / 2;
+  const cy = by + bh / 2;
+
+  let cropW = bw * (1 + margin);
+  let cropH = bh * (1 + margin);
+
+  let pick = pickHeadlightAspect(cropW / cropH);
+  const targetAspect = pick.workW / pick.workH;
+  if (cropW / cropH > targetAspect) cropH = cropW / targetAspect;
+  else                              cropW = cropH * targetAspect;
+
+  let sx = Math.round(cx - cropW / 2);
+  let sy = Math.round(cy - cropH / 2);
+  let sw = Math.round(cropW);
+  let sh = Math.round(cropH);
+
+  if (sx < 0) sx = 0;
+  if (sy < 0) sy = 0;
+  if (sx + sw > W) sx = Math.max(0, W - sw);
+  if (sy + sh > H) sy = Math.max(0, H - sh);
+  if (sw > W) { sx = 0; sw = W; }
+  if (sh > H) { sy = 0; sh = H; }
+
+  pick = pickHeadlightAspect(sw / sh);
+  return {
+    sourceX: sx, sourceY: sy, sourceW: sw, sourceH: sh,
+    workW: pick.workW, workH: pick.workH, size: pick.size,
+  };
+}
+
+function transformLightToCrop(light, crop, W, H) {
+  return {
+    x: (light.x * W - crop.sourceX) / crop.sourceW,
+    y: (light.y * H - crop.sourceY) / crop.sourceH,
+    w: (light.w * W) / crop.sourceW,
+    h: (light.h * H) / crop.sourceH,
+    points: (light.points || []).map(p => ({
+      x: (p.x * W - crop.sourceX) / crop.sourceW,
+      y: (p.y * H - crop.sourceY) / crop.sourceH,
+    })),
+  };
 }
 
 function dataURLBase64(dataURL) {
@@ -467,70 +514,65 @@ function dataURLBase64(dataURL) {
 
 function computeMaskCoverage(maskCanvas) {
   const { width, height } = maskCanvas;
-  const ctx = maskCanvas.getContext('2d');
-  const data = ctx.getImageData(0, 0, width, height).data;
+  const data = maskCanvas.getContext('2d').getImageData(0, 0, width, height).data;
   let transparent = 0;
-  // alpha channel = data[i+3]; transparent (= editable) when < 8 (some feathered edges)
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] < 8) transparent++;
-  }
+  for (let i = 0; i < data.length; i += 4) if (data[i + 3] < 8) transparent++;
   return transparent / (width * height);
 }
 
-function createHeadlightEditAssets(ctx, W, H, lights) {
-  const { workW, workH } = getHeadlightWorkSize(W, H);
+// Build the image+mask pair to send to the API for ONE headlight.
+function createSingleHeadlightAssets(ctx, light, crop, W, H) {
+  const localLight = transformLightToCrop(light, crop, W, H);
 
   const image = document.createElement('canvas');
-  image.width = workW;
-  image.height = workH;
+  image.width = crop.workW;
+  image.height = crop.workH;
   const ictx = image.getContext('2d');
   ictx.imageSmoothingEnabled = true;
   ictx.imageSmoothingQuality = 'high';
-  ictx.drawImage(ctx.canvas, 0, 0, workW, workH);
+  ictx.drawImage(
+    ctx.canvas,
+    crop.sourceX, crop.sourceY, crop.sourceW, crop.sourceH,
+    0, 0, crop.workW, crop.workH,
+  );
 
   const mask = document.createElement('canvas');
-  mask.width = workW;
-  mask.height = workH;
+  mask.width = crop.workW;
+  mask.height = crop.workH;
   const mctx = mask.getContext('2d');
-
-  // OpenAI mask convention: transparent = area to edit, opaque = area to preserve.
   mctx.fillStyle = 'rgba(0,0,0,1)';
-  mctx.fillRect(0, 0, workW, workH);
+  mctx.fillRect(0, 0, crop.workW, crop.workH);
   mctx.globalCompositeOperation = 'destination-out';
   mctx.fillStyle = 'rgba(0,0,0,1)';
-  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.003))}px)`;
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.055);
+  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(crop.workW, crop.workH) * 0.003))}px)`;
+  drawHeadlightShape(mctx, localLight, crop.workW, crop.workH, 0.06);
   mctx.filter = 'none';
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.035);
+  drawHeadlightShape(mctx, localLight, crop.workW, crop.workH, 0.04);
   mctx.globalCompositeOperation = 'source-over';
 
   const maskCoverage = computeMaskCoverage(mask);
-
   return {
+    imageCanvas: image,
+    maskCanvas: mask,
+    localLight,
     imageBase64: dataURLBase64(image.toDataURL('image/jpeg', 0.94)),
     imageMime: 'image/jpeg',
     maskBase64: dataURLBase64(mask.toDataURL('image/png')),
     maskCoverage,
-    size: `${workW}x${workH}`,
-    workW,
-    workH,
-    imageCanvas: image,
-    maskCanvas: mask,
+    size: crop.size,
   };
 }
 
-// Compute mean per-pixel diff (0-255) between two same-sized canvases inside
-// the masked area only. Used to detect "no visible change" failures.
+// Mean per-pixel RGB diff (0-255) inside an alpha-mask region (alpha<8 = masked).
 function diffInsideMask(beforeCanvas, afterCanvas, maskCanvas) {
   const W = beforeCanvas.width;
   const H = beforeCanvas.height;
   const before = beforeCanvas.getContext('2d').getImageData(0, 0, W, H).data;
   const after = afterCanvas.getContext('2d').getImageData(0, 0, W, H).data;
   const mask = maskCanvas.getContext('2d').getImageData(0, 0, W, H).data;
-  let total = 0;
-  let count = 0;
+  let total = 0, count = 0;
   for (let i = 0; i < before.length; i += 4) {
-    if (mask[i + 3] >= 8) continue; // not a masked (editable) pixel
+    if (mask[i + 3] >= 8) continue;
     const d = Math.abs(before[i] - after[i])
             + Math.abs(before[i + 1] - after[i + 1])
             + Math.abs(before[i + 2] - after[i + 2]);
@@ -540,40 +582,49 @@ function diffInsideMask(beforeCanvas, afterCanvas, maskCanvas) {
   return count ? total / count : 0;
 }
 
-function blendEditedHeadlights(ctx, editedImg, lights, W, H, blendParams = null) {
+// Composite a per-headlight AI result back into the source canvas at the
+// crop's source rectangle, alpha-blended via the headlight polygon mask.
+function compositeSingleHeadlight(ctx, editedImg, light, crop, W, H, blendParams = null) {
   const params = {
-    expandOuter: 0.065,
+    expandOuter: 0.06,
     expandInner: 0.035,
     edgeBlur: 0.0025,
     aiOpacity: 1.0,
     ...(blendParams || {}),
   };
-  const overlay = document.createElement('canvas');
-  overlay.width = W;
-  overlay.height = H;
-  const octx = overlay.getContext('2d');
-  octx.imageSmoothingEnabled = true;
-  octx.imageSmoothingQuality = 'high';
-  octx.drawImage(editedImg, 0, 0, W, H);
+  const localLight = transformLightToCrop(light, crop, W, H);
 
+  // Draw AI result at crop's SOURCE size (downsample from workW×workH).
+  const ai = document.createElement('canvas');
+  ai.width = crop.sourceW;
+  ai.height = crop.sourceH;
+  const aictx = ai.getContext('2d');
+  aictx.imageSmoothingEnabled = true;
+  aictx.imageSmoothingQuality = 'high';
+  aictx.drawImage(editedImg, 0, 0, crop.sourceW, crop.sourceH);
+
+  // Build the alpha mask in source-crop pixels.
   const alpha = document.createElement('canvas');
-  alpha.width = W;
-  alpha.height = H;
+  alpha.width = crop.sourceW;
+  alpha.height = crop.sourceH;
   const actx = alpha.getContext('2d');
   actx.fillStyle = 'rgba(255,255,255,1)';
-  actx.filter = `blur(${Math.max(3, Math.round(Math.min(W, H) * params.edgeBlur))}px)`;
-  drawHeadlightShapes(actx, lights, W, H, params.expandOuter);
+  actx.filter = `blur(${Math.max(3, Math.round(Math.min(crop.sourceW, crop.sourceH) * params.edgeBlur))}px)`;
+  drawHeadlightShape(actx, localLight, crop.sourceW, crop.sourceH, params.expandOuter);
   actx.filter = 'none';
-  drawHeadlightShapes(actx, lights, W, H, params.expandInner);
+  drawHeadlightShape(actx, localLight, crop.sourceW, crop.sourceH, params.expandInner);
 
-  octx.globalCompositeOperation = 'destination-in';
-  octx.drawImage(alpha, 0, 0);
-  octx.globalCompositeOperation = 'source-over';
+  aictx.globalCompositeOperation = 'destination-in';
+  aictx.drawImage(alpha, 0, 0);
+  aictx.globalCompositeOperation = 'source-over';
 
+  // Place into the main canvas at the crop's source location.
   const prevAlpha = ctx.globalAlpha;
   ctx.globalAlpha = params.aiOpacity;
-  ctx.drawImage(overlay, 0, 0);
+  ctx.drawImage(ai, crop.sourceX, crop.sourceY);
   ctx.globalAlpha = prevAlpha;
+
+  return { aiCanvas: ai, alphaCanvas: alpha };
 }
 
 // Legacy local polish — only runs when the server explicitly authorizes it
@@ -657,37 +708,11 @@ function isHeadlightDebugEnabled() {
 // masked region. Mean per-pixel RGB delta on a 0–255 scale.
 const HEADLIGHT_NOOP_THRESHOLD = 4;
 
-// AI inpainting pipeline: detect → mask → call provider → composite.
-// `mode` is fixed to "ai" — local pixel filtering is only re-enabled when the
-// API explicitly tells us so via `fallback: "local"` (gated server-side by
-// HEADLIGHT_AI_FALLBACK_LOCAL).
-async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
-  const { strength = "medium" } = opts;
-  const debug = isHeadlightDebugEnabled();
-  const lights = await detectHeadlights(b64Original);
-  if (!lights.length) {
-    console.log("[Headlights] Aucun phare détecté");
-    return { ok: false, reason: "no-lights" };
-  }
-
-  const assets = createHeadlightEditAssets(ctx, W, H, lights);
-  console.log("[Headlights] mask built", {
-    workSize: `${assets.workW}x${assets.workH}`,
-    maskCoveragePct: (assets.maskCoverage * 100).toFixed(2) + "%",
-    lights: lights.length,
-  });
-
-  if (debug) {
-    window.__headlightDebug = window.__headlightDebug || {};
-    window.__headlightDebug.lights = lights;
-    window.__headlightDebug.maskCanvas = assets.maskCanvas;
-    window.__headlightDebug.imageSent = assets.imageCanvas;
-    window.__headlightDebug.maskCoverage = assets.maskCoverage;
-    console.log("[Headlights:debug] mask + image stored on window.__headlightDebug");
-    console.log("[Headlights:debug] preview mask in console: copy and run:");
-    console.log('  document.body.appendChild(window.__headlightDebug.maskCanvas)');
-  }
-
+// One independent API call per headlight, in parallel. Each call sees only
+// a tight crop around ONE optic, so the model can't redesign anything else.
+// Compositing is done sequentially after all calls return.
+async function callHeadlightApiForLight(idx, assets, strength, debug) {
+  const url = debug ? "/api/lustrage-pro?debug=1" : "/api/lustrage-pro";
   const payload = {
     imageBase64: assets.imageBase64,
     imageMime: assets.imageMime,
@@ -697,101 +722,170 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     mode: "ai",
     strength,
   };
-
-  let data = null;
-  let httpOk = false;
-  let httpStatus = 0;
   try {
-    const url = debug ? "/api/lustrage-pro?debug=1" : "/api/lustrage-pro";
     const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    httpOk = r.ok;
-    httpStatus = r.status;
-    data = await r.json().catch(() => ({}));
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data?.imageBase64) {
+      console.warn(`[Headlights:#${idx}] API failed`, { status: r.status, error: data?.error, details: data?.details });
+      return { ok: false, idx, status: r.status, error: data?.error || "ai-failed", details: data?.details, fallback: data?.fallback };
+    }
+    return { ok: true, idx, ...data };
   } catch (e) {
-    console.warn("[Headlights] Network error:", e.message);
-    return { ok: false, reason: "network", error: e.message };
+    console.warn(`[Headlights:#${idx}] Network error:`, e.message);
+    return { ok: false, idx, error: e.message, reason: "network" };
+  }
+}
+
+async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
+  const { strength = "restore" } = opts;
+  const debug = isHeadlightDebugEnabled();
+  const lights = await detectHeadlights(b64Original);
+  if (!lights.length) {
+    console.log("[Headlights] Aucun phare détecté");
+    return { ok: false, reason: "no-lights" };
   }
 
-  if (httpOk && data?.imageBase64) {
+  // 1. Compute crops + assets for each headlight (synchronous, snapshots ctx).
+  const tasks = lights.map((light, idx) => {
+    const crop = computeLightCrop(light, W, H);
+    const assets = createSingleHeadlightAssets(ctx, light, crop, W, H);
+    console.log(`[Headlights:#${idx}] crop`, {
+      bbox: { x: light.x, y: light.y, w: light.w, h: light.h },
+      crop: { x: crop.sourceX, y: crop.sourceY, w: crop.sourceW, h: crop.sourceH },
+      sendSize: crop.size,
+      maskCoveragePct: (assets.maskCoverage * 100).toFixed(2) + "%",
+    });
+    return { idx, light, crop, assets };
+  });
+
+  if (debug) {
+    window.__headlightDebug = { strategy: "per-headlight", count: tasks.length, lights: [] };
+    for (const t of tasks) {
+      window.__headlightDebug.lights.push({
+        idx: t.idx,
+        light: t.light,
+        crop: t.crop,
+        sentImage: t.assets.imageCanvas,
+        sentMask: t.assets.maskCanvas,
+        maskCoverage: t.assets.maskCoverage,
+      });
+    }
+    console.log("[Headlights:debug] window.__headlightDebug populated. Try:");
+    console.log("  document.body.appendChild(window.__headlightDebug.lights[0].sentImage)");
+    console.log("  document.body.appendChild(window.__headlightDebug.lights[0].sentMask)");
+  }
+
+  // 2. Parallel API calls (one per headlight).
+  const apiResults = await Promise.all(tasks.map(t => callHeadlightApiForLight(t.idx, t.assets, strength, debug)));
+
+  // 3. Sequential composite (avoid canvas race conditions).
+  const perLight = [];
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    const apiR = apiResults[i];
+    const dbg = debug ? window.__headlightDebug.lights[i] : null;
+
+    if (!apiR.ok) {
+      console.warn(`[Headlights:#${i}] skipped — API failed`);
+      perLight.push({ idx: i, ok: false, error: apiR.error });
+      if (dbg) dbg.error = apiR.error;
+      continue;
+    }
+
     try {
-      const editedImg = await loadImg(`data:image/png;base64,${data.imageBase64}`);
-      console.log("[Headlights] AI response", {
-        provider: data.provider,
-        model: data.model,
-        strength: data.strength,
-        outDims: data.outDims,
-        editedNaturalSize: `${editedImg.naturalWidth}x${editedImg.naturalHeight}`,
+      const editedImg = await loadImg(`data:image/png;base64,${apiR.imageBase64}`);
+      console.log(`[Headlights:#${i}] AI response`, {
+        provider: apiR.provider,
+        model: apiR.model,
+        strength: apiR.strength,
+        outDims: apiR.outDims,
+        effectiveSize: apiR.effectiveSize,
       });
 
-      // Snapshot the canvas BEFORE the composite for the diff check.
+      // Snapshot just the crop area BEFORE for diff.
       const before = document.createElement("canvas");
-      before.width = W;
-      before.height = H;
-      before.getContext("2d").drawImage(ctx.canvas, 0, 0);
+      before.width = t.crop.sourceW;
+      before.height = t.crop.sourceH;
+      before.getContext("2d").drawImage(
+        ctx.canvas,
+        t.crop.sourceX, t.crop.sourceY, t.crop.sourceW, t.crop.sourceH,
+        0, 0, t.crop.sourceW, t.crop.sourceH,
+      );
 
-      blendEditedHeadlights(ctx, editedImg, lights, W, H, data.blend);
+      const { aiCanvas, alphaCanvas } = compositeSingleHeadlight(ctx, editedImg, t.light, t.crop, W, H, apiR.blend);
 
-      // Snapshot AFTER, then diff inside the headlight region only.
       const after = document.createElement("canvas");
-      after.width = W;
-      after.height = H;
-      after.getContext("2d").drawImage(ctx.canvas, 0, 0);
+      after.width = t.crop.sourceW;
+      after.height = t.crop.sourceH;
+      after.getContext("2d").drawImage(
+        ctx.canvas,
+        t.crop.sourceX, t.crop.sourceY, t.crop.sourceW, t.crop.sourceH,
+        0, 0, t.crop.sourceW, t.crop.sourceH,
+      );
 
-      const fullMask = document.createElement("canvas");
-      fullMask.width = W;
-      fullMask.height = H;
-      const fmctx = fullMask.getContext("2d");
-      fmctx.fillStyle = "rgba(0,0,0,1)";
-      fmctx.fillRect(0, 0, W, H);
-      fmctx.globalCompositeOperation = "destination-out";
-      drawHeadlightShapes(fmctx, lights, W, H, 0.04);
-      fmctx.globalCompositeOperation = "source-over";
+      // Build a binary mask in source-crop pixels for the diff (same shape as composite).
+      const localLight = transformLightToCrop(t.light, t.crop, W, H);
+      const diffMask = document.createElement("canvas");
+      diffMask.width = t.crop.sourceW;
+      diffMask.height = t.crop.sourceH;
+      const dmctx = diffMask.getContext("2d");
+      dmctx.fillStyle = "rgba(0,0,0,1)";
+      dmctx.fillRect(0, 0, t.crop.sourceW, t.crop.sourceH);
+      dmctx.globalCompositeOperation = "destination-out";
+      drawHeadlightShape(dmctx, localLight, t.crop.sourceW, t.crop.sourceH, 0.03);
+      dmctx.globalCompositeOperation = "source-over";
 
-      const meanDiff = diffInsideMask(before, after, fullMask);
-      console.log("[Headlights] post-AI diff (masked region only):", meanDiff.toFixed(2), "/255");
+      const meanDiff = diffInsideMask(before, after, diffMask);
+      console.log(`[Headlights:#${i}] post-AI diff (masked region): ${meanDiff.toFixed(2)} /255`);
 
-      if (debug) {
-        window.__headlightDebug.beforeCanvas = before;
-        window.__headlightDebug.afterCanvas = after;
-        window.__headlightDebug.fullMask = fullMask;
-        window.__headlightDebug.aiRawBase64 = data.debug?.rawAiBase64 || data.imageBase64;
-        window.__headlightDebug.meanDiff = meanDiff;
-        console.log("[Headlights:debug] before/after/fullMask + diff stored on window.__headlightDebug");
+      if (dbg) {
+        dbg.aiResultRaw = editedImg;
+        dbg.aiResultAtCropSize = aiCanvas;
+        dbg.alphaCanvas = alphaCanvas;
+        dbg.beforeCrop = before;
+        dbg.afterCrop = after;
+        dbg.diffMask = diffMask;
+        dbg.meanDiff = meanDiff;
+        dbg.provider = apiR.provider;
+        dbg.model = apiR.model;
       }
 
       if (meanDiff < HEADLIGHT_NOOP_THRESHOLD) {
-        // The AI returned essentially the same pixels in the masked region.
-        // Roll back the composite so the user gets their original photo back
-        // and surface the issue clearly.
-        ctx.clearRect(0, 0, W, H);
-        ctx.drawImage(before, 0, 0);
-        const msg = `AI restoration produced no visible change (mean diff ${meanDiff.toFixed(1)}/255 < ${HEADLIGHT_NOOP_THRESHOLD})`;
-        console.warn("[Headlights] " + msg);
-        return { ok: false, reason: "no-visible-change", meanDiff, provider: data.provider, model: data.model };
+        // Rollback this single headlight to its original pixels.
+        ctx.drawImage(before, t.crop.sourceX, t.crop.sourceY);
+        console.warn(`[Headlights:#${i}] no visible change (${meanDiff.toFixed(1)}/255), rolled back`);
+        perLight.push({ idx: i, ok: false, reason: "no-visible-change", meanDiff, provider: apiR.provider, model: apiR.model });
+      } else {
+        console.log(`[Headlights:#${i}] composite ✓ (provider=${apiR.provider}, meanDiff=${meanDiff.toFixed(1)})`);
+        perLight.push({ idx: i, ok: true, provider: apiR.provider, model: apiR.model, meanDiff });
       }
-
-      console.log(`[Headlights] Lustrage IA terminé ✓ (provider=${data.provider}, model=${data.model}, strength=${data.strength}, meanDiff=${meanDiff.toFixed(1)})`);
-      return { ok: true, provider: data.provider, model: data.model, meanDiff };
     } catch (e) {
-      console.warn("[Headlights] Composite error:", e.message);
-      return { ok: false, reason: "composite", error: e.message };
+      console.warn(`[Headlights:#${i}] composite error:`, e.message);
+      perLight.push({ idx: i, ok: false, error: e.message, reason: "composite" });
     }
   }
 
-  // Server failed. Only run the legacy local polish if the server explicitly
-  // authorized it (HEADLIGHT_AI_FALLBACK_LOCAL=true).
-  if (data?.fallback === "local") {
-    console.warn("[Headlights] AI failed, running local fallback (server-authorized)");
+  const successCount = perLight.filter(r => r.ok).length;
+  console.log(`[Headlights] done — ${successCount}/${perLight.length} optics restored`);
+
+  // If EVERY headlight failed and the server told us local fallback is OK,
+  // run the legacy filter on the still-original canvas.
+  if (successCount === 0 && apiResults.some(r => !r.ok && r.fallback === "local")) {
+    console.warn("[Headlights] all AI calls failed, running server-authorized local fallback");
     localPolishHeadlights(ctx, W, H, lights);
-    return { ok: true, provider: "local-fallback", model: null };
+    return { ok: true, provider: "local-fallback", model: null, perLight };
   }
 
-  console.warn(`[Headlights] Lustrage IA indisponible (HTTP ${httpStatus}):`, data?.error || "unknown error", data?.details ?? "");
-  return { ok: false, reason: "ai-failed", status: httpStatus, error: data?.error || "ai-failed", details: data?.details };
+  return {
+    ok: successCount > 0,
+    perLight,
+    provider: perLight.find(r => r.ok)?.provider,
+    model: perLight.find(r => r.ok)?.model,
+  };
 }
 
 // ── Lustrage carrosserie ─────────────────────────────────────────────────────

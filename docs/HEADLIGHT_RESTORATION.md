@@ -12,41 +12,47 @@ is left **bit-identical** thanks to client-side compositing.
 
 ---
 
-## Pipeline overview
+## Pipeline overview — per-headlight crops
+
+We send **one tight crop per detected headlight** to the inpainting
+model, not the whole car. Sending the whole front gave the model too
+much creative freedom: it could (and did) redesign one optic to a
+different model, or skip restoring one of the two. With per-headlight
+crops the surrounding context is too constrained for that to happen.
 
 ```
 [1] Photo (front)
        │
        ▼
-[2] api/headlights.js     — detects the front headlights, returns
-                            normalized polygons + bbox
+[2] api/headlights.js          — detects each front headlight (polygon + bbox)
        │
        ▼
-[3] App.jsx               — createHeadlightEditAssets(ctx, W, H, lights)
-                            builds:
-                              • the down-sampled source image
-                              • a feathered binary mask (no plate, no body,
-                                no wheels, no windshield, no background)
+[3] For EACH headlight (parallel):
+    ├─ computeLightCrop(light, W, H)
+    │     tight crop with 60% margin, snapped to OpenAI aspect
+    │     (1024x1024, 1024x1536 or 1536x1024)
+    ├─ createSingleHeadlightAssets(ctx, light, crop, W, H)
+    │     • downsampled image of the crop
+    │     • feathered alpha mask covering ONLY this optic
+    └─ POST /api/lustrage-pro { imageBase64, maskBase64, size, mode:"ai", strength:"restore" }
        │
        ▼
-[4] api/lustrage-pro.js   — POST { imageBase64, maskBase64, mode, strength }
+[4] HeadlightRestorationProvider
+       └─ openai     → /v1/images/edits  (gpt-image-1, multipart)
+       └─ replicate  → SD inpainting     (configurable)
+       └─ stability  → v2beta inpaint
        │
        ▼
-[5] HeadlightRestorationProvider
-       └─ openai     → /v1/images/edits          (gpt-image-1)
-       └─ replicate  → predictions/<sd-inpaint>   (any inpainting model)
-       └─ stability  → /v2beta/stable-image/edit/inpaint
+[5] api/_lib/headlight/composite.js
+       — validates AI output dimensions match the provider's effective size
+       — refuses byte-identical echoes (no-op detection)
        │
        ▼
-[6] api/_lib/headlight/composite.js
-       — validates that the AI returned the requested dimensions
-         (otherwise we refuse the result)
-       │
-       ▼
-[7] App.jsx — blendEditedHeadlights() re-composites the AI output ONLY
-              inside the feathered mask, with progressive blending so
-              the surrounding car body, paint, plate and reflections
-              are preserved.
+[6] App.jsx — sequential composite:
+       • drawImage(aiResult, sourceX, sourceY) at the crop's source rect
+       • alpha-blend via the headlight mask only
+       • per-headlight meanDiff check (rolls back that optic if < 4/255)
+       • final canvas keeps the rest of the photo bit-identical
 ```
 
 ---
@@ -57,6 +63,7 @@ is left **bit-identical** thanks to client-side compositing.
 api/_lib/headlight/
   index.js              orchestrator (restoreHeadlights)
   prompts.js            DEFAULT_PROMPT + DEFAULT_NEGATIVE_PROMPT + STRENGTH_PRESETS
+  crop.js               per-headlight crop math (computeLightCrop, transformLightToCrop)
   composite.js          PNG dimension guard + blend params
   mask.js               mask geometry helpers (pure JS, testable)
   providers/
@@ -92,6 +99,35 @@ it in `providers/index.js`, done.
 | `HEADLIGHT_AI_API_KEY`           | yes\*    | —         | Provider API key. \*Optional if a provider-specific key is set: `OPENAI_API_KEY`, `REPLICATE_API_TOKEN`, `STABILITY_API_KEY`. |
 | `HEADLIGHT_AI_MODEL`             | no       | per-provider | OpenAI: `gpt-image-1`. Replicate: `stability-ai/stable-diffusion-inpainting`. Stability: `sd3.5-large`. |
 | `HEADLIGHT_AI_FALLBACK_LOCAL`    | no       | `false`   | When `true`, the API responds to AI failures with `fallback: "local"` and the client runs a **legacy canvas-only polish**. By default we surface the error and never pretend the AI succeeded. |
+
+### Strength presets
+
+| `strength` | `quality` | `input_fidelity` | When to use |
+|---|---|---|---|
+| `restore` *(default)* | medium | high | Per-headlight restoration. Conservative — preserves the original optic geometry. |
+| `low`     | medium | high | Subtle change. |
+| `medium`  | high   | high | Balanced. |
+| `high`    | high   | low  | Aggressive — let the model diverge from the input. Use only if the optic is very oxidized and `restore` doesn't move enough. |
+
+### Debugging
+
+Append `?headlightDebug=1` to the URL. After a batch:
+
+```js
+// Per-headlight inspection in the devtools console:
+window.__headlightDebug.lights.forEach((l, i) => {
+  console.log(`Light #${i}`, l);
+  document.body.appendChild(l.sentImage);   // crop sent to the AI
+  document.body.appendChild(l.sentMask);    // mask sent to the AI
+  if (l.aiResultRaw) {
+    document.body.appendChild(l.aiResultRaw);     // raw AI output
+    document.body.appendChild(l.aiResultAtCropSize); // resampled to crop size
+    document.body.appendChild(l.beforeCrop);  // crop region before composite
+    document.body.appendChild(l.afterCrop);   // crop region after composite
+  }
+  console.log(`Light #${i} meanDiff=${l.meanDiff?.toFixed(2)}`);
+});
+```
 
 > 🔐 No API key is ever hardcoded. A `tests/headlight-secrets.test.js`
 > assertion fails the build if anyone commits one in the headlight files.
