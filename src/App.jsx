@@ -601,8 +601,47 @@ function diffInsideMask(beforeCanvas, afterCanvas, maskCanvas) {
   return count ? total / count : 0;
 }
 
+// Per-channel mean RGB of a canvas inside a binary alpha mask (alpha>8 = keep).
+function meanRgbInMask(canvas, maskCanvas) {
+  const W = canvas.width;
+  const H = canvas.height;
+  const d = canvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const m = maskCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  let sumR = 0, sumG = 0, sumB = 0, n = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (m[i + 3] < 8) continue;
+    sumR += d[i]; sumG += d[i + 1]; sumB += d[i + 2]; n++;
+  }
+  if (!n) return { r: 0, g: 0, b: 0 };
+  return { r: sumR / n, g: sumG / n, b: sumB / n };
+}
+
+// Apply per-channel gain (cR, cG, cB) to a canvas in place. Used to nudge the
+// AI-generated crop toward the source photo's color stats so the composite
+// edge doesn't show a tint shift around the optic.
+function applyColorGain(canvas, gainR, gainG, gainB) {
+  const W = canvas.width;
+  const H = canvas.height;
+  const cctx = canvas.getContext('2d');
+  const id = cctx.getImageData(0, 0, W, H);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i]     = Math.max(0, Math.min(255, Math.round(d[i]     * gainR)));
+    d[i + 1] = Math.max(0, Math.min(255, Math.round(d[i + 1] * gainG)));
+    d[i + 2] = Math.max(0, Math.min(255, Math.round(d[i + 2] * gainB)));
+  }
+  cctx.putImageData(id, 0, 0);
+}
+
 // Composite a per-headlight AI result back into the source canvas at the
 // crop's source rectangle, alpha-blended via the headlight polygon mask.
+//
+// Before blending we measure the AI's color drift in the area AROUND the
+// optic (where the source crop and the AI's "unmasked" region should match)
+// and apply a small per-channel correction to the AI canvas so the tint of
+// the restored optic stays consistent with its surroundings. This is the
+// cheap fix for the "visible détourage" the user saw with the per-headlight
+// fallback.
 function compositeSingleHeadlight(ctx, editedImg, light, crop, W, H, blendParams = null) {
   const params = {
     expandOuter: 0.06,
@@ -621,6 +660,41 @@ function compositeSingleHeadlight(ctx, editedImg, light, crop, W, H, blendParams
   aictx.imageSmoothingEnabled = true;
   aictx.imageSmoothingQuality = 'high';
   aictx.drawImage(editedImg, 0, 0, crop.sourceW, crop.sourceH);
+
+  // Snapshot source crop (the original pixels of this region in the photo).
+  const sourceCrop = document.createElement('canvas');
+  sourceCrop.width = crop.sourceW;
+  sourceCrop.height = crop.sourceH;
+  sourceCrop.getContext('2d').drawImage(
+    ctx.canvas,
+    crop.sourceX, crop.sourceY, crop.sourceW, crop.sourceH,
+    0, 0, crop.sourceW, crop.sourceH,
+  );
+
+  // Build the "context" mask = pixels OUTSIDE the headlight polygon but
+  // INSIDE the crop (i.e. the body/bumper surroundings).
+  const contextMask = document.createElement('canvas');
+  contextMask.width = crop.sourceW;
+  contextMask.height = crop.sourceH;
+  const cmctx = contextMask.getContext('2d');
+  cmctx.fillStyle = 'rgba(255,255,255,1)';
+  cmctx.fillRect(0, 0, crop.sourceW, crop.sourceH);
+  cmctx.globalCompositeOperation = 'destination-out';
+  drawHeadlightShape(cmctx, localLight, crop.sourceW, crop.sourceH, 0.08); // exclude the optic + small ring
+  cmctx.globalCompositeOperation = 'source-over';
+
+  // Color-match: shift AI gains so its "context" mean matches the source's.
+  // Clamp gains to a sane range so a bad measurement can't over-correct.
+  const srcMean = meanRgbInMask(sourceCrop, contextMask);
+  const aiMean = meanRgbInMask(ai, contextMask);
+  const safe = (v) => Math.max(0.85, Math.min(1.15, v));
+  const gR = aiMean.r > 1 ? safe(srcMean.r / aiMean.r) : 1;
+  const gG = aiMean.g > 1 ? safe(srcMean.g / aiMean.g) : 1;
+  const gB = aiMean.b > 1 ? safe(srcMean.b / aiMean.b) : 1;
+  if (Math.abs(gR - 1) > 0.01 || Math.abs(gG - 1) > 0.01 || Math.abs(gB - 1) > 0.01) {
+    applyColorGain(ai, gR, gG, gB);
+    console.log('[Headlights] color-match gain', { gR: gR.toFixed(3), gG: gG.toFixed(3), gB: gB.toFixed(3) });
+  }
 
   // Build the alpha mask in source-crop pixels.
   const alpha = document.createElement('canvas');
@@ -723,6 +797,43 @@ function isHeadlightDebugEnabled() {
   } catch { return false; }
 }
 
+// ?headlightStrategy=full-image-only   → ignore the validator, never fall back
+// ?headlightStrategy=per-headlight-only → skip full-image, go straight to crops
+// ?headlightStrategy=auto (default)     → full-image first, fallback if rejected
+function getHeadlightStrategyOverride() {
+  if (typeof window === "undefined") return "auto";
+  try {
+    const v = new URLSearchParams(window.location.search).get("headlightStrategy");
+    if (v === "full-image-only" || v === "per-headlight-only") return v;
+    return "auto";
+  } catch { return "auto"; }
+}
+
+// Build a colored "diff map" canvas where pixel intensity = |before - after|.
+// Used only in debug to make hidden drift visible.
+function buildDiffMap(beforeCanvas, afterCanvas) {
+  const W = beforeCanvas.width;
+  const H = beforeCanvas.height;
+  const out = document.createElement('canvas');
+  out.width = W;
+  out.height = H;
+  const octx = out.getContext('2d');
+  const oid = octx.createImageData(W, H);
+  const od = oid.data;
+  const a = beforeCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const b = afterCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  for (let i = 0; i < a.length; i += 4) {
+    const d = (Math.abs(a[i] - b[i]) + Math.abs(a[i+1] - b[i+1]) + Math.abs(a[i+2] - b[i+2])) / 3;
+    const v = Math.min(255, Math.round(d * 4)); // amplify for visibility
+    od[i] = v;            // red channel = diff intensity
+    od[i + 1] = 0;
+    od[i + 2] = 0;
+    od[i + 3] = 255;
+  }
+  octx.putImageData(oid, 0, 0);
+  return out;
+}
+
 // Threshold below which we consider the AI returned no visible change in the
 // masked region. Mean per-pixel RGB delta on a 0–255 scale.
 const HEADLIGHT_NOOP_THRESHOLD = 4;
@@ -784,66 +895,105 @@ function createFullImageEditAssets(ctx, W, H, lights) {
 }
 
 // Validate that the AI only changed pixels INSIDE the headlight polygons.
-// Returns { ok, reasons: [], stats: {meanIn, meanOut, pctHighOut} }.
-//   - meanOut < OUTSIDE_MEAN_LIMIT  → the rest of the photo is preserved
-//   - meanIn  > NOOP_THRESHOLD      → the headlights actually changed
-//   - pctHighOut < BLEED_PCT_LIMIT  → no big region was redesigned outside
+// Returns { ok, reasons: [], stats }.
+//
+// Reality check on the thresholds:
+//   - gpt-image-1 RE-ENCODES the whole image even when the mask is
+//     respected. The unmasked area is never bit-identical to the input
+//     — JPEG/PNG re-encoding alone produces ~5-15 of mean RGB diff.
+//   - The composite step only takes pixels INSIDE the mask from the AI,
+//     so any drift outside is NEVER visible to the user. The user only
+//     sees a "seam" if the drift exists in a ring AROUND the mask
+//     (where the alpha gradient blends AI pixels with original pixels).
+//
+// We therefore:
+//   - allow significant `meanOut` (model re-encoding is normal),
+//   - track a `meanRing` diff in the ~3% ring around each headlight
+//     polygon and reject only if that ring is too different (true seam
+//     predictor),
+//   - keep `pctHighOut` (catastrophic redesigns) and `meanIn` (no-op
+//     detection) as hard floors.
+const VALIDATOR_THRESHOLDS = {
+  meanInMin: 4,        // must change inside the mask
+  meanOutMax: 20,      // tolerate gpt-image-1 global re-encoding drift
+  meanRingMax: 14,     // ring around the mask: seam predictor
+  pctHighOutMax: 5,    // % of pixels with diff > 40 outside the mask
+};
+
 function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
   const W = beforeCanvas.width;
   const H = beforeCanvas.height;
-  // Build a binary headlight mask at the same size (1 = inside headlight).
+
+  // Inside mask: opaque white inside headlight polygons.
   const hl = document.createElement('canvas');
   hl.width = W;
   hl.height = H;
   const hctx = hl.getContext('2d');
-  hctx.fillStyle = 'rgba(0,0,0,0)';
-  hctx.fillRect(0, 0, W, H);
   hctx.fillStyle = 'rgba(255,255,255,1)';
   drawHeadlightShapes(hctx, lights, W, H, 0.05);
 
+  // Ring mask: outside the inner polygon but inside an expanded one.
+  const ring = document.createElement('canvas');
+  ring.width = W;
+  ring.height = H;
+  const rctx = ring.getContext('2d');
+  rctx.fillStyle = 'rgba(255,255,255,1)';
+  drawHeadlightShapes(rctx, lights, W, H, 0.12);   // outer
+  rctx.globalCompositeOperation = 'destination-out';
+  drawHeadlightShapes(rctx, lights, W, H, 0.03);    // punch the inner
+  rctx.globalCompositeOperation = 'source-over';
+
   const before = beforeCanvas.getContext('2d').getImageData(0, 0, W, H).data;
-  const after = afterCanvas.getContext('2d').getImageData(0, 0, W, H).data;
-  const mask = hctx.getImageData(0, 0, W, H).data;
+  const after  = afterCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const inMask = hctx.getImageData(0, 0, W, H).data;
+  const ringMask = rctx.getImageData(0, 0, W, H).data;
 
   let sumIn = 0, countIn = 0;
   let sumOut = 0, countOut = 0;
+  let sumRing = 0, countRing = 0;
   let highOut = 0;
 
   for (let i = 0; i < before.length; i += 4) {
     const d = (Math.abs(before[i]     - after[i])
              + Math.abs(before[i + 1] - after[i + 1])
              + Math.abs(before[i + 2] - after[i + 2])) / 3;
-    if (mask[i + 3] > 8) {
+    const inside = inMask[i + 3] > 8;
+    const inRing = ringMask[i + 3] > 8;
+    if (inside) {
       sumIn += d; countIn++;
     } else {
       sumOut += d; countOut++;
       if (d > 40) highOut++;
     }
+    if (inRing) {
+      sumRing += d; countRing++;
+    }
   }
 
-  const meanIn = countIn ? sumIn / countIn : 0;
-  const meanOut = countOut ? sumOut / countOut : 0;
+  const meanIn   = countIn   ? sumIn   / countIn   : 0;
+  const meanOut  = countOut  ? sumOut  / countOut  : 0;
+  const meanRing = countRing ? sumRing / countRing : 0;
   const pctHighOut = countOut ? (highOut / countOut) * 100 : 0;
 
-  const OUTSIDE_MEAN_LIMIT = 8;
-  const NOOP_THRESHOLD = 4;
-  const BLEED_PCT_LIMIT = 3;
-
   const reasons = [];
-  if (meanOut > OUTSIDE_MEAN_LIMIT) {
-    reasons.push(`outside-changed: meanDiff ${meanOut.toFixed(1)} > ${OUTSIDE_MEAN_LIMIT}`);
+  if (meanIn < VALIDATOR_THRESHOLDS.meanInMin) {
+    reasons.push(`no-op: meanDiff inside ${meanIn.toFixed(1)} < ${VALIDATOR_THRESHOLDS.meanInMin}`);
   }
-  if (pctHighOut > BLEED_PCT_LIMIT) {
+  if (meanOut > VALIDATOR_THRESHOLDS.meanOutMax) {
+    reasons.push(`outside-drift: meanDiff outside ${meanOut.toFixed(1)} > ${VALIDATOR_THRESHOLDS.meanOutMax}`);
+  }
+  if (meanRing > VALIDATOR_THRESHOLDS.meanRingMax) {
+    reasons.push(`seam-predicted: ring meanDiff ${meanRing.toFixed(1)} > ${VALIDATOR_THRESHOLDS.meanRingMax}`);
+  }
+  if (pctHighOut > VALIDATOR_THRESHOLDS.pctHighOutMax) {
     reasons.push(`bleed: ${pctHighOut.toFixed(2)}% of pixels outside the headlights have a strong diff`);
-  }
-  if (meanIn < NOOP_THRESHOLD) {
-    reasons.push(`no-op: meanDiff inside ${meanIn.toFixed(1)} < ${NOOP_THRESHOLD}`);
   }
 
   return {
     ok: reasons.length === 0,
     reasons,
-    stats: { meanIn, meanOut, pctHighOut },
+    stats: { meanIn, meanOut, meanRing, pctHighOut },
+    thresholds: VALIDATOR_THRESHOLDS,
   };
 }
 
@@ -974,8 +1124,10 @@ async function tryFullImageRestoration(ctx, W, H, lights, opts) {
     stats: {
       meanIn: validation.stats.meanIn.toFixed(2),
       meanOut: validation.stats.meanOut.toFixed(2),
+      meanRing: validation.stats.meanRing.toFixed(2),
       pctHighOut: validation.stats.pctHighOut.toFixed(3) + '%',
     },
+    thresholds: validation.thresholds,
   });
 
   return {
@@ -1173,29 +1325,73 @@ async function aiPolishHeadlightsPerLight(ctx, W, H, lights, opts = {}) {
 
 // ── Top-level orchestrator (PRIMARY = full-image, FALLBACK = per-light) ─────
 //
-// Order:
-//   1. full-image attempt #1 with the default strict prompt
-//   2. validate: meanDiff outside <8, pctHighDiffOutside <3%, meanDiff inside >4
-//   3. on failure, full-image attempt #2 with the STRICT_RETRY_PROMPT
+// Honors a strategy override via the URL:
+//   ?headlightStrategy=auto              (default) → full-image then per-light
+//   ?headlightStrategy=full-image-only   → never fall back, always composite
+//                                          the best full-image result (use this
+//                                          to inspect the raw AI render even
+//                                          when the validator would reject it)
+//   ?headlightStrategy=per-headlight-only → skip full-image entirely
+//
+// Order in auto:
+//   1. full-image attempt 1 with the default strict prompt
+//   2. validate (meanIn/meanOut/meanRing/pctHighOut)
+//   3. on failure, full-image attempt 2 with the stricter retry prompt
 //   4. on second failure, fallback to per-headlight crops
 //   5. if even per-headlight fails AND the server authorizes local fallback,
 //      run the legacy canvas-only filter
+function persistDebugAttempt(debug, attempt) {
+  if (!debug) return;
+  const before = attempt.beforeCanvas;
+  const after = attempt.aiAtSourceSize;
+  const entry = {
+    mode: "full-image",
+    attempt: attempt.attempt,
+    validation: attempt.validation,
+    sentImage: attempt.assets?.imageCanvas,
+    sentMask: attempt.assets?.maskCanvas,
+    aiAtSourceSize: after,
+    before,
+    diffMap: before && after ? buildDiffMap(before, after) : null,
+    ok: attempt.ok,
+    reason: attempt.reason,
+    error: attempt.error,
+    status: attempt.status,
+  };
+  window.__headlightDebug.attempts.push(entry);
+  console.log(`[Headlights:debug] attempt ${entry.attempt} stored at window.__headlightDebug.attempts[${window.__headlightDebug.attempts.length - 1}]`);
+}
+
 async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   const { strength = "restore" } = opts;
   const debug = isHeadlightDebugEnabled();
+  const strategyOverride = getHeadlightStrategyOverride();
 
   const lights = await detectHeadlights(b64Original);
   if (!lights.length) {
     console.log("[Headlights] Aucun phare détecté");
-    return { ok: false, reason: "no-lights" };
+    return { ok: false, reason: "no-lights", source: "none" };
   }
 
   if (debug) {
     window.__headlightDebug = {
-      strategy: null,
+      source: null,        // filled at the end: "full-image:1" | "full-image:2" | "full-image:forced" | "per-headlight" | "none"
+      strategyOverride,
       lights,
       attempts: [],
     };
+  }
+
+  console.log(`[Headlights] orchestrator start (strategyOverride=${strategyOverride})`);
+
+  // ── per-headlight-only short-circuit ────────────────────────────────────
+  if (strategyOverride === "per-headlight-only") {
+    console.log("[Headlights] mode=per-headlight (forced by URL)");
+    const fb = await aiPolishHeadlightsPerLight(ctx, W, H, lights, { strength, debug });
+    const source = fb.ok ? "per-headlight" : "none";
+    if (debug) window.__headlightDebug.source = source;
+    console.log(`[Headlights] OUTPUT SOURCE = ${source}`);
+    return { ...fb, source };
   }
 
   // ── Attempt 1: full-image with the default strict prompt ──
@@ -1203,25 +1399,16 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   const a1 = await tryFullImageRestoration(ctx, W, H, lights, {
     strength, debug, strictPrompt: null, attempt: 1,
   });
-  if (debug) {
-    window.__headlightDebug.attempts.push({
-      mode: "full-image",
-      attempt: 1,
-      validation: a1.validation,
-      sentImage: a1.assets?.imageCanvas,
-      sentMask: a1.assets?.maskCanvas,
-      aiAtSourceSize: a1.aiAtSourceSize,
-      ok: a1.ok,
-      reason: a1.reason,
-    });
-  }
+  persistDebugAttempt(debug, a1);
   if (a1.ok) {
     compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
-    if (debug) window.__headlightDebug.strategy = "full-image:1";
+    if (debug) window.__headlightDebug.source = "full-image:1";
     console.log("[Headlights] ✓ full-image attempt 1 accepted by validator");
+    console.log("[Headlights] OUTPUT SOURCE = full-image:1");
     return {
       ok: true,
       mode: "full-image",
+      source: "full-image:1",
       attempt: 1,
       provider: a1.aiResponse?.provider,
       model: a1.aiResponse?.model,
@@ -1230,10 +1417,8 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   }
   console.warn("[Headlights] ✗ full-image attempt 1 rejected:", a1.reason, a1.validation?.reasons || a1.error || "");
 
-  // ── Attempt 2: full-image with STRICT_RETRY_PROMPT ──
-  // Only retry if the first failure was a validation issue (i.e. we got a
-  // response from the API). For network/API errors, skip straight to the
-  // per-headlight fallback or the local fallback.
+  // ── Attempt 2: full-image with STRICT_RETRY_PROMPT (only on validation failure) ──
+  let a2 = null;
   if (a1.reason === 'validation') {
     console.log("[Headlights] mode=full-image attempt=2 (stricter prompt)");
     const STRICTER_PROMPT_FROM_USER = [
@@ -1246,28 +1431,19 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       "Preserve the exact original headlight model, reflectors, bulbs and lens curvature.",
       "The output must be visually indistinguishable from the input outside the headlight lenses.",
     ].join(" ");
-    const a2 = await tryFullImageRestoration(ctx, W, H, lights, {
+    a2 = await tryFullImageRestoration(ctx, W, H, lights, {
       strength, debug, strictPrompt: STRICTER_PROMPT_FROM_USER, attempt: 2,
     });
-    if (debug) {
-      window.__headlightDebug.attempts.push({
-        mode: "full-image",
-        attempt: 2,
-        validation: a2.validation,
-        sentImage: a2.assets?.imageCanvas,
-        sentMask: a2.assets?.maskCanvas,
-        aiAtSourceSize: a2.aiAtSourceSize,
-        ok: a2.ok,
-        reason: a2.reason,
-      });
-    }
+    persistDebugAttempt(debug, a2);
     if (a2.ok) {
       compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
-      if (debug) window.__headlightDebug.strategy = "full-image:2";
+      if (debug) window.__headlightDebug.source = "full-image:2";
       console.log("[Headlights] ✓ full-image attempt 2 accepted by validator");
+      console.log("[Headlights] OUTPUT SOURCE = full-image:2");
       return {
         ok: true,
         mode: "full-image",
+        source: "full-image:2",
         attempt: 2,
         provider: a2.aiResponse?.provider,
         model: a2.aiResponse?.model,
@@ -1277,19 +1453,46 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     console.warn("[Headlights] ✗ full-image attempt 2 rejected:", a2.reason, a2.validation?.reasons || a2.error || "");
   }
 
-  // ── Fallback: per-headlight crops ──
-  console.warn("[Headlights] mode=per-headlight (fallback)");
-  if (debug) window.__headlightDebug.strategy = "per-headlight-fallback";
-  const fallback = await aiPolishHeadlightsPerLight(ctx, W, H, lights, { strength, debug });
-  if (fallback.ok) {
-    return { ...fallback, mode: "per-headlight" };
+  // ── full-image-only override: composite the best full-image result anyway ──
+  if (strategyOverride === "full-image-only") {
+    // Pick the attempt that came back with an image; prefer attempt 2 if it
+    // ran (stricter prompt), otherwise attempt 1.
+    const best = (a2 && a2.editedImg) ? a2 : (a1.editedImg ? a1 : null);
+    if (best) {
+      console.warn("[Headlights] strategy=full-image-only — compositing rejected result anyway for inspection");
+      console.warn("[Headlights] rejection reasons:", best.validation?.reasons);
+      compositeFullImageResult(ctx, best.editedImg, lights, W, H, best.aiResponse?.blend);
+      if (debug) window.__headlightDebug.source = "full-image:forced";
+      console.log("[Headlights] OUTPUT SOURCE = full-image:forced");
+      return {
+        ok: true,
+        mode: "full-image",
+        source: "full-image:forced",
+        attempt: best.attempt,
+        provider: best.aiResponse?.provider,
+        model: best.aiResponse?.model,
+        validation: best.validation,
+      };
+    }
+    // No usable AI output at all (network / API failure).
+    console.warn("[Headlights] strategy=full-image-only but no AI image was returned");
+    if (debug) window.__headlightDebug.source = "none";
+    return { ok: false, mode: "full-image-only", source: "none", error: a1.error || a2?.error };
   }
 
-  // ── Last-resort: server-authorized local filter ──
-  // (handled inside aiPolishHeadlightsPerLight already; if we get here it
-  //  means the per-light pipeline returned ok=false too)
+  // ── Fallback (auto strategy): per-headlight crops ──
+  console.warn("[Headlights] mode=per-headlight (fallback)");
+  const fallback = await aiPolishHeadlightsPerLight(ctx, W, H, lights, { strength, debug });
+  if (fallback.ok) {
+    if (debug) window.__headlightDebug.source = "per-headlight";
+    console.log("[Headlights] OUTPUT SOURCE = per-headlight");
+    return { ...fallback, mode: "per-headlight", source: "per-headlight" };
+  }
+
   console.warn("[Headlights] all strategies failed:", fallback);
-  return { ok: false, mode: "all-failed", perLight: fallback.perLight };
+  if (debug) window.__headlightDebug.source = "none";
+  console.log("[Headlights] OUTPUT SOURCE = none");
+  return { ok: false, mode: "all-failed", source: "none", perLight: fallback.perLight };
 }
 
 // ── Lustrage carrosserie ─────────────────────────────────────────────────────
