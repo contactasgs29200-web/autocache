@@ -1037,12 +1037,19 @@ function blurredCopy(sourceCanvas, sigmaPx) {
 // (sharp edges, fine plastic texture, reflector dots — the things the
 // downsample-then-upsample round-trip with gpt-image-1 destroys).
 //
-//   result = blur(AI) + (original - blur(original))
+//   result = original + boost × (blur(AI) - blur(original))
 //
-// This keeps each pixel sharp at the photo's native resolution while only
-// taking the AI's color shift in the masked area. Standard photo-retoucher
-// technique; perfect for "kill the yellow without losing detail".
-function frequencySeparation(aiCanvas, originalCanvas, sigmaPx) {
+// Algebraically equivalent to:
+//   result = blur(AI)×boost + original - blur(original)×boost
+//
+// When boost=1.0 this collapses to the textbook frequency separation
+//   blur(AI) + (original - blur(original)).
+//
+// We keep each pixel sharp at the photo's native resolution while taking the
+// AI's color shift in the masked area. The boost factor lets us amplify the
+// AI's low-frequency effect (yellow → clear shift) when the raw AI output is
+// too conservative for product taste.
+function frequencySeparation(aiCanvas, originalCanvas, sigmaPx, boost = 1.0) {
   const W = aiCanvas.width;
   const H = aiCanvas.height;
   const blurredAI = blurredCopy(aiCanvas, sigmaPx);
@@ -1055,14 +1062,15 @@ function frequencySeparation(aiCanvas, originalCanvas, sigmaPx) {
   const rid = rctx.createImageData(W, H);
   const rd = rid.data;
 
-  const aData = blurredAI.getContext('2d').getImageData(0, 0, W, H).data;
-  const oData = originalCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const aData  = blurredAI.getContext('2d').getImageData(0, 0, W, H).data;
+  const oData  = originalCanvas.getContext('2d').getImageData(0, 0, W, H).data;
   const obData = blurredOrig.getContext('2d').getImageData(0, 0, W, H).data;
+  const k = boost;
 
   for (let i = 0; i < aData.length; i += 4) {
-    rd[i]     = Math.max(0, Math.min(255, aData[i]     + oData[i]     - obData[i]));
-    rd[i + 1] = Math.max(0, Math.min(255, aData[i + 1] + oData[i + 1] - obData[i + 1]));
-    rd[i + 2] = Math.max(0, Math.min(255, aData[i + 2] + oData[i + 2] - obData[i + 2]));
+    rd[i]     = Math.max(0, Math.min(255, oData[i]     + k * (aData[i]     - obData[i])));
+    rd[i + 1] = Math.max(0, Math.min(255, oData[i + 1] + k * (aData[i + 1] - obData[i + 1])));
+    rd[i + 2] = Math.max(0, Math.min(255, oData[i + 2] + k * (aData[i + 2] - obData[i + 2])));
     rd[i + 3] = 255;
   }
   rctx.putImageData(rid, 0, 0);
@@ -1072,13 +1080,26 @@ function frequencySeparation(aiCanvas, originalCanvas, sigmaPx) {
 // Composite a full-image AI result back into the source canvas, only inside
 // the feathered headlight mask. Uses frequency separation to keep the
 // photo's native sharpness while taking the AI's restored color.
+//
+// Tuning notes:
+//   sigmaFactor controls the frequency cutoff (in % of min(W,H)).
+//     - too SMALL: the AI's color shift only survives at very coarse scales,
+//       so the mid-frequency yellowing of the lens stays in the result.
+//     - too LARGE: we'd start losing real detail (reflector ridges, plastic
+//       texture) and inheriting the AI's softness.
+//     0.015 keeps detail < ~30px sharp while capturing the full yellow→clear
+//     shift across the 100-300px lens scale.
+//   aiBoost amplifies the low-frequency difference between AI and original.
+//     1.0 = pure frequency separation. >1.0 pushes more of the AI's effect
+//     through. Safe up to ~1.4; beyond that color drift starts to bleed.
 function compositeFullImageResult(ctx, editedImg, lights, W, H, blendParams = null) {
   const params = {
-    expandOuter: 0.07,    // a touch wider outer alpha for softer blend
+    expandOuter: 0.07,
     expandInner: 0.025,
-    edgeBlur: 0.004,      // ~2× the previous edge blur — kills any seam
+    edgeBlur: 0.004,
     aiOpacity: 1.0,
-    sigmaFactor: 0.006,   // blur σ for freq separation, in fraction of min(W,H)
+    sigmaFactor: 0.015,   // was 0.006 — bumped so mid-frequency yellowing makes it into low-pass
+    aiBoost: 1.25,        // amplify AI low-freq shift by 25% to make the restoration clearly visible
     ...(blendParams || {}),
   };
 
@@ -1098,9 +1119,9 @@ function compositeFullImageResult(ctx, editedImg, lights, W, H, blendParams = nu
   aictx.drawImage(editedImg, 0, 0, W, H);
 
   // 3. Frequency separation: AI's color + Original's sharp detail.
-  const sigma = Math.max(2, Math.round(Math.min(W, H) * params.sigmaFactor));
-  const fused = frequencySeparation(aiAtSourceSize, original, sigma);
-  console.log(`[Headlights] frequency separation σ=${sigma}px (photo ${W}×${H}, native detail preserved)`);
+  const sigma = Math.max(8, Math.round(Math.min(W, H) * params.sigmaFactor));
+  const fused = frequencySeparation(aiAtSourceSize, original, sigma, params.aiBoost);
+  console.log(`[Headlights] frequency separation σ=${sigma}px boost=${params.aiBoost}× (photo ${W}×${H}, native detail preserved)`);
 
   // 4. Build the alpha mask (smooth Bezier polygons, strong outer feather).
   const alpha = document.createElement('canvas');
