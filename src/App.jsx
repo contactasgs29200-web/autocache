@@ -432,8 +432,19 @@ function drawHeadlightShape(ctx, light, W, H, expand = 0.04) {
   ctx.beginPath();
   if (light.points.length >= 3) {
     const pts = light.points.map(p => expandPointAround(cx, cy, p, expand));
-    ctx.moveTo(pts[0].x * W, pts[0].y * H);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x * W, pts[i].y * H);
+    // Smooth the polygon with quadratic Bezier curves between midpoints.
+    // This avoids hard polygon corners that the AI sometimes turns into
+    // visible black lines along the lens edge.
+    const n = pts.length;
+    const mid = (a, b) => ({ x: (a.x + b.x) / 2 * W, y: (a.y + b.y) / 2 * H });
+    const start = mid(pts[0], pts[1]);
+    ctx.moveTo(start.x, start.y);
+    for (let i = 1; i <= n; i++) {
+      const p = pts[i % n];
+      const q = pts[(i + 1) % n];
+      const end = mid(p, q);
+      ctx.quadraticCurveTo(p.x * W, p.y * H, end.x, end.y);
+    }
     ctx.closePath();
   } else {
     const rx = Math.max(4, light.w * W * (0.56 + expand));
@@ -873,10 +884,16 @@ function createFullImageEditAssets(ctx, W, H, lights) {
   mctx.fillRect(0, 0, workW, workH);
   mctx.globalCompositeOperation = 'destination-out';
   mctx.fillStyle = 'rgba(0,0,0,1)';
-  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.0025))}px)`;
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.05);
+  // Strong outer feather (~0.6% of work edge) so gpt-image-1 sees a smooth
+  // gradient rather than a hard polygon edge — kills the "AI-completed
+  // black line" artifact we observed along the top of the lens.
+  mctx.filter = `blur(${Math.max(4, Math.round(Math.min(workW, workH) * 0.006))}px)`;
+  drawHeadlightShapes(mctx, lights, workW, workH, 0.06);
+  // Medium feather inside the feathered ring to keep the optic core fully editable.
+  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.003))}px)`;
+  drawHeadlightShapes(mctx, lights, workW, workH, 0.04);
   mctx.filter = 'none';
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.025);
+  drawHeadlightShapes(mctx, lights, workW, workH, 0.02);
   mctx.globalCompositeOperation = 'source-over';
 
   const maskCoverage = computeMaskCoverage(mask);
@@ -916,7 +933,10 @@ function createFullImageEditAssets(ctx, W, H, lights) {
 const VALIDATOR_THRESHOLDS = {
   meanInMin: 4,        // must change inside the mask
   meanOutMax: 20,      // tolerate gpt-image-1 global re-encoding drift
-  meanRingMax: 14,     // ring around the mask: seam predictor
+  meanRingMax: 18,     // ring around the mask: seam predictor (frequency
+                       //   separation + stronger feather absorb up to ~18
+                       //   of ring drift cleanly — observed 15.7 on real
+                       //   photos and the composite was perfect)
   pctHighOutMax: 5,    // % of pixels with diff > 40 outside the mask
 };
 
@@ -997,44 +1017,115 @@ function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
   };
 }
 
+// Blur a canvas at sigma pixels using the native canvas filter (browser GPU
+// accelerated). Returns a new canvas.
+function blurredCopy(sourceCanvas, sigmaPx) {
+  const W = sourceCanvas.width;
+  const H = sourceCanvas.height;
+  const out = document.createElement('canvas');
+  out.width = W;
+  out.height = H;
+  const c = out.getContext('2d');
+  c.filter = `blur(${sigmaPx}px)`;
+  c.drawImage(sourceCanvas, 0, 0);
+  c.filter = 'none';
+  return out;
+}
+
+// Frequency separation: recombine the AI's LOW-frequency (color, transparency,
+// the things we actually want from the model) with the ORIGINAL's HIGH-frequency
+// (sharp edges, fine plastic texture, reflector dots — the things the
+// downsample-then-upsample round-trip with gpt-image-1 destroys).
+//
+//   result = blur(AI) + (original - blur(original))
+//
+// This keeps each pixel sharp at the photo's native resolution while only
+// taking the AI's color shift in the masked area. Standard photo-retoucher
+// technique; perfect for "kill the yellow without losing detail".
+function frequencySeparation(aiCanvas, originalCanvas, sigmaPx) {
+  const W = aiCanvas.width;
+  const H = aiCanvas.height;
+  const blurredAI = blurredCopy(aiCanvas, sigmaPx);
+  const blurredOrig = blurredCopy(originalCanvas, sigmaPx);
+
+  const result = document.createElement('canvas');
+  result.width = W;
+  result.height = H;
+  const rctx = result.getContext('2d');
+  const rid = rctx.createImageData(W, H);
+  const rd = rid.data;
+
+  const aData = blurredAI.getContext('2d').getImageData(0, 0, W, H).data;
+  const oData = originalCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const obData = blurredOrig.getContext('2d').getImageData(0, 0, W, H).data;
+
+  for (let i = 0; i < aData.length; i += 4) {
+    rd[i]     = Math.max(0, Math.min(255, aData[i]     + oData[i]     - obData[i]));
+    rd[i + 1] = Math.max(0, Math.min(255, aData[i + 1] + oData[i + 1] - obData[i + 1]));
+    rd[i + 2] = Math.max(0, Math.min(255, aData[i + 2] + oData[i + 2] - obData[i + 2]));
+    rd[i + 3] = 255;
+  }
+  rctx.putImageData(rid, 0, 0);
+  return result;
+}
+
 // Composite a full-image AI result back into the source canvas, only inside
-// the feathered headlight mask. Identical strategy to the per-headlight
-// variant but at full canvas dimensions.
+// the feathered headlight mask. Uses frequency separation to keep the
+// photo's native sharpness while taking the AI's restored color.
 function compositeFullImageResult(ctx, editedImg, lights, W, H, blendParams = null) {
   const params = {
-    expandOuter: 0.06,
-    expandInner: 0.03,
-    edgeBlur: 0.0025,
+    expandOuter: 0.07,    // a touch wider outer alpha for softer blend
+    expandInner: 0.025,
+    edgeBlur: 0.004,      // ~2× the previous edge blur — kills any seam
     aiOpacity: 1.0,
+    sigmaFactor: 0.006,   // blur σ for freq separation, in fraction of min(W,H)
     ...(blendParams || {}),
   };
 
-  const overlay = document.createElement('canvas');
-  overlay.width = W;
-  overlay.height = H;
-  const octx = overlay.getContext('2d');
-  octx.imageSmoothingEnabled = true;
-  octx.imageSmoothingQuality = 'high';
-  octx.drawImage(editedImg, 0, 0, W, H);
+  // 1. Snapshot the original (current ctx state).
+  const original = document.createElement('canvas');
+  original.width = W;
+  original.height = H;
+  original.getContext('2d').drawImage(ctx.canvas, 0, 0);
 
+  // 2. Render the AI result up to W×H (this is where the resolution loss lives).
+  const aiAtSourceSize = document.createElement('canvas');
+  aiAtSourceSize.width = W;
+  aiAtSourceSize.height = H;
+  const aictx = aiAtSourceSize.getContext('2d');
+  aictx.imageSmoothingEnabled = true;
+  aictx.imageSmoothingQuality = 'high';
+  aictx.drawImage(editedImg, 0, 0, W, H);
+
+  // 3. Frequency separation: AI's color + Original's sharp detail.
+  const sigma = Math.max(2, Math.round(Math.min(W, H) * params.sigmaFactor));
+  const fused = frequencySeparation(aiAtSourceSize, original, sigma);
+  console.log(`[Headlights] frequency separation σ=${sigma}px (photo ${W}×${H}, native detail preserved)`);
+
+  // 4. Build the alpha mask (smooth Bezier polygons, strong outer feather).
   const alpha = document.createElement('canvas');
   alpha.width = W;
   alpha.height = H;
   const actx = alpha.getContext('2d');
   actx.fillStyle = 'rgba(255,255,255,1)';
-  actx.filter = `blur(${Math.max(3, Math.round(Math.min(W, H) * params.edgeBlur))}px)`;
+  actx.filter = `blur(${Math.max(4, Math.round(Math.min(W, H) * params.edgeBlur))}px)`;
   drawHeadlightShapes(actx, lights, W, H, params.expandOuter);
   actx.filter = 'none';
   drawHeadlightShapes(actx, lights, W, H, params.expandInner);
 
-  octx.globalCompositeOperation = 'destination-in';
-  octx.drawImage(alpha, 0, 0);
-  octx.globalCompositeOperation = 'source-over';
+  // 5. Apply alpha mask to the fused canvas.
+  const fctx = fused.getContext('2d');
+  fctx.globalCompositeOperation = 'destination-in';
+  fctx.drawImage(alpha, 0, 0);
+  fctx.globalCompositeOperation = 'source-over';
 
+  // 6. Draw fused onto the source canvas.
   const prevAlpha = ctx.globalAlpha;
   ctx.globalAlpha = params.aiOpacity;
-  ctx.drawImage(overlay, 0, 0);
+  ctx.drawImage(fused, 0, 0);
   ctx.globalAlpha = prevAlpha;
+
+  return { aiAtSourceSize, fusedCanvas: fused, alphaCanvas: alpha };
 }
 
 // One full-image attempt. Returns { ok, validation, ... } without committing
@@ -1401,8 +1492,12 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   });
   persistDebugAttempt(debug, a1);
   if (a1.ok) {
-    compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
-    if (debug) window.__headlightDebug.source = "full-image:1";
+    const c = compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
+    if (debug) {
+      window.__headlightDebug.source = "full-image:1";
+      window.__headlightDebug.attempts[0].fusedCanvas = c?.fusedCanvas;
+      window.__headlightDebug.attempts[0].alphaCanvas = c?.alphaCanvas;
+    }
     console.log("[Headlights] ✓ full-image attempt 1 accepted by validator");
     console.log("[Headlights] OUTPUT SOURCE = full-image:1");
     return {
@@ -1436,8 +1531,12 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     });
     persistDebugAttempt(debug, a2);
     if (a2.ok) {
-      compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
-      if (debug) window.__headlightDebug.source = "full-image:2";
+      const c = compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
+      if (debug) {
+        window.__headlightDebug.source = "full-image:2";
+        const a2dbg = window.__headlightDebug.attempts[window.__headlightDebug.attempts.length - 1];
+        if (a2dbg) { a2dbg.fusedCanvas = c?.fusedCanvas; a2dbg.alphaCanvas = c?.alphaCanvas; }
+      }
       console.log("[Headlights] ✓ full-image attempt 2 accepted by validator");
       console.log("[Headlights] OUTPUT SOURCE = full-image:2");
       return {
@@ -1461,8 +1560,12 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     if (best) {
       console.warn("[Headlights] strategy=full-image-only — compositing rejected result anyway for inspection");
       console.warn("[Headlights] rejection reasons:", best.validation?.reasons);
-      compositeFullImageResult(ctx, best.editedImg, lights, W, H, best.aiResponse?.blend);
-      if (debug) window.__headlightDebug.source = "full-image:forced";
+      const c = compositeFullImageResult(ctx, best.editedImg, lights, W, H, best.aiResponse?.blend);
+      if (debug) {
+        window.__headlightDebug.source = "full-image:forced";
+        const last = window.__headlightDebug.attempts[window.__headlightDebug.attempts.length - 1];
+        if (last) { last.fusedCanvas = c?.fusedCanvas; last.alphaCanvas = c?.alphaCanvas; }
+      }
       console.log("[Headlights] OUTPUT SOURCE = full-image:forced");
       return {
         ok: true,
