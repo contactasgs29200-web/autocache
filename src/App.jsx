@@ -2739,85 +2739,22 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     actualBottomFrac = (lastRow + 1) / carImg.height;
   } catch (_) { /* fallback to 1.0 */ }
 
-  // ── Showroom shadow v3 — fixed placement, no auto-detection ──
-  const SHADOW_VISIBLE_TEST_MODE = false;  // true → ×2.5 opacity for validation
-  const SHADOW_CONTACT_ENABLED   = true;
-  const SHADOW_TIRES_ENABLED     = true;
-  const SHADOW_AMBIENT_ENABLED   = true;
+  // ── Showroom shadow v4 — attached to car, no detection ──
+  const SHADOW_VISIBLE_TEST_MODE = false;
+  const SHADOW_ATTACH_TO_CAR     = true;
   const shadowIntensity          = 1.0;
-  const showroomShadowPreset     = 'soft_indoor';
-
-  const CONTACT_OPACITY      = 0.26;
-  const CONTACT_BLUR         = 18;
-  const CONTACT_WIDTH_RATIO  = 0.82;
-  const CONTACT_HEIGHT_RATIO = 0.07;
-  const CONTACT_Y_OFFSET     = 4;
-
-  const TIRE_OPACITY       = 0.38;
-  const TIRE_BLUR          = 10;
-  const TIRE_WIDTH_RATIO   = 0.13;
-  const TIRE_HEIGHT_RATIO  = 0.035;
-  const TIRE_POSITIONS     = [0.24, 0.72];
-
-  const AMBIENT_OPACITY    = 0.08;
-  const AMBIENT_BLUR       = 45;
-  const AMBIENT_Y_OFFSET   = 8;
-
   const oMul = SHADOW_VISIBLE_TEST_MODE ? 2.5 * shadowIntensity : shadowIntensity;
 
-  const groundY = carY + actualBottomFrac * ch - 2;
-  const carCX = carX + cw / 2;
+  const carBottom = carY + actualBottomFrac * ch;
+  const maxShadowY = carBottom + ch * 0.025;
 
-  // Find left/right mask bounds for logging
-  let maskLeft = cw, maskRight = 0, maskBottom = 0;
-  try {
-    const scanC2 = document.createElement('canvas');
-    scanC2.width = Math.round(cw); scanC2.height = Math.round(ch);
-    const sc2 = scanC2.getContext('2d');
-    sc2.drawImage(carImg, 0, 0, scanC2.width, scanC2.height);
-    const sd = sc2.getImageData(0, 0, scanC2.width, scanC2.height).data;
-    for (let y = 0; y < scanC2.height; y++) {
-      for (let x = 0; x < scanC2.width; x++) {
-        if (sd[(y * scanC2.width + x) * 4 + 3] > 20) {
-          if (x < maskLeft) maskLeft = x;
-          if (x > maskRight) maskRight = x;
-          if (y > maskBottom) maskBottom = y;
-        }
-      }
-    }
-  } catch (_) {}
-
-  const tireShadowPositions = TIRE_POSITIONS.map(frac => ({
-    frac,
-    absX: Math.round(carX + frac * cw),
-    absY: Math.round(groundY),
-  }));
-
-  console.log('[Showroom shadow]', {
-    preset: showroomShadowPreset,
-    intensity: shadowIntensity,
-    testMode: SHADOW_VISIBLE_TEST_MODE,
-    oMul,
-    maskBounds: { left: Math.round(carX + maskLeft), right: Math.round(carX + maskRight), bottom: Math.round(carY + maskBottom), width: maskRight - maskLeft },
-    groundY: Math.round(groundY),
-    carBounds: { x: Math.round(carX), y: Math.round(carY), w: Math.round(cw), h: Math.round(ch) },
-    shadowLayerBounds: {
-      contact: { x: Math.round(carCX - cw * CONTACT_WIDTH_RATIO / 2), y: Math.round(groundY + CONTACT_Y_OFFSET), w: Math.round(cw * CONTACT_WIDTH_RATIO), h: Math.round(ch * CONTACT_HEIGHT_RATIO) },
-      ambient: { x: Math.round(carCX - cw * 0.52), y: Math.round(groundY + AMBIENT_Y_OFFSET), w: Math.round(cw * 1.04), h: Math.round(ch * 0.06) },
-    },
-    tireShadowPositions,
-    finalShadowOpacity: { contact: +(CONTACT_OPACITY * oMul).toFixed(3), tire: +(TIRE_OPACITY * oMul).toFixed(3), ambient: +(AMBIENT_OPACITY * oMul).toFixed(3) },
-  });
-
-  // Draw a solid black ellipse, blur it, composite with globalAlpha.
-  // debugColor: 'blue'|'red'|'green' for test mode visualization.
-  function drawShadowEllipse(cx, cy, rw, rh, opacity, blurPx, debugColor) {
+  function drawShadowEllipse(x, y, w, h, opacity, blurPx, debugColor) {
+    const rw = w / 2, rh = h / 2;
+    const cx = x + rw, cy = y + rh;
     const pad = blurPx * 3;
-    const ew = Math.ceil(rw * 2 + pad * 2);
-    const eh = Math.ceil(rh * 2 + pad * 2);
+    const ew = Math.ceil(w + pad * 2);
+    const eh = Math.ceil(h + pad * 2);
     if (ew < 4 || eh < 4) return;
-
-    // 1) Solid ellipse on offscreen canvas
     const ec = document.createElement('canvas');
     ec.width = ew; ec.height = eh;
     const ectx = ec.getContext('2d');
@@ -2825,62 +2762,55 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ectx.beginPath();
     ectx.ellipse(ew / 2, eh / 2, rw, rh, 0, 0, Math.PI * 2);
     ectx.fill();
-
-    // 2) Blur
     const bc = document.createElement('canvas');
     bc.width = ew; bc.height = eh;
     const bctx = bc.getContext('2d');
     bctx.filter = `blur(${blurPx}px)`;
     bctx.drawImage(ec, 0, 0);
-
-    // 3) Composite onto main canvas
     ctx.save();
     ctx.globalAlpha = opacity * oMul;
     ctx.drawImage(bc, cx - ew / 2, cy - eh / 2);
     ctx.restore();
   }
 
-  // ── Layer 1: Contact shadow (underbody ellipse) ──
-  if (SHADOW_CONTACT_ENABLED) {
-    const contactRW = cw * CONTACT_WIDTH_RATIO / 2;
-    const contactRH = ch * CONTACT_HEIGHT_RATIO / 2;
-    drawShadowEllipse(
-      carCX, groundY + CONTACT_Y_OFFSET,
-      contactRW, contactRH,
-      CONTACT_OPACITY, CONTACT_BLUR,
-      SHADOW_VISIBLE_TEST_MODE ? 'blue' : null,
-    );
-    console.log('[Showroom shadow] contact drawn', { cx: Math.round(carCX), cy: Math.round(groundY + CONTACT_Y_OFFSET), rw: Math.round(contactRW), rh: Math.round(contactRH), opacity: +(CONTACT_OPACITY * oMul).toFixed(3) });
-  }
+  // All positions relative to car bbox (carX, carY, cw, ch)
+  // Shadows drawn partially UNDER the car — car is drawn AFTER
 
-  // ── Layer 2: Tire spot shadows (forced positions) ──
-  if (SHADOW_TIRES_ENABLED) {
-    const tireRW = cw * TIRE_WIDTH_RATIO / 2;
-    const tireRH = ch * TIRE_HEIGHT_RATIO / 2;
-    for (const frac of TIRE_POSITIONS) {
-      const tx = carX + frac * cw;
-      drawShadowEllipse(
-        tx, groundY + 2,
-        tireRW, tireRH,
-        TIRE_OPACITY, TIRE_BLUR,
-        SHADOW_VISIBLE_TEST_MODE ? 'red' : null,
-      );
-      console.log('[Showroom shadow] tire drawn', { frac, cx: Math.round(tx), cy: Math.round(groundY + 2), rw: Math.round(tireRW), rh: Math.round(tireRH), opacity: +(TIRE_OPACITY * oMul).toFixed(3) });
-    }
-  }
+  // ── Rear tire shadow ──
+  const rearX = carX + cw * 0.26 - cw * 0.10 / 2;
+  const rearY = carBottom - ch * 0.015 - ch * 0.035 / 2;
+  drawShadowEllipse(rearX, rearY, cw * 0.10, ch * 0.035, 0.32, 8,
+    SHADOW_VISIBLE_TEST_MODE ? 'red' : null);
 
-  // ── Layer 3: Ambient shadow (wide soft glow) ──
-  if (SHADOW_AMBIENT_ENABLED) {
-    const ambRW = cw * 0.52;
-    const ambRH = ch * 0.04;
-    drawShadowEllipse(
-      carCX, groundY + AMBIENT_Y_OFFSET,
-      ambRW, ambRH,
-      AMBIENT_OPACITY, AMBIENT_BLUR,
-      SHADOW_VISIBLE_TEST_MODE ? 'green' : null,
-    );
-    console.log('[Showroom shadow] ambient drawn', { cx: Math.round(carCX), cy: Math.round(groundY + AMBIENT_Y_OFFSET), rw: Math.round(ambRW), rh: Math.round(ambRH), opacity: +(AMBIENT_OPACITY * oMul).toFixed(3) });
-  }
+  // ── Front tire shadow ──
+  const frontX = carX + cw * 0.62 - cw * 0.10 / 2;
+  const frontY = carBottom - ch * 0.015 - ch * 0.035 / 2;
+  drawShadowEllipse(frontX, frontY, cw * 0.10, ch * 0.035, 0.32, 8,
+    SHADOW_VISIBLE_TEST_MODE ? 'red' : null);
+
+  // ── Contact shadow (underbody strip) ──
+  const contactX = carX + cw * 0.18;
+  const contactY = carBottom - ch * 0.02 - ch * 0.04 / 2;
+  drawShadowEllipse(contactX, contactY, cw * 0.62, ch * 0.04, 0.14, 12,
+    SHADOW_VISIBLE_TEST_MODE ? 'blue' : null);
+
+  // ── Front bumper/spoiler shadow ──
+  const bumperX = carX + cw * 0.55;
+  const bumperY = carBottom - ch * 0.015 - ch * 0.025 / 2;
+  drawShadowEllipse(bumperX, bumperY, cw * 0.28, ch * 0.025, 0.12, 8,
+    SHADOW_VISIBLE_TEST_MODE ? 'green' : null);
+
+  console.log('[Showroom shadow v4]', {
+    testMode: SHADOW_VISIBLE_TEST_MODE,
+    attachToCar: SHADOW_ATTACH_TO_CAR,
+    oMul,
+    carBounds: { x: Math.round(carX), y: Math.round(carY), w: Math.round(cw), h: Math.round(ch), bottom: Math.round(carBottom) },
+    maxShadowY: Math.round(maxShadowY),
+    rearTire:  { x: Math.round(rearX),  y: Math.round(rearY),  w: Math.round(cw * 0.10), h: Math.round(ch * 0.035), opacity: 0.32 },
+    frontTire: { x: Math.round(frontX), y: Math.round(frontY), w: Math.round(cw * 0.10), h: Math.round(ch * 0.035), opacity: 0.32 },
+    contact:   { x: Math.round(contactX), y: Math.round(contactY), w: Math.round(cw * 0.62), h: Math.round(ch * 0.04), opacity: 0.14 },
+    bumper:    { x: Math.round(bumperX), y: Math.round(bumperY), w: Math.round(cw * 0.28), h: Math.round(ch * 0.025), opacity: 0.12 },
+  });
   // ── Fin ombre ──
   ctx.save();
   ctx.imageSmoothingEnabled = true;
