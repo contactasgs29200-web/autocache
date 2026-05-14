@@ -3554,7 +3554,7 @@ export default function AutoCache() {
   const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
   const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
   const canUseShowroom  = userPlan === "pro" || userPlan === "trial";
-  const canUseHeadlight   = userPlan === "pro" || userPlan === "essential";
+  const canUseHeadlight   = userPlan === "pro";
   const canUseBodyPolish  = userPlan === "pro" || userPlan === "essential";
   const canStart = logo && photos.length > 0 && !processing;
 
@@ -4360,8 +4360,8 @@ export default function AutoCache() {
                     active: headlightPolish,
                     toggle: () => { if (!canUseHeadlight) { setShowPlansModal(true); return; } setHeadlightPolish(p => !p); },
                     icon: "💡",
-                    label: "Lustrage des optiques",
-                    sub: canUseHeadlight ? "Retouche IA des phares jaunis" : "Disponible dès l'abonnement Essentiel",
+                    label: "Lustrage Optique Pro",
+                    sub: canUseHeadlight ? "Retouche IA des phares jaunis" : "Disponible avec l'abonnement Pro",
                     locked: !canUseHeadlight,
                   },
                   {
@@ -5692,7 +5692,7 @@ export default function AutoCache() {
                         { ok: true,  label: "Logo importé ou généré" },
                         { ok: true,  label: "Ajustements couleurs" },
                         { ok: true,  label: "Amélioration automatique" },
-                        { ok: true,  label: "Lustrage des optiques" },
+                        { ok: false, label: "Lustrage Optique Pro" },
                         { ok: false, label: "Showroom Virtuel (fonds IA)" },
                         { ok: false, label: "Enseigne murale" },
                       ],
@@ -5707,7 +5707,7 @@ export default function AutoCache() {
                         { ok: true, label: "Logo importé ou généré" },
                         { ok: true, label: "Ajustements couleurs" },
                         { ok: true, label: "Amélioration automatique" },
-                        { ok: true, label: "Lustrage des optiques" },
+                        { ok: true, label: "Lustrage Optique Pro" },
                         { ok: true, label: "Showroom Virtuel (fonds IA)" },
                         { ok: true, label: "Enseigne murale" },
                       ],
@@ -5933,7 +5933,7 @@ export default function AutoCache() {
                     { ok: true,  label: "Cache plaque personnalisé" },
                     { ok: true,  label: "Logo importé ou généré" },
                     { ok: true,  label: "Ajustements couleurs" },
-                    { ok: true,  label: "Lustrage des optiques" },
+                    { ok: false, label: "Lustrage Optique Pro" },
                     { ok: false, label: "Showroom Virtuel (fonds IA)" },
                     { ok: false, label: "Enseigne murale" },
                   ],
@@ -5948,7 +5948,7 @@ export default function AutoCache() {
                     { ok: true, label: "Cache plaque personnalisé" },
                     { ok: true, label: "Logo importé ou généré" },
                     { ok: true, label: "Ajustements couleurs" },
-                    { ok: true, label: "Lustrage des optiques" },
+                    { ok: true, label: "Lustrage Optique Pro" },
                     { ok: true, label: "Showroom Virtuel (fonds IA)" },
                     { ok: true, label: "Enseigne murale" },
                   ],
