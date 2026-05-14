@@ -3237,6 +3237,8 @@ export default function AutoCache() {
   const [showPlansModal, setShowPlansModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
+  const [showHeadlightInfoModal, setShowHeadlightInfoModal] = useState(false);
+  const [headlightInfoDismissed, setHeadlightInfoDismissed] = useState(() => localStorage.getItem('headlightInfoDismissed') === '1');
   const [hoveredPlan, setHoveredPlan] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(null); // "essential" | "pro" | null
   const [portalLoading, setPortalLoading] = useState(null); // null | "invoices" | "cancel" | "upgrade"
@@ -3435,7 +3437,7 @@ export default function AutoCache() {
     setPhotos(prev => [...prev, ...imgs.map(f => ({ file: f, preview: URL.createObjectURL(f), id: `${f.name}-${Math.random()}` }))]);
   };
 
-  const start = async () => {
+  const startAfterInfo = async () => {
     if (!logo || !photos.length) return;
     const photosUsed = user?.user_metadata?.photos_used ?? 0;
     if (photosUsed >= PLAN_LIMIT) { setShowUpgradeModal(true); return; }
@@ -3515,6 +3517,14 @@ export default function AutoCache() {
     setProcessing(false);
     setTab("results");
     if (newCount >= PLAN_LIMIT) setShowUpgradeModal(true);
+  };
+
+  const start = () => {
+    if (headlightPolish && !headlightInfoDismissed) {
+      setShowHeadlightInfoModal(true);
+      return;
+    }
+    startAfterInfo();
   };
 
   const downloadOne = r => { const a = document.createElement("a"); a.href = r.showroomDataURL || r.processed; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click(); };
@@ -5549,6 +5559,44 @@ export default function AutoCache() {
               : lbZoom > 1
               ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
               : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Info Lustrage Optique Pro ── */}
+      {showHeadlightInfoModal && (
+        <div onClick={() => setShowHeadlightInfoModal(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "24px 16px" : "36px 40px", maxWidth: 440, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ textAlign: "center", marginBottom: 20 }}>
+              <span style={{ fontSize: 32 }}>💡</span>
+              <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", marginTop: 8 }}>Lustrage Optique Pro</div>
+            </div>
+            <div style={{ fontSize: 12, color: "#bbb", lineHeight: 1.7, fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>
+              Le mode <span style={{ color: "#f26522", fontWeight: 700 }}>Lustrage Optique Pro</span> utilise l'intelligence artificielle pour restaurer les optiques jaunies de vos véhicules.
+            </div>
+            <div style={{ fontSize: 11, color: "#999", lineHeight: 1.7, fontFamily: "'JetBrains Mono',monospace", marginBottom: 24 }}>
+              <div style={{ marginBottom: 6 }}>⏱ Le temps de traitement est plus long qu'un traitement classique.</div>
+              <div>📸 Les résultats sont nettement meilleurs sur les <span style={{ color: "#e0dbd4", fontWeight: 700 }}>photos de face</span>.</div>
+            </div>
+            <label
+              onClick={() => {
+                const next = !headlightInfoDismissed;
+                setHeadlightInfoDismissed(next);
+                localStorage.setItem('headlightInfoDismissed', next ? '1' : '0');
+              }}
+              style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 24, padding: "10px 12px", background: "#0a0a0a", border: "1px solid #1c1c1c", borderRadius: 4 }}>
+              <div style={{ width: 14, height: 14, borderRadius: 3, border: `2px solid ${headlightInfoDismissed ? "#f26522" : "#444"}`, background: headlightInfoDismissed ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {headlightInfoDismissed && <span style={{ color: "#090909", fontSize: 10, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+              </div>
+              <span style={{ fontSize: 10, color: "#777", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>Ne plus afficher ce message</span>
+            </label>
+            <button
+              onClick={() => { setShowHeadlightInfoModal(false); startAfterInfo(); }}
+              style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              OK
+            </button>
           </div>
         </div>
       )}
