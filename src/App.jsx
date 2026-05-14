@@ -1016,6 +1016,13 @@ function getHeadlightMode() {
   } catch { return "auto"; }
 }
 
+function isForceRejectedEnabled() {
+  if (typeof window === "undefined") return false;
+  try {
+    return new URLSearchParams(window.location.search).get("forceRejected") === "1";
+  } catch { return false; }
+}
+
 // Build a colored "diff map" canvas where pixel intensity = |before - after|.
 // Used only in debug to make hidden drift visible.
 function buildDiffMap(beforeCanvas, afterCanvas) {
@@ -1392,6 +1399,66 @@ function applyLensEnhancement(ctx, W, H, lights) {
   }
   ctx.putImageData(id, 0, 0);
   console.log('[Headlights] lens post-process applied (dehaze + clarity + unsharp mask)');
+}
+
+function applySafeLensPolish(ctx, W, H, lights, maskMode = 'tight') {
+  const expand = maskMode === 'lens' ? -0.06 : 0.02;
+  const expandInner = maskMode === 'lens' ? -0.08 : -0.01;
+
+  const lensMask = document.createElement('canvas');
+  lensMask.width = W;
+  lensMask.height = H;
+  const lctx = lensMask.getContext('2d');
+  lctx.fillStyle = 'rgba(255,255,255,1)';
+  lctx.filter = `blur(${Math.max(2, Math.round(Math.min(W, H) * 0.002))}px)`;
+  drawHeadlightShapes(lctx, lights, W, H, expand);
+  lctx.filter = 'none';
+  drawHeadlightShapes(lctx, lights, W, H, expandInner);
+
+  const id = ctx.getImageData(0, 0, W, H);
+  const d = id.data;
+  const lm = lctx.getImageData(0, 0, W, H).data;
+
+  const blurred = blurredCopy(ctx.canvas, Math.max(4, Math.round(Math.min(W, H) * 0.018)));
+  const bData = blurred.getContext('2d').getImageData(0, 0, W, H).data;
+
+  for (let i = 0; i < d.length; i += 4) {
+    if (lm[i + 3] < 8) continue;
+    const alpha = lm[i + 3] / 255;
+
+    let r = d[i], g = d[i + 1], b = d[i + 2];
+
+    const yellowness = (r + g) / 2 - b;
+    if (yellowness > 15) {
+      const correction = Math.min(yellowness * 0.18, 20);
+      r = Math.max(0, Math.round(r - correction * 0.45));
+      g = Math.max(0, Math.round(g - correction * 0.35));
+      b = Math.min(255, Math.round(b + correction * 0.25));
+    }
+
+    const t_r = r / 255, t_g = g / 255, t_b = b / 255;
+    const s_r = 3 * t_r * t_r - 2 * t_r * t_r * t_r;
+    const s_g = 3 * t_g * t_g - 2 * t_g * t_g * t_g;
+    const s_b = 3 * t_b * t_b - 2 * t_b * t_b * t_b;
+    r = Math.max(0, Math.min(255, Math.round((t_r + (s_r - t_r) * 0.06) * 255)));
+    g = Math.max(0, Math.min(255, Math.round((t_g + (s_g - t_g) * 0.06) * 255)));
+    b = Math.max(0, Math.min(255, Math.round((t_b + (s_b - t_b) * 0.06) * 255)));
+
+    r = Math.min(255, r + 2);
+    g = Math.min(255, g + 2);
+    b = Math.min(255, b + 3);
+
+    const sh = 0.25;
+    const sr = Math.max(0, Math.min(255, Math.round(r + sh * (r - bData[i]))));
+    const sg = Math.max(0, Math.min(255, Math.round(g + sh * (g - bData[i + 1]))));
+    const sb = Math.max(0, Math.min(255, Math.round(b + sh * (b - bData[i + 2]))));
+
+    d[i]     = Math.round(d[i]     + (sr - d[i])     * alpha);
+    d[i + 1] = Math.round(d[i + 1] + (sg - d[i + 1]) * alpha);
+    d[i + 2] = Math.round(d[i + 2] + (sb - d[i + 2]) * alpha);
+  }
+  ctx.putImageData(id, 0, 0);
+  console.log('[Headlights] safe lens polish applied (yellow reduction + dehaze + clarity + sharpen)');
 }
 
 // Blur a canvas at sigma pixels using the native canvas filter (browser GPU
@@ -2118,10 +2185,11 @@ async function runFullPhotoIdentical(ctx, W, H, lights, opts = {}) {
     console.warn("[Headlights] ✗ full-photo-identical attempt 2 rejected:", a2.reason, a2.validation?.reasons || a2.error || "");
   }
 
-  // ── Force output: composite the best result anyway for inspection ──
+  // ── Both attempts rejected ──
   const best = (a2 && a2.editedImg) ? a2 : (a1.editedImg ? a1 : null);
-  if (best) {
-    console.warn("[Headlights] full-photo-identical — both rejected, forcing output for inspection");
+
+  if (best && isForceRejectedEnabled()) {
+    console.warn("[Headlights] full-photo-identical — both rejected, forcing output (forceRejected=1)");
     console.warn("[Headlights] rejection reasons:", best.validation?.reasons);
     compositeFullImageResult(ctx, best.editedImg, lights, W, H, best.aiResponse?.blend);
     const finalSource = "full-photo-identical:forced";
@@ -2146,15 +2214,26 @@ async function runFullPhotoIdentical(ctx, W, H, lights, opts = {}) {
     };
   }
 
-  // No AI output at all (network/API failures).
-  const finalSource = "none";
+  // Both rejected and forceRejected not enabled — apply safe polish on original
+  console.warn("[Headlights] full-photo-identical — both rejected, rejected output NOT used");
+  console.warn("[Headlights] rejection reasons:", best?.validation?.reasons);
+  applySafeLensPolish(ctx, W, H, lights, maskMode);
+  const finalSource = "safe-polish";
   if (debug) {
     window.__headlightDebug.source = finalSource;
     window.__headlightDebug.finalSource = finalSource;
+    window.__headlightDebug.rejectedBecause = best?.validation?.reasons;
   }
-  console.warn("[Headlights] full-photo-identical — no AI image returned");
   console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
-  return { ok: false, mode: "full-photo-identical", source: finalSource, finalSource, error: a1.error || a2?.error };
+  return {
+    ok: true,
+    mode: "full-photo-identical",
+    source: finalSource,
+    finalSource,
+    safePolish: true,
+    maskMode,
+    validation: best?.validation,
+  };
 }
 
 async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
@@ -2207,6 +2286,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   if (a1.ok) {
     const c = compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
     if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
+    applySafeLensPolish(ctx, W, H, lights, maskMode);
     if (debug) {
       window.__headlightDebug.source = "full-image:1";
       window.__headlightDebug.attempts[0].fusedCanvas = c?.fusedCanvas;
@@ -2216,6 +2296,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     console.log("[Headlights] OUTPUT SOURCE = full-image:1");
     const refine = await runRefinePass(ctx, lights, W, H, { strength, debug, maskMode });
     if (maskMode === 'lens' && refine.some(r => r.ok)) applyLensEnhancement(ctx, W, H, lights);
+    if (refine.some(r => r.ok)) applySafeLensPolish(ctx, W, H, lights, maskMode);
     const acceptedRefines = refine.filter(r => r.ok).length;
     const finalSource = acceptedRefines > 0
       ? `full-image:1 + refine:${acceptedRefines}/${refine.length}`
@@ -2258,6 +2339,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     if (a2.ok) {
       const c = compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
       if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
+      applySafeLensPolish(ctx, W, H, lights, maskMode);
       if (debug) {
         window.__headlightDebug.source = "full-image:2";
         const a2dbg = window.__headlightDebug.attempts[window.__headlightDebug.attempts.length - 1];
@@ -2267,6 +2349,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       console.log("[Headlights] OUTPUT SOURCE = full-image:2");
       const refine = await runRefinePass(ctx, lights, W, H, { strength, debug, maskMode });
       if (maskMode === 'lens' && refine.some(r => r.ok)) applyLensEnhancement(ctx, W, H, lights);
+      if (refine.some(r => r.ok)) applySafeLensPolish(ctx, W, H, lights, maskMode);
       const acceptedRefines = refine.filter(r => r.ok).length;
       const finalSource = acceptedRefines > 0
         ? `full-image:2 + refine:${acceptedRefines}/${refine.length}`
@@ -2291,64 +2374,60 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
 
   // ── full-image-only override: composite the best full-image result anyway ──
   if (strategyOverride === "full-image-only") {
-    // Pick the attempt that came back with an image; prefer attempt 2 if it
-    // ran (stricter prompt), otherwise attempt 1.
     const best = (a2 && a2.editedImg) ? a2 : (a1.editedImg ? a1 : null);
-    if (best) {
-      console.warn("[Headlights] strategy=full-image-only — compositing rejected result anyway for inspection");
+    if (best && isForceRejectedEnabled()) {
+      console.warn("[Headlights] strategy=full-image-only — compositing rejected result (forceRejected=1)");
       console.warn("[Headlights] rejection reasons:", best.validation?.reasons);
       const c = compositeFullImageResult(ctx, best.editedImg, lights, W, H, best.aiResponse?.blend);
       if (debug) {
         window.__headlightDebug.source = "full-image:forced";
         const last = window.__headlightDebug.attempts[window.__headlightDebug.attempts.length - 1];
         if (last) { last.fusedCanvas = c?.fusedCanvas; last.alphaCanvas = c?.alphaCanvas; }
+        window.__headlightDebug.finalSource = "full-image:forced";
       }
-      console.log("[Headlights] OUTPUT SOURCE = full-image:forced");
-      // Strategy = full-image-only is explicitly for inspecting the raw
-      // full-image result. Skip the refine pass so the user sees exactly
-      // what the model produced, no extra AI work piled on top.
-      if (debug) window.__headlightDebug.finalSource = "full-image:forced";
-      console.log("[Headlights] FINAL SOURCE = full-image:forced (refine skipped on full-image-only)");
+      console.log("[Headlights] FINAL SOURCE = full-image:forced");
       return {
         ok: true,
         mode: "full-image",
         source: "full-image:forced",
         finalSource: "full-image:forced",
+        forced: true,
         attempt: best.attempt,
         provider: best.aiResponse?.provider,
         model: best.aiResponse?.model,
         validation: best.validation,
       };
     }
-    // No usable AI output at all (network / API failure).
-    console.warn("[Headlights] strategy=full-image-only but no AI image was returned");
-    if (debug) window.__headlightDebug.source = "none";
-    return { ok: false, mode: "full-image-only", source: "none", error: a1.error || a2?.error };
-  }
-
-  // ── Fallback (auto strategy): per-headlight crops ──
-  // No refine pass here — the per-headlight pipeline is already per-optic and
-  // would just be doing the same work twice with worse blending.
-  console.warn("[Headlights] mode=per-headlight (fallback)");
-  const fallback = await aiPolishHeadlightsPerLight(ctx, W, H, lights, { strength, debug });
-  if (fallback.ok) {
-    if (debug) {
-      window.__headlightDebug.source = "per-headlight";
-      window.__headlightDebug.finalSource = "per-headlight";
+    // No forceRejected — fall through to safe polish below
+    if (best) {
+      console.warn("[Headlights] strategy=full-image-only — rejected output NOT used (no forceRejected=1)");
+      console.warn("[Headlights] rejection reasons:", best.validation?.reasons);
+    } else {
+      console.warn("[Headlights] strategy=full-image-only but no AI image was returned");
     }
-    console.log("[Headlights] OUTPUT SOURCE = per-headlight");
-    console.log("[Headlights] FINAL SOURCE = per-headlight (refine skipped on fallback)");
-    return { ...fallback, mode: "per-headlight", source: "per-headlight", finalSource: "per-headlight" };
   }
 
-  console.warn("[Headlights] all strategies failed:", fallback);
+  // ── Fallback: deterministic safe lens polish on original image ──
+  // Both AI attempts rejected (or full-image-only without forceRejected).
+  // Apply non-AI enhancement: yellow reduction + dehaze + clarity + sharpen.
+  // This always produces a stable, natural, sellable result.
+  console.log("[Headlights] applying safe lens polish as fallback (all AI attempts rejected)");
+  applySafeLensPolish(ctx, W, H, lights, maskMode);
+  const fallbackSource = "safe-polish";
   if (debug) {
-    window.__headlightDebug.source = "none";
-    window.__headlightDebug.finalSource = "none";
+    window.__headlightDebug.source = fallbackSource;
+    window.__headlightDebug.finalSource = fallbackSource;
+    window.__headlightDebug.rejectedBecause = (a2 || a1)?.validation?.reasons;
   }
-  console.log("[Headlights] OUTPUT SOURCE = none");
-  console.log("[Headlights] FINAL SOURCE = none");
-  return { ok: false, mode: "all-failed", source: "none", finalSource: "none", perLight: fallback.perLight };
+  console.log(`[Headlights] FINAL SOURCE = ${fallbackSource}`);
+  return {
+    ok: true,
+    mode: "safe-polish",
+    source: fallbackSource,
+    finalSource: fallbackSource,
+    safePolish: true,
+    maskMode,
+  };
 }
 
 // ── Lustrage carrosserie ─────────────────────────────────────────────────────
