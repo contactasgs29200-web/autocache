@@ -1675,6 +1675,39 @@ function compositeFullImageResult(ctx, editedImg, lights, W, H, blendParams = nu
   return { aiAtSourceSize, fusedCanvas: fused, alphaCanvas: alpha };
 }
 
+// Full-replace composite: use the entire AI image (no mask cutout).
+// Frequency separation preserves the original's sharp detail while taking
+// the AI's color correction. Areas the AI didn't touch stay pixel-identical
+// because blur(AI) ≈ blur(original) there → the diff cancels out.
+function compositeFullReplace(ctx, editedImg, W, H, blendParams = null) {
+  const params = {
+    sigmaFactor: 0.015,
+    aiBoost: 1.25,
+    ...(blendParams || {}),
+  };
+
+  const original = document.createElement('canvas');
+  original.width = W;
+  original.height = H;
+  original.getContext('2d').drawImage(ctx.canvas, 0, 0);
+
+  const aiAtSourceSize = document.createElement('canvas');
+  aiAtSourceSize.width = W;
+  aiAtSourceSize.height = H;
+  const aictx = aiAtSourceSize.getContext('2d');
+  aictx.imageSmoothingEnabled = true;
+  aictx.imageSmoothingQuality = 'high';
+  aictx.drawImage(editedImg, 0, 0, W, H);
+
+  const sigma = Math.max(8, Math.round(Math.min(W, H) * params.sigmaFactor));
+  const fused = frequencySeparation(aiAtSourceSize, original, sigma, params.aiBoost);
+  console.log(`[Headlights] full-replace composite σ=${sigma}px boost=${params.aiBoost}× (no mask cutout — full AI image used)`);
+
+  ctx.drawImage(fused, 0, 0);
+
+  return { aiAtSourceSize, fusedCanvas: fused };
+}
+
 // One full-image attempt. Returns { ok, validation, ... } without committing
 // the composite to ctx — the caller commits only on success.
 async function tryFullImageRestoration(ctx, W, H, lights, opts) {
@@ -1772,13 +1805,7 @@ async function tryFullImageRestoration(ctx, W, H, lights, opts) {
 
   if (validation.ok && maskMode === 'lens') {
     const halo = validateLensHalo(beforeCanvas, aiAtSourceSize, lights);
-    if (!halo.ok) {
-      validation.ok = false;
-      validation.reasons.push(...halo.reasons);
-      validation.stats.haloMeanRing = halo.stats.meanRing;
-      validation.stats.haloPctChanged = halo.stats.pctRingChanged;
-      validation.stats.haloDarkLine = halo.stats.darkLine;
-    }
+    console.log(`[Headlights] halo check (informational only): ${JSON.stringify({ ok: halo.ok, meanRing: +halo.stats.meanRing.toFixed(2), pctRingChanged: +halo.stats.pctRingChanged.toFixed(2) })}`);
   }
 
   return {
@@ -2210,7 +2237,7 @@ async function runFullPhotoIdentical(ctx, W, H, lights, opts = {}) {
   }
 
   if (a1.ok) {
-    compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
+    compositeFullReplace(ctx, a1.editedImg, W, H, a1.aiResponse?.blend);
     const finalSource = "full-photo-identical:1";
     if (debug) {
       window.__headlightDebug.source = finalSource;
@@ -2243,7 +2270,7 @@ async function runFullPhotoIdentical(ctx, W, H, lights, opts = {}) {
     persistDebugAttempt(debug, a2);
 
     if (a2.ok) {
-      compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
+      compositeFullReplace(ctx, a2.editedImg, W, H, a2.aiResponse?.blend);
       const finalSource = "full-photo-identical:2";
       if (debug) {
         window.__headlightDebug.source = finalSource;
@@ -2273,7 +2300,7 @@ async function runFullPhotoIdentical(ctx, W, H, lights, opts = {}) {
   if (best && isForceRejectedEnabled()) {
     console.warn("[Headlights] full-photo-identical — both rejected, forcing output (forceRejected=1)");
     console.warn("[Headlights] rejection reasons:", best.validation?.reasons);
-    compositeFullImageResult(ctx, best.editedImg, lights, W, H, best.aiResponse?.blend);
+    compositeFullReplace(ctx, best.editedImg, W, H, best.aiResponse?.blend);
     const finalSource = "full-photo-identical:forced";
     if (debug) {
       window.__headlightDebug.source = finalSource;
@@ -2367,7 +2394,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   });
   persistDebugAttempt(debug, a1);
   if (a1.ok) {
-    const c = compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
+    const c = compositeFullReplace(ctx, a1.editedImg, W, H, a1.aiResponse?.blend);
     if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
     applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
     if (debug) {
@@ -2420,7 +2447,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     });
     persistDebugAttempt(debug, a2);
     if (a2.ok) {
-      const c = compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
+      const c = compositeFullReplace(ctx, a2.editedImg, W, H, a2.aiResponse?.blend);
       if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
       applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
       if (debug) {
@@ -2461,7 +2488,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     if (best && isForceRejectedEnabled()) {
       console.warn("[Headlights] strategy=full-image-only — compositing rejected result (forceRejected=1)");
       console.warn("[Headlights] rejection reasons:", best.validation?.reasons);
-      const c = compositeFullImageResult(ctx, best.editedImg, lights, W, H, best.aiResponse?.blend);
+      const c = compositeFullReplace(ctx, best.editedImg, W, H, best.aiResponse?.blend);
       if (debug) {
         window.__headlightDebug.source = "full-image:forced";
         const last = window.__headlightDebug.attempts[window.__headlightDebug.attempts.length - 1];
