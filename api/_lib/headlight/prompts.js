@@ -106,6 +106,50 @@ export const LENS_NEGATIVE_PROMPT_ADDITIONS = [
   'visible mask boundary',
 ].join(', ');
 
+export const FULL_PHOTO_IDENTICAL_PROMPT = [
+  'Restore this vehicle photo while preserving the image as faithfully as possible.',
+  'Recreate the entire photo with the same framing, perspective, lighting, reflections,',
+  'background, vehicle geometry, paint color, badges, text, and all surrounding details unchanged.',
+  'The only intended visual change is the two front headlight assemblies:',
+  'make them look clear, transparent, clean, sharp, realistic, and professionally restored,',
+  'as if the lenses were in excellent near-new condition.',
+  'Do not alter nearby body panels, do not create halos, circular patches, seams, tone shifts,',
+  'or blur around the headlights.',
+  'Do not distort nearby text, badges, logo, bumper, hood lines, or reflections.',
+  'Keep the result photorealistic and faithful to the original photo.',
+].join(' ');
+
+export const FULL_PHOTO_IDENTICAL_RETRY_PROMPT = [
+  'Reproduce this exact vehicle photo with pixel-level fidelity.',
+  'The ONLY permitted change: restore the two front headlight lenses to look clear, transparent,',
+  'clean, sharp, homogeneous, and like new.',
+  'Everything else MUST be identical: framing, perspective, lighting, reflections, background,',
+  'vehicle geometry, paint color, body panels, badges, text, logos, bumper, grille, hood,',
+  'wheels, license plate, windows, mirrors, ground, walls, shadows, and camera angle.',
+  'Do not create halos, circular patches, seams, tone shifts, blur, or artifacts of any kind.',
+  'Do not distort text, badges, or any detail near the headlights.',
+  'The output must be indistinguishable from the input except for the restored headlight lenses.',
+].join(' ');
+
+export const FULL_PHOTO_IDENTICAL_NEGATIVE_PROMPT = [
+  'halos',
+  'circular patches',
+  'seams',
+  'local blur',
+  'badge distortion',
+  'text distortion',
+  'repainting of body panels',
+  'tone shift outside headlights',
+  'fake glow',
+  'deformation around headlight edges',
+  'altered framing',
+  'changed perspective',
+  'changed background',
+  'different headlight design',
+  'altered vehicle geometry',
+  'color shift on bodywork',
+].join(', ');
+
 // Strength controls how aggressive the model is allowed to redraw the masked area.
 export const STRENGTH_PRESETS = {
   restore: { label: 'restore', denoise: 0.40, openaiQuality: 'medium', openaiFidelity: 'high' },

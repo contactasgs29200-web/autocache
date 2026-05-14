@@ -152,3 +152,10 @@ export const LENS_HALO_THRESHOLDS = {
   pctRingChangedMax: 3,
   darkLineMax: 0.3,
 };
+
+export const FULL_PHOTO_IDENTICAL_THRESHOLDS = {
+  meanInMin: 2,
+  meanOutMax: 30,
+  meanRingMax: 25,
+  pctHighOutMax: 8,
+};

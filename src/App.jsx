@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 // @imgly/background-removal chargé dynamiquement (uniquement si showroom activé)
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
-import { MASK_MODE_CONFIGS, LENS_HALO_THRESHOLDS } from "../api/_lib/headlight/mask.js";
+import { MASK_MODE_CONFIGS, LENS_HALO_THRESHOLDS, FULL_PHOTO_IDENTICAL_THRESHOLDS } from "../api/_lib/headlight/mask.js";
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 767);
@@ -1005,6 +1005,17 @@ function getHeadlightMaskMode() {
   } catch { return "tight"; }
 }
 
+const HEADLIGHT_MODES = ['auto', 'full-photo-identical'];
+
+function getHeadlightMode() {
+  if (typeof window === "undefined") return "auto";
+  try {
+    const v = new URLSearchParams(window.location.search).get("headlightMode");
+    if (v && HEADLIGHT_MODES.includes(v)) return v;
+    return "auto";
+  } catch { return "auto"; }
+}
+
 // Build a colored "diff map" canvas where pixel intensity = |before - after|.
 // Used only in debug to make hidden drift visible.
 function buildDiffMap(beforeCanvas, afterCanvas) {
@@ -1264,6 +1275,76 @@ function validateLensHalo(beforeCanvas, afterCanvas, lights) {
   return { ok, reasons, stats: { meanRing, pctRingChanged, darkLine }, thresholds: LENS_HALO_THRESHOLDS };
 }
 
+function validateFullPhotoIdentical(beforeCanvas, afterCanvas, lights) {
+  const W = beforeCanvas.width;
+  const H = beforeCanvas.height;
+
+  const hl = document.createElement('canvas');
+  hl.width = W; hl.height = H;
+  const hctx = hl.getContext('2d');
+  hctx.fillStyle = 'rgba(255,255,255,1)';
+  drawHeadlightShapes(hctx, lights, W, H, 0.05);
+
+  const ring = document.createElement('canvas');
+  ring.width = W; ring.height = H;
+  const rctx = ring.getContext('2d');
+  rctx.fillStyle = 'rgba(255,255,255,1)';
+  drawHeadlightShapes(rctx, lights, W, H, 0.12);
+  rctx.globalCompositeOperation = 'destination-out';
+  drawHeadlightShapes(rctx, lights, W, H, 0.03);
+  rctx.globalCompositeOperation = 'source-over';
+
+  const before = beforeCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const after = afterCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const inMask = hctx.getImageData(0, 0, W, H).data;
+  const ringMask = rctx.getImageData(0, 0, W, H).data;
+
+  let sumIn = 0, countIn = 0;
+  let sumOut = 0, countOut = 0;
+  let sumRing = 0, countRing = 0;
+  let highOut = 0;
+
+  for (let i = 0; i < before.length; i += 4) {
+    const d = (Math.abs(before[i] - after[i])
+             + Math.abs(before[i + 1] - after[i + 1])
+             + Math.abs(before[i + 2] - after[i + 2])) / 3;
+    const inside = inMask[i + 3] > 8;
+    const inRing = ringMask[i + 3] > 8;
+    if (inside) {
+      sumIn += d; countIn++;
+    } else {
+      sumOut += d; countOut++;
+      if (d > 40) highOut++;
+    }
+    if (inRing) {
+      sumRing += d; countRing++;
+    }
+  }
+
+  const meanIn = countIn ? sumIn / countIn : 0;
+  const meanOut = countOut ? sumOut / countOut : 0;
+  const meanRing = countRing ? sumRing / countRing : 0;
+  const pctHighOut = countOut ? (highOut / countOut) * 100 : 0;
+
+  const T = FULL_PHOTO_IDENTICAL_THRESHOLDS;
+  const reasons = [];
+  if (meanIn < T.meanInMin)
+    reasons.push(`no-op: meanIn ${meanIn.toFixed(1)} < ${T.meanInMin}`);
+  if (meanOut > T.meanOutMax)
+    reasons.push(`outside-drift: meanOut ${meanOut.toFixed(1)} > ${T.meanOutMax}`);
+  if (meanRing > T.meanRingMax)
+    reasons.push(`ring-artifact: meanRing ${meanRing.toFixed(1)} > ${T.meanRingMax}`);
+  if (pctHighOut > T.pctHighOutMax)
+    reasons.push(`bleed: ${pctHighOut.toFixed(2)}% > ${T.pctHighOutMax}%`);
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    stats: { meanIn, meanOut, meanRing, pctHighOut },
+    thresholds: T,
+  };
+}
+
 function applyLensEnhancement(ctx, W, H, lights) {
   const lensMask = document.createElement('canvas');
   lensMask.width = W;
@@ -1448,7 +1529,7 @@ function compositeFullImageResult(ctx, editedImg, lights, W, H, blendParams = nu
 // One full-image attempt. Returns { ok, validation, ... } without committing
 // the composite to ctx — the caller commits only on success.
 async function tryFullImageRestoration(ctx, W, H, lights, opts) {
-  const { strength = 'restore', strictPrompt = null, debug = false, attempt, maskMode = 'tight' } = opts;
+  const { strength = 'restore', strictPrompt = null, debug = false, attempt, maskMode = 'tight', customValidator = null } = opts;
   const assets = createFullImageEditAssets(ctx, W, H, lights, maskMode);
   console.log(`[Headlights] full-image attempt ${attempt}`, {
     workSize: assets.size,
@@ -1526,11 +1607,8 @@ async function tryFullImageRestoration(ctx, W, H, lights, opts) {
   beforeCanvas.height = H;
   beforeCanvas.getContext('2d').drawImage(ctx.canvas, 0, 0);
 
-  // Validation BEFORE compositing. We compare the AI output as-rendered
-  // (full frame) against the original — this surfaces any change that
-  // the model did outside the headlights, which the alpha-mask composite
-  // would otherwise hide from the user.
-  const validation = validateFullImageResult(beforeCanvas, aiAtSourceSize, lights);
+  const validatorFn = customValidator || validateFullImageResult;
+  const validation = validatorFn(beforeCanvas, aiAtSourceSize, lights);
   console.log(`[Headlights] full-image attempt ${attempt} validation`, {
     ok: validation.ok,
     reasons: validation.reasons,
@@ -1962,11 +2040,129 @@ async function runRefinePass(ctx, lights, W, H, opts = {}) {
   return perLight;
 }
 
+async function runFullPhotoIdentical(ctx, W, H, lights, opts = {}) {
+  const { strength = "restore", debug = false, maskMode = "tight" } = opts;
+
+  const FPI_PROMPT = 'Restore this vehicle photo while preserving the image as faithfully as possible. Recreate the entire photo with the same framing, perspective, lighting, reflections, background, vehicle geometry, paint color, badges, text, and all surrounding details unchanged. The only intended visual change is the two front headlight assemblies: make them look clear, transparent, clean, sharp, realistic, and professionally restored, as if the lenses were in excellent near-new condition. Do not alter nearby body panels, do not create halos, circular patches, seams, tone shifts, or blur around the headlights. Do not distort nearby text, badges, logo, bumper, hood lines, or reflections. Keep the result photorealistic and faithful to the original photo.';
+  const FPI_RETRY_PROMPT = 'Reproduce this exact vehicle photo with pixel-level fidelity. The ONLY permitted change: restore the two front headlight lenses to look clear, transparent, clean, sharp, homogeneous, and like new. Everything else MUST be identical: framing, perspective, lighting, reflections, background, vehicle geometry, paint color, body panels, badges, text, logos, bumper, grille, hood, wheels, license plate, windows, mirrors, ground, walls, shadows, and camera angle. Do not create halos, circular patches, seams, tone shifts, blur, or artifacts of any kind. Do not distort text, badges, or any detail near the headlights. The output must be indistinguishable from the input except for the restored headlight lenses.';
+
+  console.log("[Headlights] mode=full-photo-identical — NO per-headlight fallback");
+
+  // ── Attempt 1 ──
+  const a1 = await tryFullImageRestoration(ctx, W, H, lights, {
+    strength, debug, strictPrompt: FPI_PROMPT, attempt: 1, maskMode,
+    customValidator: validateFullPhotoIdentical,
+  });
+  persistDebugAttempt(debug, a1);
+
+  if (debug && a1.editedImg) {
+    window.__headlightDebug.fullPhotoIdentical = true;
+    window.__headlightDebug.promptUsed = a1.ok ? 'FPI_PROMPT' : null;
+  }
+
+  if (a1.ok) {
+    compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
+    const finalSource = "full-photo-identical:1";
+    if (debug) {
+      window.__headlightDebug.source = finalSource;
+      window.__headlightDebug.finalSource = finalSource;
+      window.__headlightDebug.promptUsed = 'FPI_PROMPT';
+    }
+    console.log(`[Headlights] ✓ full-photo-identical attempt 1 accepted`);
+    console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
+    return {
+      ok: true,
+      mode: "full-photo-identical",
+      source: finalSource,
+      finalSource,
+      attempt: 1,
+      maskMode,
+      provider: a1.aiResponse?.provider,
+      model: a1.aiResponse?.model,
+      validation: a1.validation,
+    };
+  }
+  console.warn("[Headlights] ✗ full-photo-identical attempt 1 rejected:", a1.reason, a1.validation?.reasons || a1.error || "");
+
+  // ── Attempt 2 (stricter prompt) ──
+  let a2 = null;
+  if (a1.reason === 'validation') {
+    a2 = await tryFullImageRestoration(ctx, W, H, lights, {
+      strength, debug, strictPrompt: FPI_RETRY_PROMPT, attempt: 2, maskMode,
+      customValidator: validateFullPhotoIdentical,
+    });
+    persistDebugAttempt(debug, a2);
+
+    if (a2.ok) {
+      compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
+      const finalSource = "full-photo-identical:2";
+      if (debug) {
+        window.__headlightDebug.source = finalSource;
+        window.__headlightDebug.finalSource = finalSource;
+        window.__headlightDebug.promptUsed = 'FPI_RETRY_PROMPT';
+      }
+      console.log(`[Headlights] ✓ full-photo-identical attempt 2 accepted`);
+      console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
+      return {
+        ok: true,
+        mode: "full-photo-identical",
+        source: finalSource,
+        finalSource,
+        attempt: 2,
+        maskMode,
+        provider: a2.aiResponse?.provider,
+        model: a2.aiResponse?.model,
+        validation: a2.validation,
+      };
+    }
+    console.warn("[Headlights] ✗ full-photo-identical attempt 2 rejected:", a2.reason, a2.validation?.reasons || a2.error || "");
+  }
+
+  // ── Force output: composite the best result anyway for inspection ──
+  const best = (a2 && a2.editedImg) ? a2 : (a1.editedImg ? a1 : null);
+  if (best) {
+    console.warn("[Headlights] full-photo-identical — both rejected, forcing output for inspection");
+    console.warn("[Headlights] rejection reasons:", best.validation?.reasons);
+    compositeFullImageResult(ctx, best.editedImg, lights, W, H, best.aiResponse?.blend);
+    const finalSource = "full-photo-identical:forced";
+    if (debug) {
+      window.__headlightDebug.source = finalSource;
+      window.__headlightDebug.finalSource = finalSource;
+      window.__headlightDebug.promptUsed = best === a2 ? 'FPI_RETRY_PROMPT' : 'FPI_PROMPT';
+      window.__headlightDebug.forcedBecause = best.validation?.reasons;
+    }
+    console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
+    return {
+      ok: true,
+      mode: "full-photo-identical",
+      source: finalSource,
+      finalSource,
+      forced: true,
+      attempt: best.attempt,
+      maskMode,
+      provider: best.aiResponse?.provider,
+      model: best.aiResponse?.model,
+      validation: best.validation,
+    };
+  }
+
+  // No AI output at all (network/API failures).
+  const finalSource = "none";
+  if (debug) {
+    window.__headlightDebug.source = finalSource;
+    window.__headlightDebug.finalSource = finalSource;
+  }
+  console.warn("[Headlights] full-photo-identical — no AI image returned");
+  console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
+  return { ok: false, mode: "full-photo-identical", source: finalSource, finalSource, error: a1.error || a2?.error };
+}
+
 async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   const { strength = "restore" } = opts;
   const debug = isHeadlightDebugEnabled();
   const strategyOverride = getHeadlightStrategyOverride();
   const maskMode = getHeadlightMaskMode();
+  const headlightMode = getHeadlightMode();
 
   const lights = await detectHeadlights(b64Original);
   if (!lights.length) {
@@ -1979,12 +2175,18 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       source: null,
       strategyOverride,
       maskMode,
+      headlightMode,
       lights,
       attempts: [],
     };
   }
 
-  console.log(`[Headlights] orchestrator start (strategyOverride=${strategyOverride}, maskMode=${maskMode})`);
+  console.log(`[Headlights] orchestrator start (headlightMode=${headlightMode}, strategyOverride=${strategyOverride}, maskMode=${maskMode})`);
+
+  // ── full-photo-identical: dedicated pipeline ────────────────────────────
+  if (headlightMode === "full-photo-identical") {
+    return await runFullPhotoIdentical(ctx, W, H, lights, { strength, debug, maskMode });
+  }
 
   // ── per-headlight-only short-circuit ────────────────────────────────────
   if (strategyOverride === "per-headlight-only") {

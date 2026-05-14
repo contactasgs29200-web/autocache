@@ -10,6 +10,9 @@ import {
   REFINE_NEGATIVE_PROMPT,
   LENS_PROMPT_SUFFIX,
   LENS_NEGATIVE_PROMPT_ADDITIONS,
+  FULL_PHOTO_IDENTICAL_PROMPT,
+  FULL_PHOTO_IDENTICAL_RETRY_PROMPT,
+  FULL_PHOTO_IDENTICAL_NEGATIVE_PROMPT,
   STRENGTH_PRESETS,
   DEFAULT_STRENGTH,
   resolveStrength,
@@ -116,4 +119,45 @@ test('LENS_NEGATIVE_PROMPT_ADDITIONS covers halo artifacts', () => {
   assert.ok(LENS_NEGATIVE_PROMPT_ADDITIONS.includes('halo around headlight'));
   assert.ok(LENS_NEGATIVE_PROMPT_ADDITIONS.includes('circular repaint'));
   assert.ok(LENS_NEGATIVE_PROMPT_ADDITIONS.includes('dark border around lens'));
+});
+
+test('FULL_PHOTO_IDENTICAL_PROMPT preserves entire scene', () => {
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /preserving the image as faithfully as possible/i);
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /framing/i);
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /perspective/i);
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /badges/i);
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /text/i);
+});
+
+test('FULL_PHOTO_IDENTICAL_PROMPT targets only headlight lenses', () => {
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /clear, transparent, clean, sharp/i);
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /near-new condition/i);
+});
+
+test('FULL_PHOTO_IDENTICAL_PROMPT forbids halos and badge distortion', () => {
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /do not create halos/i);
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /do not distort nearby text/i);
+  assert.match(FULL_PHOTO_IDENTICAL_PROMPT, /badges/i);
+});
+
+test('FULL_PHOTO_IDENTICAL_RETRY_PROMPT is stricter than first prompt', () => {
+  assert.match(FULL_PHOTO_IDENTICAL_RETRY_PROMPT, /pixel-level fidelity/i);
+  assert.match(FULL_PHOTO_IDENTICAL_RETRY_PROMPT, /indistinguishable from the input/i);
+});
+
+test('FULL_PHOTO_IDENTICAL_NEGATIVE_PROMPT covers all visual artifacts', () => {
+  for (const phrase of [
+    'halos',
+    'circular patches',
+    'seams',
+    'badge distortion',
+    'text distortion',
+    'tone shift outside headlights',
+    'deformation around headlight edges',
+  ]) {
+    assert.ok(
+      FULL_PHOTO_IDENTICAL_NEGATIVE_PROMPT.includes(phrase),
+      `must mention "${phrase}"`,
+    );
+  }
 });
