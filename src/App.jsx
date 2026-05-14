@@ -1729,17 +1729,13 @@ async function tryFullImageRestoration(ctx, W, H, lights, opts) {
   const payload = {
     imageBase64: assets.imageBase64,
     imageMime: assets.imageMime,
-    maskBase64: assets.maskBase64,
     size: assets.size,
-    maskCoverage: assets.maskCoverage,
     mode: 'ai',
     strength,
   };
   if (strictPrompt) payload.prompt = strictPrompt;
-  if (maskMode === 'lens') {
-    const lensSuffix = 'Modify only the transparent headlight lens interior. Do not repaint any circular area around the headlight. Do not alter hood, fender, bumper, paint, panel gaps or reflections. No halo, no circular patch, no oval repaint, no seam, no dark border.';
-    payload.prompt = payload.prompt ? payload.prompt + ' ' + lensSuffix : lensSuffix;
-  }
+
+  console.log(`[Headlights] sending full image WITHOUT mask — AI regenerates entire photo`);
 
   let r, data;
   try {

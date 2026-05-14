@@ -59,7 +59,7 @@ export async function restoreHeadlights(args) {
   const result = await provider.restoreHeadlightsWithAI({
     imageBase64: args.imageBase64,
     imageMime: args.imageMime || 'image/jpeg',
-    maskBase64: args.maskBase64,
+    maskBase64: args.maskBase64 || null,
     prompt,
     negativePrompt,
     strength,

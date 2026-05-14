@@ -70,8 +70,8 @@ export default async function handler(req, res) {
     },
   });
 
-  if (!imageBase64 || !maskBase64) {
-    return res.status(400).json({ error: 'Missing imageBase64 or maskBase64' });
+  if (!imageBase64) {
+    return res.status(400).json({ error: 'Missing imageBase64' });
   }
 
   if (mode !== 'ai') {

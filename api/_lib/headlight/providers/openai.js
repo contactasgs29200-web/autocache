@@ -89,20 +89,21 @@ export class OpenAIHeadlightProvider extends HeadlightRestorationProvider {
 
   async _callOnce({ model, imageBase64, imageMime, maskBase64, prompt, quality, fidelity, size }) {
     const imageBuffer = Buffer.from(imageBase64, 'base64');
-    const maskBuffer = Buffer.from(maskBase64, 'base64');
 
     const imageExt = MIME_TO_EXT[imageMime] || 'png';
     const imageBlob = new Blob([imageBuffer], { type: imageMime });
-    const maskBlob = new Blob([maskBuffer], { type: 'image/png' });
 
-    // Defensive: a caller might pass a size string that bypasses snap.
     const effectiveSize = snapOpenAISize(size);
 
     const form = new FormData();
     form.append('model', model);
     form.append('prompt', prompt);
     form.append('image', imageBlob, `image.${imageExt}`);
-    form.append('mask', maskBlob, 'mask.png');
+    if (maskBase64) {
+      const maskBuffer = Buffer.from(maskBase64, 'base64');
+      const maskBlob = new Blob([maskBuffer], { type: 'image/png' });
+      form.append('mask', maskBlob, 'mask.png');
+    }
     form.append('n', '1');
     form.append('quality', quality);
     form.append('size', effectiveSize);
@@ -113,7 +114,7 @@ export class OpenAIHeadlightProvider extends HeadlightRestorationProvider {
 
     console.log('[openai-provider] POST /v1/images/edits', {
       model, quality, input_fidelity: fidelity, size: effectiveSize,
-      imageBytes: imageBuffer.length, maskBytes: maskBuffer.length,
+      imageBytes: imageBuffer.length, maskIncluded: !!maskBase64,
       promptLength: prompt.length,
     });
 
