@@ -2395,22 +2395,13 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   persistDebugAttempt(debug, a1);
   if (a1.ok) {
     const c = compositeFullReplace(ctx, a1.editedImg, W, H, a1.aiResponse?.blend);
-    if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
-    applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
     if (debug) {
       window.__headlightDebug.source = "full-image:1";
       window.__headlightDebug.attempts[0].fusedCanvas = c?.fusedCanvas;
-      window.__headlightDebug.attempts[0].alphaCanvas = c?.alphaCanvas;
     }
     console.log("[Headlights] ✓ full-image attempt 1 accepted by validator");
-    console.log("[Headlights] OUTPUT SOURCE = full-image:1");
-    const refine = await runRefinePass(ctx, lights, W, H, { strength, debug, maskMode });
-    if (maskMode === 'lens' && refine.some(r => r.ok)) applyLensEnhancement(ctx, W, H, lights);
-    if (refine.some(r => r.ok)) applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
-    const acceptedRefines = refine.filter(r => r.ok).length;
-    const finalSource = acceptedRefines > 0
-      ? `full-image:1 + refine:${acceptedRefines}/${refine.length}`
-      : "full-image:1";
+    console.log("[Headlights] OUTPUT SOURCE = full-image:1 (no post-process — AI handled full image)");
+    const finalSource = "full-image:1";
     if (debug) window.__headlightDebug.finalSource = finalSource;
     console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
     return {
@@ -2423,7 +2414,6 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       provider: a1.aiResponse?.provider,
       model: a1.aiResponse?.model,
       validation: a1.validation,
-      refine,
     };
   }
   console.warn("[Headlights] ✗ full-image attempt 1 rejected:", a1.reason, a1.validation?.reasons || a1.error || "");
@@ -2448,22 +2438,14 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     persistDebugAttempt(debug, a2);
     if (a2.ok) {
       const c = compositeFullReplace(ctx, a2.editedImg, W, H, a2.aiResponse?.blend);
-      if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
-      applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
       if (debug) {
         window.__headlightDebug.source = "full-image:2";
         const a2dbg = window.__headlightDebug.attempts[window.__headlightDebug.attempts.length - 1];
-        if (a2dbg) { a2dbg.fusedCanvas = c?.fusedCanvas; a2dbg.alphaCanvas = c?.alphaCanvas; }
+        if (a2dbg) { a2dbg.fusedCanvas = c?.fusedCanvas; }
       }
       console.log("[Headlights] ✓ full-image attempt 2 accepted by validator");
-      console.log("[Headlights] OUTPUT SOURCE = full-image:2");
-      const refine = await runRefinePass(ctx, lights, W, H, { strength, debug, maskMode });
-      if (maskMode === 'lens' && refine.some(r => r.ok)) applyLensEnhancement(ctx, W, H, lights);
-      if (refine.some(r => r.ok)) applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
-      const acceptedRefines = refine.filter(r => r.ok).length;
-      const finalSource = acceptedRefines > 0
-        ? `full-image:2 + refine:${acceptedRefines}/${refine.length}`
-        : "full-image:2";
+      console.log("[Headlights] OUTPUT SOURCE = full-image:2 (no post-process — AI handled full image)");
+      const finalSource = "full-image:2";
       if (debug) window.__headlightDebug.finalSource = finalSource;
       console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
       return {
@@ -2476,7 +2458,6 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
         provider: a2.aiResponse?.provider,
         model: a2.aiResponse?.model,
         validation: a2.validation,
-        refine,
       };
     }
     console.warn("[Headlights] ✗ full-image attempt 2 rejected:", a2.reason, a2.validation?.reasons || a2.error || "");
