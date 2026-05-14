@@ -357,27 +357,21 @@ function autoEnhance(ctx, W, H) {
   const id = ctx.getImageData(0, 0, W, H);
   const d  = id.data;
 
-  // Courbe S légère : creuse les ombres, préserve les hautes lumières
   const sCurve = v => v < 0.5
-    ? 0.5 * Math.pow(v * 2, 1.20)          // ombres assombries
-    : 1 - 0.5 * Math.pow((1 - v) * 2, 0.85); // hautes lumières légèrement relevées
+    ? 0.5 * Math.pow(v * 2, 1.17)
+    : 1 - 0.5 * Math.pow((1 - v) * 2, 0.87);
 
-  // LUT par canal : refroidissement WB + courbe S
-  // R : −12 %  (retire la dominante rouge/chaude)
-  // G : −4  %  (neutre-froid)
-  // B : +13 %  (bleu acier → lumière neutre 6000 K)
   const rLUT = new Uint8Array(256);
   const gLUT = new Uint8Array(256);
   const bLUT = new Uint8Array(256);
   for (let v = 0; v < 256; v++) {
     const t = v / 255;
-    rLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * 0.88) * 255)));
-    gLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * 0.96) * 255)));
-    bLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(Math.min(1, t * 1.13)) * 255)));
+    rLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * 0.90) * 255)));
+    gLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * 0.97) * 255)));
+    bLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(Math.min(1, t * 1.11)) * 255)));
   }
 
-  // Application LUT + boost saturation (+20 %)
-  const SAT = 1.20;
+  const SAT = 1.17;
   for (let i = 0; i < d.length; i += 4) {
     let r = rLUT[d[i]];
     let g = gLUT[d[i + 1]];
