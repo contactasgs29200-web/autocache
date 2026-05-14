@@ -96,7 +96,7 @@ export default async function handler(req, res) {
         const plan   = subscription.metadata?.plan;
         if (userId && plan) {
           const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
-            user_metadata: { plan, photos_used: 0 },
+            user_metadata: { plan, photos_used: 0, headlight_photos_used: 0 },
           });
           if (error) throw new Error(`Supabase reset failed: ${error.message}`);
           console.log(`Renouvellement réussi — user ${userId} plan "${plan}" réactivé, crédits remis à zéro`);

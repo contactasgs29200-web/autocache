@@ -3442,7 +3442,15 @@ export default function AutoCache() {
     const photosUsed = user?.user_metadata?.photos_used ?? 0;
     if (photosUsed >= PLAN_LIMIT) { setShowUpgradeModal(true); return; }
     const remaining = PLAN_LIMIT - photosUsed;
-    const photosToProcess = photos.slice(0, remaining);
+    let maxPhotos = remaining;
+    if (headlightPolish) {
+      if (headlightCreditsRemaining <= 0) {
+        alert("Vous avez utilisé vos 10 crédits Lustrage Optique Pro ce mois-ci.");
+        return;
+      }
+      maxPhotos = Math.min(maxPhotos, HEADLIGHT_BATCH_LIMIT, headlightCreditsRemaining);
+    }
+    const photosToProcess = photos.slice(0, maxPhotos);
     setProcessing(true);
     setProgress({ n: 0, total: photosToProcess.length });
     setResults([]);
@@ -3512,20 +3520,18 @@ export default function AutoCache() {
     }
     // Mettre à jour le compteur de photos utilisées
     const newCount = photosUsed + photosToProcess.length;
-    await supabase.auth.updateUser({ data: { photos_used: newCount } });
-    setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: newCount } } : prev);
+    const updateData = { photos_used: newCount };
+    if (headlightPolish) {
+      updateData.headlight_photos_used = headlightPhotosUsed + photosToProcess.length;
+    }
+    await supabase.auth.updateUser({ data: updateData });
+    setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...updateData } } : prev);
     setProcessing(false);
     setTab("results");
     if (newCount >= PLAN_LIMIT) setShowUpgradeModal(true);
   };
 
-  const start = () => {
-    if (headlightPolish && !headlightInfoDismissed) {
-      setShowHeadlightInfoModal(true);
-      return;
-    }
-    startAfterInfo();
-  };
+  const start = () => startAfterInfo();
 
   const downloadOne = r => { const a = document.createElement("a"); a.href = r.showroomDataURL || r.processed; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click(); };
   const downloadAll = () => results.forEach(downloadOne);
@@ -3566,6 +3572,10 @@ export default function AutoCache() {
   const canUseShowroom  = userPlan === "pro" || userPlan === "trial";
   const canUseHeadlight   = userPlan === "pro";
   const canUseBodyPolish  = userPlan === "pro" || userPlan === "essential";
+  const HEADLIGHT_LIMIT = 10;
+  const HEADLIGHT_BATCH_LIMIT = 2;
+  const headlightPhotosUsed = user?.user_metadata?.headlight_photos_used ?? 0;
+  const headlightCreditsRemaining = Math.max(0, HEADLIGHT_LIMIT - headlightPhotosUsed);
   const canStart = logo && photos.length > 0 && !processing;
 
   const logout = async () => {
@@ -4368,11 +4378,17 @@ export default function AutoCache() {
                   },
                   {
                     active: headlightPolish,
-                    toggle: () => { if (!canUseHeadlight) { setShowPlansModal(true); return; } setHeadlightPolish(p => !p); },
+                    toggle: () => {
+                      if (!canUseHeadlight) { setShowPlansModal(true); return; }
+                      if (headlightCreditsRemaining <= 0) return;
+                      if (!headlightPolish && !headlightInfoDismissed) { setShowHeadlightInfoModal(true); }
+                      setHeadlightPolish(p => !p);
+                    },
                     icon: "💡",
                     label: "Lustrage Optique Pro",
                     sub: canUseHeadlight ? "Retouche IA des phares jaunis" : "Disponible avec l'abonnement Pro",
                     locked: !canUseHeadlight,
+                    credit: canUseHeadlight ? `${headlightCreditsRemaining}/${HEADLIGHT_LIMIT}` : null,
                   },
                   {
                     active: bodyPolish,
@@ -4382,7 +4398,7 @@ export default function AutoCache() {
                     sub: canUseBodyPolish ? "Brillance, saturation & profondeur de couleur" : "Disponible dès l'abonnement Essentiel",
                     locked: !canUseBodyPolish,
                   },
-                ].map(({ active, toggle, icon, label, sub, locked }) => (
+                ].map(({ active, toggle, icon, label, sub, locked, credit }) => (
                   <div key={label}
                     onClick={toggle}
                     style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active && !locked ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${active && !locked ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none", opacity: locked ? 0.55 : 1 }}
@@ -4390,12 +4406,13 @@ export default function AutoCache() {
                     <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${locked ? "#555" : active ? "#f26522" : "#444"}`, background: active && !locked ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                       {locked ? <span style={{ color: "#555", fontSize: 10 }}>🔒</span> : active && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                     </div>
-                    <div>
+                    <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: locked ? "#555" : active ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>
                         {icon} {label}{locked && <span style={{ fontSize: 8, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>PRO</span>}
                       </div>
                       <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
                     </div>
+                    {credit && <div style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, fontWeight: 700, flexShrink: 0 }}>{credit}</div>}
                   </div>
                 ))}
 
@@ -5593,7 +5610,7 @@ export default function AutoCache() {
               <span style={{ fontSize: 10, color: "#777", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>Ne plus afficher ce message</span>
             </label>
             <button
-              onClick={() => { setShowHeadlightInfoModal(false); startAfterInfo(); }}
+              onClick={() => setShowHeadlightInfoModal(false)}
               style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
               OK
             </button>
