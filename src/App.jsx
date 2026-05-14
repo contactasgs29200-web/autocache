@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 // @imgly/background-removal chargé dynamiquement (uniquement si showroom activé)
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
-import { MASK_MODE_CONFIGS, LENS_HALO_THRESHOLDS, FULL_PHOTO_IDENTICAL_THRESHOLDS } from "../api/_lib/headlight/mask.js";
+import { MASK_MODE_CONFIGS, LENS_HALO_THRESHOLDS, FULL_PHOTO_IDENTICAL_THRESHOLDS, SAFE_POLISH_PRESETS } from "../api/_lib/headlight/mask.js";
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 767);
@@ -1023,6 +1023,15 @@ function isForceRejectedEnabled() {
   } catch { return false; }
 }
 
+function getHeadlightPolishStrength() {
+  if (typeof window === "undefined") return SAFE_POLISH_PRESETS.medium;
+  try {
+    const v = new URLSearchParams(window.location.search).get("headlightPolish");
+    if (v && SAFE_POLISH_PRESETS[v]) return SAFE_POLISH_PRESETS[v];
+  } catch { /* ignore */ }
+  return SAFE_POLISH_PRESETS.medium;
+}
+
 // Build a colored "diff map" canvas where pixel intensity = |before - after|.
 // Used only in debug to make hidden drift visible.
 function buildDiffMap(beforeCanvas, afterCanvas) {
@@ -1401,7 +1410,9 @@ function applyLensEnhancement(ctx, W, H, lights) {
   console.log('[Headlights] lens post-process applied (dehaze + clarity + unsharp mask)');
 }
 
-function applySafeLensPolish(ctx, W, H, lights, maskMode = 'tight') {
+function applySafeLensPolish(ctx, W, H, lights, maskMode = 'tight', preset = null) {
+  const P = preset || getHeadlightPolishStrength();
+  const debug = isHeadlightDebugEnabled();
   const expand = maskMode === 'lens' ? -0.06 : 0.02;
   const expandInner = maskMode === 'lens' ? -0.08 : -0.01;
 
@@ -1415,50 +1426,121 @@ function applySafeLensPolish(ctx, W, H, lights, maskMode = 'tight') {
   lctx.filter = 'none';
   drawHeadlightShapes(lctx, lights, W, H, expandInner);
 
+  if (debug && window.__headlightDebug) {
+    window.__headlightDebug.safePolishMask = lensMask.toDataURL('image/png');
+  }
+
+  let beforeCanvas = null;
+  if (debug) {
+    beforeCanvas = document.createElement('canvas');
+    beforeCanvas.width = W;
+    beforeCanvas.height = H;
+    beforeCanvas.getContext('2d').drawImage(ctx.canvas, 0, 0);
+  }
+
   const id = ctx.getImageData(0, 0, W, H);
   const d = id.data;
   const lm = lctx.getImageData(0, 0, W, H).data;
 
-  const blurred = blurredCopy(ctx.canvas, Math.max(4, Math.round(Math.min(W, H) * 0.018)));
+  const blurSigma = Math.max(4, Math.round(Math.min(W, H) * 0.018));
+  const blurred = blurredCopy(ctx.canvas, blurSigma);
   const bData = blurred.getContext('2d').getImageData(0, 0, W, H).data;
+
+  let yellowSum = 0, yellowAfterSum = 0, deltaSum = 0, maskPx = 0;
 
   for (let i = 0; i < d.length; i += 4) {
     if (lm[i + 3] < 8) continue;
     const alpha = lm[i + 3] / 255;
+    maskPx++;
 
-    let r = d[i], g = d[i + 1], b = d[i + 2];
+    const or = d[i], og = d[i + 1], ob = d[i + 2];
+    let r = or, g = og, b = ob;
 
     const yellowness = (r + g) / 2 - b;
-    if (yellowness > 15) {
-      const correction = Math.min(yellowness * 0.18, 20);
-      r = Math.max(0, Math.round(r - correction * 0.45));
-      g = Math.max(0, Math.round(g - correction * 0.35));
-      b = Math.min(255, Math.round(b + correction * 0.25));
+    yellowSum += Math.max(0, yellowness);
+
+    // 1. Yellow/orange reduction — strongest lever
+    if (yellowness > P.yellowThreshold) {
+      const correction = Math.min(yellowness * P.yellowFactor, P.yellowMax);
+      r = Math.max(0, Math.round(r - correction * 0.50));
+      g = Math.max(0, Math.round(g - correction * 0.40));
+      b = Math.min(255, Math.round(b + correction * 0.30));
     }
 
+    // 2. Yellow desaturation — pull yellow/orange hues toward neutral gray
+    const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
+    const chroma = maxC - minC;
+    if (chroma > 10 && r > b && g > b) {
+      const lum = (r + g + b) / 3;
+      const desat = P.desatYellow;
+      r = Math.round(r + (lum - r) * desat);
+      g = Math.round(g + (lum - g) * desat);
+      b = Math.round(b + (lum - b) * desat);
+    }
+
+    // 3. Opacity lift — brighten cloudy/opaque zones (low luminance in lens)
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    if (lum < 180) {
+      const lift = P.opacityLift * (1 - lum / 180);
+      r = Math.min(255, Math.round(r + lift));
+      g = Math.min(255, Math.round(g + lift));
+      b = Math.min(255, Math.round(b + lift));
+    }
+
+    // 4. S-curve dehaze — increase local contrast
     const t_r = r / 255, t_g = g / 255, t_b = b / 255;
     const s_r = 3 * t_r * t_r - 2 * t_r * t_r * t_r;
     const s_g = 3 * t_g * t_g - 2 * t_g * t_g * t_g;
     const s_b = 3 * t_b * t_b - 2 * t_b * t_b * t_b;
-    r = Math.max(0, Math.min(255, Math.round((t_r + (s_r - t_r) * 0.06) * 255)));
-    g = Math.max(0, Math.min(255, Math.round((t_g + (s_g - t_g) * 0.06) * 255)));
-    b = Math.max(0, Math.min(255, Math.round((t_b + (s_b - t_b) * 0.06) * 255)));
+    r = Math.max(0, Math.min(255, Math.round((t_r + (s_r - t_r) * P.dehaze) * 255)));
+    g = Math.max(0, Math.min(255, Math.round((t_g + (s_g - t_g) * P.dehaze) * 255)));
+    b = Math.max(0, Math.min(255, Math.round((t_b + (s_b - t_b) * P.dehaze) * 255)));
 
-    r = Math.min(255, r + 2);
-    g = Math.min(255, g + 2);
-    b = Math.min(255, b + 3);
+    // 5. Brightness boost — shift toward transparent white
+    r = Math.min(255, r + P.brightness[0]);
+    g = Math.min(255, g + P.brightness[1]);
+    b = Math.min(255, b + P.brightness[2]);
 
-    const sh = 0.25;
+    // 6. Unsharp mask — sharpening
+    const sh = P.sharpen;
     const sr = Math.max(0, Math.min(255, Math.round(r + sh * (r - bData[i]))));
     const sg = Math.max(0, Math.min(255, Math.round(g + sh * (g - bData[i + 1]))));
     const sb = Math.max(0, Math.min(255, Math.round(b + sh * (b - bData[i + 2]))));
 
-    d[i]     = Math.round(d[i]     + (sr - d[i])     * alpha);
-    d[i + 1] = Math.round(d[i + 1] + (sg - d[i + 1]) * alpha);
-    d[i + 2] = Math.round(d[i + 2] + (sb - d[i + 2]) * alpha);
+    // 7. Highlight preservation — protect specular reflections from clipping
+    const origLum = 0.299 * or + 0.587 * og + 0.114 * ob;
+    const protect = origLum > 235 ? Math.min(1, (origLum - 235) / 20) : 0;
+    const fr = sr + (or - sr) * protect;
+    const fg = sg + (og - sg) * protect;
+    const fb = sb + (ob - sb) * protect;
+
+    // Blend with feathered mask alpha
+    d[i]     = Math.round(d[i]     + (fr - d[i])     * alpha);
+    d[i + 1] = Math.round(d[i + 1] + (fg - d[i + 1]) * alpha);
+    d[i + 2] = Math.round(d[i + 2] + (fb - d[i + 2]) * alpha);
+
+    const newYellowness = (d[i] + d[i + 1]) / 2 - d[i + 2];
+    yellowAfterSum += Math.max(0, newYellowness);
+    deltaSum += Math.abs(d[i] - or) + Math.abs(d[i + 1] - og) + Math.abs(d[i + 2] - ob);
   }
   ctx.putImageData(id, 0, 0);
-  console.log('[Headlights] safe lens polish applied (yellow reduction + dehaze + clarity + sharpen)');
+
+  const stats = {
+    yellowBefore: maskPx > 0 ? +(yellowSum / maskPx).toFixed(1) : 0,
+    yellowAfter: maskPx > 0 ? +(yellowAfterSum / maskPx).toFixed(1) : 0,
+    meanDelta: maskPx > 0 ? +(deltaSum / (maskPx * 3)).toFixed(1) : 0,
+    maskPixels: maskPx,
+  };
+
+  if (debug && window.__headlightDebug) {
+    window.__headlightDebug.beforeSafePolish = beforeCanvas?.toDataURL('image/png');
+    window.__headlightDebug.afterSafePolish = ctx.canvas.toDataURL('image/png');
+    window.__headlightDebug.safePolishStats = stats;
+    window.__headlightDebug.safePolishPreset = P.label;
+  }
+
+  console.log(`[Headlights] safe-polish strength = ${P.label}`);
+  console.log(`[Headlights] safe-polish stats = yellowBefore:${stats.yellowBefore} yellowAfter:${stats.yellowAfter} meanDelta:${stats.meanDelta}`);
 }
 
 // Blur a canvas at sigma pixels using the native canvas filter (browser GPU
@@ -2108,7 +2190,7 @@ async function runRefinePass(ctx, lights, W, H, opts = {}) {
 }
 
 async function runFullPhotoIdentical(ctx, W, H, lights, opts = {}) {
-  const { strength = "restore", debug = false, maskMode = "tight" } = opts;
+  const { strength = "restore", debug = false, maskMode = "tight", polishPreset = null } = opts;
 
   const FPI_PROMPT = 'Restore this vehicle photo while preserving the image as faithfully as possible. Recreate the entire photo with the same framing, perspective, lighting, reflections, background, vehicle geometry, paint color, badges, text, and all surrounding details unchanged. The only intended visual change is the two front headlight assemblies: make them look clear, transparent, clean, sharp, realistic, and professionally restored, as if the lenses were in excellent near-new condition. Do not alter nearby body panels, do not create halos, circular patches, seams, tone shifts, or blur around the headlights. Do not distort nearby text, badges, logo, bumper, hood lines, or reflections. Keep the result photorealistic and faithful to the original photo.';
   const FPI_RETRY_PROMPT = 'Reproduce this exact vehicle photo with pixel-level fidelity. The ONLY permitted change: restore the two front headlight lenses to look clear, transparent, clean, sharp, homogeneous, and like new. Everything else MUST be identical: framing, perspective, lighting, reflections, background, vehicle geometry, paint color, body panels, badges, text, logos, bumper, grille, hood, wheels, license plate, windows, mirrors, ground, walls, shadows, and camera angle. Do not create halos, circular patches, seams, tone shifts, blur, or artifacts of any kind. Do not distort text, badges, or any detail near the headlights. The output must be indistinguishable from the input except for the restored headlight lenses.';
@@ -2217,7 +2299,7 @@ async function runFullPhotoIdentical(ctx, W, H, lights, opts = {}) {
   // Both rejected and forceRejected not enabled — apply safe polish on original
   console.warn("[Headlights] full-photo-identical — both rejected, rejected output NOT used");
   console.warn("[Headlights] rejection reasons:", best?.validation?.reasons);
-  applySafeLensPolish(ctx, W, H, lights, maskMode);
+  applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
   const finalSource = "safe-polish";
   if (debug) {
     window.__headlightDebug.source = finalSource;
@@ -2242,6 +2324,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   const strategyOverride = getHeadlightStrategyOverride();
   const maskMode = getHeadlightMaskMode();
   const headlightMode = getHeadlightMode();
+  const polishPreset = getHeadlightPolishStrength();
 
   const lights = await detectHeadlights(b64Original);
   if (!lights.length) {
@@ -2260,11 +2343,11 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     };
   }
 
-  console.log(`[Headlights] orchestrator start (headlightMode=${headlightMode}, strategyOverride=${strategyOverride}, maskMode=${maskMode})`);
+  console.log(`[Headlights] orchestrator start (headlightMode=${headlightMode}, strategyOverride=${strategyOverride}, maskMode=${maskMode}, polish=${polishPreset.label})`);
 
   // ── full-photo-identical: dedicated pipeline ────────────────────────────
   if (headlightMode === "full-photo-identical") {
-    return await runFullPhotoIdentical(ctx, W, H, lights, { strength, debug, maskMode });
+    return await runFullPhotoIdentical(ctx, W, H, lights, { strength, debug, maskMode, polishPreset });
   }
 
   // ── per-headlight-only short-circuit ────────────────────────────────────
@@ -2286,7 +2369,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   if (a1.ok) {
     const c = compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
     if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
-    applySafeLensPolish(ctx, W, H, lights, maskMode);
+    applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
     if (debug) {
       window.__headlightDebug.source = "full-image:1";
       window.__headlightDebug.attempts[0].fusedCanvas = c?.fusedCanvas;
@@ -2296,7 +2379,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     console.log("[Headlights] OUTPUT SOURCE = full-image:1");
     const refine = await runRefinePass(ctx, lights, W, H, { strength, debug, maskMode });
     if (maskMode === 'lens' && refine.some(r => r.ok)) applyLensEnhancement(ctx, W, H, lights);
-    if (refine.some(r => r.ok)) applySafeLensPolish(ctx, W, H, lights, maskMode);
+    if (refine.some(r => r.ok)) applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
     const acceptedRefines = refine.filter(r => r.ok).length;
     const finalSource = acceptedRefines > 0
       ? `full-image:1 + refine:${acceptedRefines}/${refine.length}`
@@ -2339,7 +2422,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     if (a2.ok) {
       const c = compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
       if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
-      applySafeLensPolish(ctx, W, H, lights, maskMode);
+      applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
       if (debug) {
         window.__headlightDebug.source = "full-image:2";
         const a2dbg = window.__headlightDebug.attempts[window.__headlightDebug.attempts.length - 1];
@@ -2349,7 +2432,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       console.log("[Headlights] OUTPUT SOURCE = full-image:2");
       const refine = await runRefinePass(ctx, lights, W, H, { strength, debug, maskMode });
       if (maskMode === 'lens' && refine.some(r => r.ok)) applyLensEnhancement(ctx, W, H, lights);
-      if (refine.some(r => r.ok)) applySafeLensPolish(ctx, W, H, lights, maskMode);
+      if (refine.some(r => r.ok)) applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
       const acceptedRefines = refine.filter(r => r.ok).length;
       const finalSource = acceptedRefines > 0
         ? `full-image:2 + refine:${acceptedRefines}/${refine.length}`
@@ -2412,7 +2495,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   // Apply non-AI enhancement: yellow reduction + dehaze + clarity + sharpen.
   // This always produces a stable, natural, sellable result.
   console.log("[Headlights] applying safe lens polish as fallback (all AI attempts rejected)");
-  applySafeLensPolish(ctx, W, H, lights, maskMode);
+  applySafeLensPolish(ctx, W, H, lights, maskMode, polishPreset);
   const fallbackSource = "safe-polish";
   if (debug) {
     window.__headlightDebug.source = fallbackSource;

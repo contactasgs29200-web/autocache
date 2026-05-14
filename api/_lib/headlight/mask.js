@@ -159,3 +159,27 @@ export const FULL_PHOTO_IDENTICAL_THRESHOLDS = {
   meanRingMax: 25,
   pctHighOutMax: 8,
 };
+
+export const SAFE_POLISH_PRESETS = {
+  soft: {
+    label: 'soft',
+    yellowThreshold: 12, yellowFactor: 0.28, yellowMax: 28,
+    desatYellow: 0.15,
+    dehaze: 0.10, brightness: [3, 3, 5], sharpen: 0.30,
+    opacityLift: 4,
+  },
+  medium: {
+    label: 'medium',
+    yellowThreshold: 8, yellowFactor: 0.42, yellowMax: 38,
+    desatYellow: 0.28,
+    dehaze: 0.16, brightness: [6, 5, 8], sharpen: 0.40,
+    opacityLift: 7,
+  },
+  strong: {
+    label: 'strong',
+    yellowThreshold: 5, yellowFactor: 0.58, yellowMax: 48,
+    desatYellow: 0.38,
+    dehaze: 0.22, brightness: [9, 8, 12], sharpen: 0.50,
+    opacityLift: 10,
+  },
+};
