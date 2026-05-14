@@ -8,6 +8,8 @@ import {
   STRICT_RETRY_PROMPT,
   REFINE_PROMPT,
   REFINE_NEGATIVE_PROMPT,
+  LENS_PROMPT_SUFFIX,
+  LENS_NEGATIVE_PROMPT_ADDITIONS,
   STRENGTH_PRESETS,
   DEFAULT_STRENGTH,
   resolveStrength,
@@ -93,4 +95,25 @@ test('high strength is more aggressive than restore', () => {
   // restore: high fidelity (preserve), high: low fidelity (let it diverge)
   assert.equal(STRENGTH_PRESETS.restore.openaiFidelity, 'high');
   assert.equal(STRENGTH_PRESETS.high.openaiFidelity, 'low');
+});
+
+test('LENS_PROMPT_SUFFIX mentions transparent headlight lens interior', () => {
+  assert.match(LENS_PROMPT_SUFFIX, /transparent headlight lens interior/i);
+});
+
+test('LENS_PROMPT_SUFFIX forbids halo and circular patch', () => {
+  assert.match(LENS_PROMPT_SUFFIX, /no halo/i);
+  assert.match(LENS_PROMPT_SUFFIX, /no circular patch/i);
+});
+
+test('LENS_PROMPT_SUFFIX forbids altering bodywork', () => {
+  assert.match(LENS_PROMPT_SUFFIX, /hood/i);
+  assert.match(LENS_PROMPT_SUFFIX, /fender/i);
+  assert.match(LENS_PROMPT_SUFFIX, /bumper/i);
+});
+
+test('LENS_NEGATIVE_PROMPT_ADDITIONS covers halo artifacts', () => {
+  assert.ok(LENS_NEGATIVE_PROMPT_ADDITIONS.includes('halo around headlight'));
+  assert.ok(LENS_NEGATIVE_PROMPT_ADDITIONS.includes('circular repaint'));
+  assert.ok(LENS_NEGATIVE_PROMPT_ADDITIONS.includes('dark border around lens'));
 });

@@ -90,6 +90,22 @@ export const REFINE_NEGATIVE_PROMPT = [
   'artifacts',
 ].join(', ');
 
+export const LENS_PROMPT_SUFFIX = [
+  'Modify only the transparent headlight lens interior.',
+  'Do not repaint any circular area around the headlight.',
+  'Do not alter hood, fender, bumper, paint, panel gaps or reflections.',
+  'No halo, no circular patch, no oval repaint, no seam, no dark border.',
+].join(' ');
+
+export const LENS_NEGATIVE_PROMPT_ADDITIONS = [
+  'halo around headlight',
+  'circular repaint',
+  'oval patch',
+  'repainted rim',
+  'dark border around lens',
+  'visible mask boundary',
+].join(', ');
+
 // Strength controls how aggressive the model is allowed to redraw the masked area.
 export const STRENGTH_PRESETS = {
   restore: { label: 'restore', denoise: 0.40, openaiQuality: 'medium', openaiFidelity: 'high' },

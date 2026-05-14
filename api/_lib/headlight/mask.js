@@ -100,3 +100,55 @@ export function maskFeatherRadii({ workW, workH }) {
 }
 
 export const MASK_GUARDS = { PLATE_GUARD_BOTTOM, ROOF_GUARD_TOP };
+
+export const MASK_MODE_CONFIGS = {
+  full: {
+    fullImage: { layers: [
+      { expand: 0.06, blurFactor: 0.006 },
+      { expand: 0.04, blurFactor: 0.003 },
+      { expand: 0.02, blurFactor: 0 },
+    ]},
+    refine: { layers: [
+      { expand: 0.01, blurFactor: 0.0025 },
+      { expand: -0.02, blurFactor: 0 },
+    ]},
+  },
+  polygon: {
+    fullImage: { layers: [
+      { expand: 0.02, blurFactor: 0.003 },
+      { expand: 0.0, blurFactor: 0 },
+    ]},
+    refine: { layers: [
+      { expand: 0.0, blurFactor: 0.002 },
+      { expand: -0.01, blurFactor: 0 },
+    ]},
+  },
+  tight: {
+    fullImage: { layers: [
+      { expand: 0.06, blurFactor: 0.006 },
+      { expand: 0.04, blurFactor: 0.003 },
+      { expand: 0.02, blurFactor: 0 },
+    ]},
+    refine: { layers: [
+      { expand: 0.01, blurFactor: 0.0025 },
+      { expand: -0.02, blurFactor: 0 },
+    ]},
+  },
+  lens: {
+    fullImage: { layers: [
+      { expand: -0.04, blurFactor: 0.002 },
+      { expand: -0.06, blurFactor: 0.001 },
+      { expand: -0.08, blurFactor: 0 },
+    ]},
+    refine: { layers: [
+      { expand: -0.06, blurFactor: 0.0015 },
+      { expand: -0.10, blurFactor: 0 },
+    ]},
+  },
+};
+
+export const LENS_HALO_THRESHOLDS = {
+  meanRingMax: 10,
+  pctRingChangedMax: 3,
+  darkLineMax: 0.3,
+};

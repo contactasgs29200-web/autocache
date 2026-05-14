@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 // @imgly/background-removal chargé dynamiquement (uniquement si showroom activé)
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
+import { MASK_MODE_CONFIGS, LENS_HALO_THRESHOLDS } from "../api/_lib/headlight/mask.js";
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 767);
@@ -601,7 +602,7 @@ function createSingleHeadlightAssets(ctx, light, crop, W, H) {
 //     saw on earlier per-headlight runs.
 //   - feather is gentler and applied with a smaller blur — keeps the
 //     transition smooth without leaking onto the body.
-function createRefineAssets(ctx, light, crop, W, H) {
+function createRefineAssets(ctx, light, crop, W, H, maskMode = 'tight') {
   const localLight = transformLightToCrop(light, crop, W, H);
 
   const image = document.createElement('canvas');
@@ -623,11 +624,16 @@ function createRefineAssets(ctx, light, crop, W, H) {
   mctx.fillStyle = 'rgba(0,0,0,1)';
   mctx.fillRect(0, 0, crop.workW, crop.workH);
   mctx.globalCompositeOperation = 'destination-out';
-  // Tight feathered outer (1% expand) + crisp inner (-2% SHRUNK).
-  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(crop.workW, crop.workH) * 0.0025))}px)`;
-  drawHeadlightShape(mctx, localLight, crop.workW, crop.workH, 0.01);
+
+  const layers = (MASK_MODE_CONFIGS[maskMode] || MASK_MODE_CONFIGS.tight).refine.layers;
+  for (const layer of layers) {
+    const blurPx = layer.blurFactor > 0
+      ? Math.max(2, Math.round(Math.min(crop.workW, crop.workH) * layer.blurFactor))
+      : 0;
+    mctx.filter = blurPx > 0 ? `blur(${blurPx}px)` : 'none';
+    drawHeadlightShape(mctx, localLight, crop.workW, crop.workH, layer.expand);
+  }
   mctx.filter = 'none';
-  drawHeadlightShape(mctx, localLight, crop.workW, crop.workH, -0.02);
   mctx.globalCompositeOperation = 'source-over';
 
   const maskCoverage = computeMaskCoverage(mask);
@@ -990,6 +996,15 @@ function getHeadlightStrategyOverride() {
   } catch { return "auto"; }
 }
 
+function getHeadlightMaskMode() {
+  if (typeof window === "undefined") return "tight";
+  try {
+    const v = new URLSearchParams(window.location.search).get("headlightMask");
+    if (v && MASK_MODE_CONFIGS[v]) return v;
+    return "tight";
+  } catch { return "tight"; }
+}
+
 // Build a colored "diff map" canvas where pixel intensity = |before - after|.
 // Used only in debug to make hidden drift visible.
 function buildDiffMap(beforeCanvas, afterCanvas) {
@@ -1035,7 +1050,7 @@ function getFullImageWorkSize(W, H) {
 //   - mask: opaque black everywhere EXCEPT the headlight polygons, which
 //           are punched transparent (= editable). Light feather to avoid
 //           a hard seam at the edges.
-function createFullImageEditAssets(ctx, W, H, lights) {
+function createFullImageEditAssets(ctx, W, H, lights, maskMode = 'tight') {
   const { workW, workH, size } = getFullImageWorkSize(W, H);
 
   const image = document.createElement('canvas');
@@ -1054,19 +1069,27 @@ function createFullImageEditAssets(ctx, W, H, lights) {
   mctx.fillRect(0, 0, workW, workH);
   mctx.globalCompositeOperation = 'destination-out';
   mctx.fillStyle = 'rgba(0,0,0,1)';
-  // Strong outer feather (~0.6% of work edge) so gpt-image-1 sees a smooth
-  // gradient rather than a hard polygon edge — kills the "AI-completed
-  // black line" artifact we observed along the top of the lens.
-  mctx.filter = `blur(${Math.max(4, Math.round(Math.min(workW, workH) * 0.006))}px)`;
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.06);
-  // Medium feather inside the feathered ring to keep the optic core fully editable.
-  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.003))}px)`;
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.04);
+
+  const layers = (MASK_MODE_CONFIGS[maskMode] || MASK_MODE_CONFIGS.tight).fullImage.layers;
+  for (const layer of layers) {
+    const blurPx = layer.blurFactor > 0
+      ? Math.max(2, Math.round(Math.min(workW, workH) * layer.blurFactor))
+      : 0;
+    mctx.filter = blurPx > 0 ? `blur(${blurPx}px)` : 'none';
+    drawHeadlightShapes(mctx, lights, workW, workH, layer.expand);
+  }
   mctx.filter = 'none';
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.02);
   mctx.globalCompositeOperation = 'source-over';
 
-  const maskCoverage = computeMaskCoverage(mask);
+  let maskCoverage = computeMaskCoverage(mask);
+
+  if (maskMode === 'lens' && maskCoverage < 0.001) {
+    console.warn(`[Headlights] lens mask too small (${(maskCoverage * 100).toFixed(3)}%), falling back to tight`);
+    return createFullImageEditAssets(ctx, W, H, lights, 'tight');
+  }
+
+  console.log(`[Headlights] mask mode = ${maskMode}`);
+  console.log(`[Headlights] lens mask coverage = ${(maskCoverage * 100).toFixed(2)}%`);
 
   return {
     imageCanvas: image,
@@ -1185,6 +1208,109 @@ function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
     stats: { meanIn, meanOut, meanRing, pctHighOut },
     thresholds: VALIDATOR_THRESHOLDS,
   };
+}
+
+function validateLensHalo(beforeCanvas, afterCanvas, lights) {
+  const W = beforeCanvas.width;
+  const H = beforeCanvas.height;
+
+  const outer = document.createElement('canvas');
+  outer.width = W; outer.height = H;
+  const octx = outer.getContext('2d');
+  octx.fillStyle = 'rgba(255,255,255,1)';
+  drawHeadlightShapes(octx, lights, W, H, 0.02);
+  octx.globalCompositeOperation = 'destination-out';
+  drawHeadlightShapes(octx, lights, W, H, -0.04);
+  octx.globalCompositeOperation = 'source-over';
+
+  const bData = beforeCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const aData = afterCanvas.getContext('2d').getImageData(0, 0, W, H).data;
+  const ringMask = octx.getImageData(0, 0, W, H).data;
+
+  let ringSum = 0, ringN = 0, changedPixels = 0, darkLinePixels = 0;
+
+  for (let i = 0; i < bData.length; i += 4) {
+    if (ringMask[i + 3] < 8) continue;
+    const d = (Math.abs(bData[i] - aData[i])
+             + Math.abs(bData[i + 1] - aData[i + 1])
+             + Math.abs(bData[i + 2] - aData[i + 2])) / 3;
+    ringSum += d;
+    ringN++;
+    if (d > 12) changedPixels++;
+    const bLum = (bData[i] + bData[i + 1] + bData[i + 2]) / 3;
+    const aLum = (aData[i] + aData[i + 1] + aData[i + 2]) / 3;
+    if (aLum < 45 && bLum - aLum > 35) darkLinePixels++;
+  }
+
+  const meanRing = ringN ? ringSum / ringN : 0;
+  const pctRingChanged = ringN ? (changedPixels / ringN) * 100 : 0;
+  const darkLine = ringN ? (darkLinePixels / ringN) * 100 : 0;
+
+  const reasons = [];
+  if (meanRing > LENS_HALO_THRESHOLDS.meanRingMax)
+    reasons.push(`halo: meanRing ${meanRing.toFixed(2)} > ${LENS_HALO_THRESHOLDS.meanRingMax}`);
+  if (pctRingChanged > LENS_HALO_THRESHOLDS.pctRingChangedMax)
+    reasons.push(`ring-changed: ${pctRingChanged.toFixed(2)}% > ${LENS_HALO_THRESHOLDS.pctRingChangedMax}%`);
+  if (darkLine > LENS_HALO_THRESHOLDS.darkLineMax)
+    reasons.push(`dark-line: ${darkLine.toFixed(2)}% > ${LENS_HALO_THRESHOLDS.darkLineMax}%`);
+
+  const ok = reasons.length === 0;
+  console.log(`[Headlights] halo validation = ${JSON.stringify({
+    ok, meanRing: +meanRing.toFixed(2),
+    pctRingChanged: +pctRingChanged.toFixed(2),
+    darkLine: +darkLine.toFixed(2),
+  })}`);
+
+  return { ok, reasons, stats: { meanRing, pctRingChanged, darkLine }, thresholds: LENS_HALO_THRESHOLDS };
+}
+
+function applyLensEnhancement(ctx, W, H, lights) {
+  const lensMask = document.createElement('canvas');
+  lensMask.width = W;
+  lensMask.height = H;
+  const lctx = lensMask.getContext('2d');
+  lctx.fillStyle = 'rgba(255,255,255,1)';
+  lctx.filter = `blur(${Math.max(1, Math.round(Math.min(W, H) * 0.0015))}px)`;
+  drawHeadlightShapes(lctx, lights, W, H, -0.06);
+  lctx.filter = 'none';
+  drawHeadlightShapes(lctx, lights, W, H, -0.08);
+
+  const id = ctx.getImageData(0, 0, W, H);
+  const d = id.data;
+  const lm = lctx.getImageData(0, 0, W, H).data;
+
+  const blurred = blurredCopy(ctx.canvas, Math.max(4, Math.round(Math.min(W, H) * 0.02)));
+  const bData = blurred.getContext('2d').getImageData(0, 0, W, H).data;
+
+  const sCurve = (v) => {
+    const t = v / 255;
+    const s = 3 * t * t - 2 * t * t * t;
+    return Math.max(0, Math.min(255, Math.round((t + (s - t) * 0.08) * 255)));
+  };
+
+  for (let i = 0; i < d.length; i += 4) {
+    if (lm[i + 3] < 8) continue;
+    const alpha = lm[i + 3] / 255;
+
+    let r = sCurve(d[i]);
+    let g = sCurve(d[i + 1]);
+    let b = sCurve(d[i + 2]);
+
+    r = Math.min(255, r + 3);
+    g = Math.min(255, g + 3);
+    b = Math.min(255, b + 4);
+
+    const strength = 0.3;
+    const sr = Math.max(0, Math.min(255, Math.round(r + strength * (r - bData[i]))));
+    const sg = Math.max(0, Math.min(255, Math.round(g + strength * (g - bData[i + 1]))));
+    const sb = Math.max(0, Math.min(255, Math.round(b + strength * (b - bData[i + 2]))));
+
+    d[i]     = Math.round(d[i]     + (sr - d[i])     * alpha);
+    d[i + 1] = Math.round(d[i + 1] + (sg - d[i + 1]) * alpha);
+    d[i + 2] = Math.round(d[i + 2] + (sb - d[i + 2]) * alpha);
+  }
+  ctx.putImageData(id, 0, 0);
+  console.log('[Headlights] lens post-process applied (dehaze + clarity + unsharp mask)');
 }
 
 // Blur a canvas at sigma pixels using the native canvas filter (browser GPU
@@ -1322,13 +1448,14 @@ function compositeFullImageResult(ctx, editedImg, lights, W, H, blendParams = nu
 // One full-image attempt. Returns { ok, validation, ... } without committing
 // the composite to ctx — the caller commits only on success.
 async function tryFullImageRestoration(ctx, W, H, lights, opts) {
-  const { strength = 'restore', strictPrompt = null, debug = false, attempt } = opts;
-  const assets = createFullImageEditAssets(ctx, W, H, lights);
+  const { strength = 'restore', strictPrompt = null, debug = false, attempt, maskMode = 'tight' } = opts;
+  const assets = createFullImageEditAssets(ctx, W, H, lights, maskMode);
   console.log(`[Headlights] full-image attempt ${attempt}`, {
     workSize: assets.size,
     maskCoveragePct: (assets.maskCoverage * 100).toFixed(2) + '%',
     lights: lights.length,
     strictPrompt: !!strictPrompt,
+    maskMode,
   });
 
   const url = debug ? '/api/lustrage-pro?debug=1' : '/api/lustrage-pro';
@@ -1342,6 +1469,10 @@ async function tryFullImageRestoration(ctx, W, H, lights, opts) {
     strength,
   };
   if (strictPrompt) payload.prompt = strictPrompt;
+  if (maskMode === 'lens') {
+    const lensSuffix = 'Modify only the transparent headlight lens interior. Do not repaint any circular area around the headlight. Do not alter hood, fender, bumper, paint, panel gaps or reflections. No halo, no circular patch, no oval repaint, no seam, no dark border.';
+    payload.prompt = payload.prompt ? payload.prompt + ' ' + lensSuffix : lensSuffix;
+  }
 
   let r, data;
   try {
@@ -1411,6 +1542,17 @@ async function tryFullImageRestoration(ctx, W, H, lights, opts) {
     },
     thresholds: validation.thresholds,
   });
+
+  if (validation.ok && maskMode === 'lens') {
+    const halo = validateLensHalo(beforeCanvas, aiAtSourceSize, lights);
+    if (!halo.ok) {
+      validation.ok = false;
+      validation.reasons.push(...halo.reasons);
+      validation.stats.haloMeanRing = halo.stats.meanRing;
+      validation.stats.haloPctChanged = halo.stats.pctRingChanged;
+      validation.stats.haloDarkLine = halo.stats.darkLine;
+    }
+  }
 
   return {
     ok: validation.ok,
@@ -1653,9 +1795,12 @@ function persistDebugAttempt(debug, attempt) {
 // bodywork drift, redesign). If the refine validates, it's composited over
 // the full-image baseline at that optic. If it doesn't, the baseline is
 // preserved untouched.
-async function callHeadlightRefineApi(idx, assets, strength, debug) {
+async function callHeadlightRefineApi(idx, assets, strength, debug, maskMode = 'tight') {
   const url = debug ? "/api/lustrage-pro?debug=1" : "/api/lustrage-pro";
-  const REFINE_PROMPT = "Refine only this car headlight lens. Make it clearer, sharper, more transparent and professionally polished while preserving the exact original headlight shape, internal reflector details, lens geometry, perspective, highlights and surrounding bodywork. Remove yellow oxidation, haze and cloudiness. Do not redesign the headlight, do not change its shape, do not add black lines, seams, borders, scratches, shadows, stickers, fake reflections, blur or artifacts. The result must remain photorealistic and match the original car.";
+  let prompt = "Refine only this car headlight lens. Make it clearer, sharper, more transparent and professionally polished while preserving the exact original headlight shape, internal reflector details, lens geometry, perspective, highlights and surrounding bodywork. Remove yellow oxidation, haze and cloudiness. Do not redesign the headlight, do not change its shape, do not add black lines, seams, borders, scratches, shadows, stickers, fake reflections, blur or artifacts. The result must remain photorealistic and match the original car.";
+  if (maskMode === 'lens') {
+    prompt += ' Modify only the transparent headlight lens interior. Do not repaint any circular area around the headlight. Do not alter hood, fender, bumper, paint, panel gaps or reflections. No halo, no circular patch, no oval repaint, no seam, no dark border.';
+  }
   const payload = {
     imageBase64: assets.imageBase64,
     imageMime: assets.imageMime,
@@ -1664,7 +1809,7 @@ async function callHeadlightRefineApi(idx, assets, strength, debug) {
     maskCoverage: assets.maskCoverage,
     mode: "ai",
     strength,
-    prompt: REFINE_PROMPT,
+    prompt,
   };
   try {
     const r = await fetch(url, {
@@ -1685,7 +1830,7 @@ async function callHeadlightRefineApi(idx, assets, strength, debug) {
 }
 
 async function runRefinePass(ctx, lights, W, H, opts = {}) {
-  const { strength = "restore", debug = false } = opts;
+  const { strength = "restore", debug = false, maskMode = 'tight' } = opts;
 
   // Snapshot the post-full-image baseline so we can rollback per-optic on reject.
   const baseline = document.createElement('canvas');
@@ -1695,11 +1840,12 @@ async function runRefinePass(ctx, lights, W, H, opts = {}) {
 
   const tasks = lights.map((light, idx) => {
     const crop = computeLightCrop(light, W, H);
-    const assets = createRefineAssets(ctx, light, crop, W, H);
+    const assets = createRefineAssets(ctx, light, crop, W, H, maskMode);
     console.log(`[Headlights:refine#${idx}] crop`, {
       bbox: { x: light.x.toFixed(3), y: light.y.toFixed(3), w: light.w.toFixed(3), h: light.h.toFixed(3) },
       sendSize: crop.size,
       maskCoveragePct: (assets.maskCoverage * 100).toFixed(2) + '%',
+      maskMode,
     });
     return { idx, light, crop, assets };
   });
@@ -1715,9 +1861,8 @@ async function runRefinePass(ctx, lights, W, H, opts = {}) {
     }));
   }
 
-  // Parallel API calls.
   const apiResults = await Promise.all(tasks.map(t =>
-    callHeadlightRefineApi(t.idx, t.assets, strength, debug)
+    callHeadlightRefineApi(t.idx, t.assets, strength, debug, maskMode)
   ));
 
   // Sequential validate + composite.
@@ -1821,6 +1966,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   const { strength = "restore" } = opts;
   const debug = isHeadlightDebugEnabled();
   const strategyOverride = getHeadlightStrategyOverride();
+  const maskMode = getHeadlightMaskMode();
 
   const lights = await detectHeadlights(b64Original);
   if (!lights.length) {
@@ -1830,14 +1976,15 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
 
   if (debug) {
     window.__headlightDebug = {
-      source: null,        // filled at the end: "full-image:1" | "full-image:2" | "full-image:forced" | "per-headlight" | "none"
+      source: null,
       strategyOverride,
+      maskMode,
       lights,
       attempts: [],
     };
   }
 
-  console.log(`[Headlights] orchestrator start (strategyOverride=${strategyOverride})`);
+  console.log(`[Headlights] orchestrator start (strategyOverride=${strategyOverride}, maskMode=${maskMode})`);
 
   // ── per-headlight-only short-circuit ────────────────────────────────────
   if (strategyOverride === "per-headlight-only") {
@@ -1852,11 +1999,12 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   // ── Attempt 1: full-image with the default strict prompt ──
   console.log("[Headlights] mode=full-image attempt=1");
   const a1 = await tryFullImageRestoration(ctx, W, H, lights, {
-    strength, debug, strictPrompt: null, attempt: 1,
+    strength, debug, strictPrompt: null, attempt: 1, maskMode,
   });
   persistDebugAttempt(debug, a1);
   if (a1.ok) {
     const c = compositeFullImageResult(ctx, a1.editedImg, lights, W, H, a1.aiResponse?.blend);
+    if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
     if (debug) {
       window.__headlightDebug.source = "full-image:1";
       window.__headlightDebug.attempts[0].fusedCanvas = c?.fusedCanvas;
@@ -1864,8 +2012,8 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     }
     console.log("[Headlights] ✓ full-image attempt 1 accepted by validator");
     console.log("[Headlights] OUTPUT SOURCE = full-image:1");
-    // Hybrid pipeline: now polish each optic on top of the accepted baseline.
-    const refine = await runRefinePass(ctx, lights, W, H, { strength, debug });
+    const refine = await runRefinePass(ctx, lights, W, H, { strength, debug, maskMode });
+    if (maskMode === 'lens' && refine.some(r => r.ok)) applyLensEnhancement(ctx, W, H, lights);
     const acceptedRefines = refine.filter(r => r.ok).length;
     const finalSource = acceptedRefines > 0
       ? `full-image:1 + refine:${acceptedRefines}/${refine.length}`
@@ -1878,6 +2026,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       source: "full-image:1",
       finalSource,
       attempt: 1,
+      maskMode,
       provider: a1.aiResponse?.provider,
       model: a1.aiResponse?.model,
       validation: a1.validation,
@@ -1901,11 +2050,12 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       "The output must be visually indistinguishable from the input outside the headlight lenses.",
     ].join(" ");
     a2 = await tryFullImageRestoration(ctx, W, H, lights, {
-      strength, debug, strictPrompt: STRICTER_PROMPT_FROM_USER, attempt: 2,
+      strength, debug, strictPrompt: STRICTER_PROMPT_FROM_USER, attempt: 2, maskMode,
     });
     persistDebugAttempt(debug, a2);
     if (a2.ok) {
       const c = compositeFullImageResult(ctx, a2.editedImg, lights, W, H, a2.aiResponse?.blend);
+      if (maskMode === 'lens') applyLensEnhancement(ctx, W, H, lights);
       if (debug) {
         window.__headlightDebug.source = "full-image:2";
         const a2dbg = window.__headlightDebug.attempts[window.__headlightDebug.attempts.length - 1];
@@ -1913,7 +2063,8 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       }
       console.log("[Headlights] ✓ full-image attempt 2 accepted by validator");
       console.log("[Headlights] OUTPUT SOURCE = full-image:2");
-      const refine = await runRefinePass(ctx, lights, W, H, { strength, debug });
+      const refine = await runRefinePass(ctx, lights, W, H, { strength, debug, maskMode });
+      if (maskMode === 'lens' && refine.some(r => r.ok)) applyLensEnhancement(ctx, W, H, lights);
       const acceptedRefines = refine.filter(r => r.ok).length;
       const finalSource = acceptedRefines > 0
         ? `full-image:2 + refine:${acceptedRefines}/${refine.length}`
@@ -1926,6 +2077,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
         source: "full-image:2",
         finalSource,
         attempt: 2,
+        maskMode,
         provider: a2.aiResponse?.provider,
         model: a2.aiResponse?.model,
         validation: a2.validation,
