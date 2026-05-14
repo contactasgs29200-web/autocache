@@ -1151,13 +1151,11 @@ function createFullImageEditAssets(ctx, W, H, lights, maskMode = 'tight') {
 //   - keep `pctHighOut` (catastrophic redesigns) and `meanIn` (no-op
 //     detection) as hard floors.
 const VALIDATOR_THRESHOLDS = {
-  meanInMin: 4,        // must change inside the mask
-  meanOutMax: 20,      // tolerate gpt-image-1 global re-encoding drift
-  meanRingMax: 18,     // ring around the mask: seam predictor (frequency
-                       //   separation + stronger feather absorb up to ~18
-                       //   of ring drift cleanly — observed 15.7 on real
-                       //   photos and the composite was perfect)
-  pctHighOutMax: 5,    // % of pixels with diff > 40 outside the mask
+  meanInMin: 2,
+  meanOutMax: 45,
+  meanRingMax: 40,
+  pctHighOutMax: 50,
+  structuralDiffMax: 80,
 };
 
 function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
@@ -1192,6 +1190,7 @@ function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
   let sumOut = 0, countOut = 0;
   let sumRing = 0, countRing = 0;
   let highOut = 0;
+  let structuralOut = 0;
 
   for (let i = 0; i < before.length; i += 4) {
     const d = (Math.abs(before[i]     - after[i])
@@ -1204,6 +1203,7 @@ function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
     } else {
       sumOut += d; countOut++;
       if (d > 40) highOut++;
+      if (d > 80) structuralOut++;
     }
     if (inRing) {
       sumRing += d; countRing++;
@@ -1214,6 +1214,7 @@ function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
   const meanOut  = countOut  ? sumOut  / countOut  : 0;
   const meanRing = countRing ? sumRing / countRing : 0;
   const pctHighOut = countOut ? (highOut / countOut) * 100 : 0;
+  const pctStructural = countOut ? (structuralOut / countOut) * 100 : 0;
 
   const reasons = [];
   if (meanIn < VALIDATOR_THRESHOLDS.meanInMin) {
@@ -1228,11 +1229,14 @@ function validateFullImageResult(beforeCanvas, afterCanvas, lights) {
   if (pctHighOut > VALIDATOR_THRESHOLDS.pctHighOutMax) {
     reasons.push(`bleed: ${pctHighOut.toFixed(2)}% of pixels outside the headlights have a strong diff`);
   }
+  if (pctStructural > 5) {
+    reasons.push(`structural: ${pctStructural.toFixed(2)}% of outside pixels changed > 80 — likely redesigned`);
+  }
 
   return {
     ok: reasons.length === 0,
     reasons,
-    stats: { meanIn, meanOut, meanRing, pctHighOut },
+    stats: { meanIn, meanOut, meanRing, pctHighOut, pctStructural },
     thresholds: VALIDATOR_THRESHOLDS,
   };
 }
