@@ -90,6 +90,20 @@ export const REFINE_NEGATIVE_PROMPT = [
   'artifacts',
 ].join(', ');
 
+// Used when the front sends `headlightMask=full` to send the WHOLE image as
+// editable and rely on the prompt alone to keep everything but the lenses
+// identical. The hypothesis is that giving the model a full-image canvas
+// removes the local "halo" around the polygon mask boundary because the
+// generation is homogeneous over the whole frame.
+export const FULL_MASK_PROMPT = [
+  'Edit the full car photo while keeping the entire image identical except for the front headlights.',
+  'Make only the front headlight lenses less yellow, clearer, sharper and more transparent.',
+  'Preserve the exact car body, paint, bumper, hood, grille, wheels, windows, background, lighting,',
+  'shadows, reflections, framing, camera angle and license plate overlay.',
+  'Do not change anything outside the headlight lenses.',
+  'Do not add halos, seams, patches, black lines, blur rings, or visible edit boundaries.',
+].join(' ');
+
 // Strength controls how aggressive the model is allowed to redraw the masked area.
 export const STRENGTH_PRESETS = {
   restore: { label: 'restore', denoise: 0.40, openaiQuality: 'medium', openaiFidelity: 'high' },

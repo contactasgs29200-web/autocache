@@ -8,6 +8,7 @@ import {
   STRICT_RETRY_PROMPT,
   REFINE_PROMPT,
   REFINE_NEGATIVE_PROMPT,
+  FULL_MASK_PROMPT,
   STRENGTH_PRESETS,
   DEFAULT_STRENGTH,
   resolveStrength,
@@ -93,4 +94,15 @@ test('high strength is more aggressive than restore', () => {
   // restore: high fidelity (preserve), high: low fidelity (let it diverge)
   assert.equal(STRENGTH_PRESETS.restore.openaiFidelity, 'high');
   assert.equal(STRENGTH_PRESETS.high.openaiFidelity, 'low');
+});
+
+test('FULL_MASK_PROMPT explicitly forbids edit-boundary artifacts', () => {
+  // The full-photo-mask mode has no mask to constrain the model, so the
+  // prompt must be loud about NOT changing anything outside the lenses
+  // AND must forbid the visible-boundary artifacts that gave it away.
+  assert.match(FULL_MASK_PROMPT, /front headlight lenses/i);
+  assert.match(FULL_MASK_PROMPT, /less yellow/i);
+  assert.match(FULL_MASK_PROMPT, /clearer|sharper|more transparent/i);
+  assert.match(FULL_MASK_PROMPT, /not change anything outside the headlight/i);
+  assert.match(FULL_MASK_PROMPT, /halos?|seams?|patches?|black lines?|blur rings?|visible edit boundaries/i);
 });

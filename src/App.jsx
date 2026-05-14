@@ -990,6 +990,24 @@ function getHeadlightStrategyOverride() {
   } catch { return "auto"; }
 }
 
+// ?headlightMask=polygon (default) → mask covers ONLY the headlight polygons
+// ?headlightMask=tight             → polygon mask SHRUNK by 4% so the edit
+//                                    cannot touch the lens rim or surrounding
+//                                    body. Trades less edge bleed for a
+//                                    slightly smaller usable area.
+// ?headlightMask=full              → the whole image is editable; the prompt
+//                                    alone keeps the body unchanged. Tests
+//                                    whether uniform full-frame generation
+//                                    removes the visible polygon boundary.
+function getHeadlightMaskMode() {
+  if (typeof window === "undefined") return "polygon";
+  try {
+    const v = new URLSearchParams(window.location.search).get("headlightMask");
+    if (v === "tight" || v === "full" || v === "polygon") return v;
+    return "polygon";
+  } catch { return "polygon"; }
+}
+
 // Build a colored "diff map" canvas where pixel intensity = |before - after|.
 // Used only in debug to make hidden drift visible.
 function buildDiffMap(beforeCanvas, afterCanvas) {
@@ -1035,7 +1053,20 @@ function getFullImageWorkSize(W, H) {
 //   - mask: opaque black everywhere EXCEPT the headlight polygons, which
 //           are punched transparent (= editable). Light feather to avoid
 //           a hard seam at the edges.
-function createFullImageEditAssets(ctx, W, H, lights) {
+// Build the (image, mask) pair sent to OpenAI for a full-image edit.
+//
+// `maskMode` selects the mask geometry:
+//   "polygon" (default) — opaque everywhere except a feathered polygon over
+//                         each headlight. Current production behavior.
+//   "tight"             — same polygon but SHRUNK by 4 % (negative expand) so
+//                         the editable area can't touch the lens rim or the
+//                         surrounding body / hood. Reduces edge bleed but
+//                         the AI's edit footprint is smaller.
+//   "full"              — fully transparent mask: the whole image is editable.
+//                         Used with the FULL_MASK_PROMPT to test whether
+//                         uniform full-frame generation removes the visible
+//                         "halo" around the polygon mask boundary.
+function createFullImageEditAssets(ctx, W, H, lights, maskMode = "polygon") {
   const { workW, workH, size } = getFullImageWorkSize(W, H);
 
   const image = document.createElement('canvas');
@@ -1050,21 +1081,38 @@ function createFullImageEditAssets(ctx, W, H, lights) {
   mask.width = workW;
   mask.height = workH;
   const mctx = mask.getContext('2d');
-  mctx.fillStyle = 'rgba(0,0,0,1)';
-  mctx.fillRect(0, 0, workW, workH);
-  mctx.globalCompositeOperation = 'destination-out';
-  mctx.fillStyle = 'rgba(0,0,0,1)';
-  // Strong outer feather (~0.6% of work edge) so gpt-image-1 sees a smooth
-  // gradient rather than a hard polygon edge — kills the "AI-completed
-  // black line" artifact we observed along the top of the lens.
-  mctx.filter = `blur(${Math.max(4, Math.round(Math.min(workW, workH) * 0.006))}px)`;
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.06);
-  // Medium feather inside the feathered ring to keep the optic core fully editable.
-  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.003))}px)`;
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.04);
-  mctx.filter = 'none';
-  drawHeadlightShapes(mctx, lights, workW, workH, 0.02);
-  mctx.globalCompositeOperation = 'source-over';
+
+  if (maskMode === "full") {
+    // Fully transparent — everything is editable. The strict FULL_MASK_PROMPT
+    // is the only thing telling the model to keep the body unchanged.
+    mctx.clearRect(0, 0, workW, workH);
+  } else if (maskMode === "tight") {
+    // Polygon SHRUNK by 4 % with a small feather so the AI strictly stays
+    // inside the lens.
+    mctx.fillStyle = 'rgba(0,0,0,1)';
+    mctx.fillRect(0, 0, workW, workH);
+    mctx.globalCompositeOperation = 'destination-out';
+    mctx.fillStyle = 'rgba(0,0,0,1)';
+    mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.003))}px)`;
+    drawHeadlightShapes(mctx, lights, workW, workH, -0.01);
+    mctx.filter = 'none';
+    drawHeadlightShapes(mctx, lights, workW, workH, -0.04);
+    mctx.globalCompositeOperation = 'source-over';
+  } else {
+    // "polygon" default — strong outer feather so gpt-image-1 sees a smooth
+    // gradient rather than a hard polygon edge.
+    mctx.fillStyle = 'rgba(0,0,0,1)';
+    mctx.fillRect(0, 0, workW, workH);
+    mctx.globalCompositeOperation = 'destination-out';
+    mctx.fillStyle = 'rgba(0,0,0,1)';
+    mctx.filter = `blur(${Math.max(4, Math.round(Math.min(workW, workH) * 0.006))}px)`;
+    drawHeadlightShapes(mctx, lights, workW, workH, 0.06);
+    mctx.filter = `blur(${Math.max(2, Math.round(Math.min(workW, workH) * 0.003))}px)`;
+    drawHeadlightShapes(mctx, lights, workW, workH, 0.04);
+    mctx.filter = 'none';
+    drawHeadlightShapes(mctx, lights, workW, workH, 0.02);
+    mctx.globalCompositeOperation = 'source-over';
+  }
 
   const maskCoverage = computeMaskCoverage(mask);
 
@@ -1075,6 +1123,7 @@ function createFullImageEditAssets(ctx, W, H, lights) {
     imageMime: 'image/jpeg',
     maskBase64: dataURLBase64(mask.toDataURL('image/png')),
     maskCoverage,
+    maskMode,
     workW,
     workH,
     size,
@@ -1322,13 +1371,36 @@ function compositeFullImageResult(ctx, editedImg, lights, W, H, blendParams = nu
 // One full-image attempt. Returns { ok, validation, ... } without committing
 // the composite to ctx — the caller commits only on success.
 async function tryFullImageRestoration(ctx, W, H, lights, opts) {
-  const { strength = 'restore', strictPrompt = null, debug = false, attempt } = opts;
-  const assets = createFullImageEditAssets(ctx, W, H, lights);
+  const {
+    strength = 'restore',
+    strictPrompt = null,
+    debug = false,
+    attempt,
+    maskMode = 'polygon',
+  } = opts;
+  const assets = createFullImageEditAssets(ctx, W, H, lights, maskMode);
+  // For the full-photo mask mode we use the dedicated FULL_MASK_PROMPT
+  // (defined in api/_lib/headlight/prompts.js) which is much more explicit
+  // about "do not change anything outside the headlights". For the
+  // polygon / tight modes the server default DEFAULT_PROMPT is used unless
+  // the caller forces a strictPrompt (e.g. the retry attempt 2).
+  const FULL_MASK_PROMPT = [
+    'Edit the full car photo while keeping the entire image identical except for the front headlights.',
+    'Make only the front headlight lenses less yellow, clearer, sharper and more transparent.',
+    'Preserve the exact car body, paint, bumper, hood, grille, wheels, windows, background, lighting,',
+    'shadows, reflections, framing, camera angle and license plate overlay.',
+    'Do not change anything outside the headlight lenses.',
+    'Do not add halos, seams, patches, black lines, blur rings, or visible edit boundaries.',
+  ].join(' ');
+  const promptForThisAttempt = strictPrompt
+    ?? (maskMode === 'full' ? FULL_MASK_PROMPT : null);
+
   console.log(`[Headlights] full-image attempt ${attempt}`, {
     workSize: assets.size,
+    maskMode,
     maskCoveragePct: (assets.maskCoverage * 100).toFixed(2) + '%',
     lights: lights.length,
-    strictPrompt: !!strictPrompt,
+    promptOverride: !!promptForThisAttempt,
   });
 
   const url = debug ? '/api/lustrage-pro?debug=1' : '/api/lustrage-pro';
@@ -1341,7 +1413,7 @@ async function tryFullImageRestoration(ctx, W, H, lights, opts) {
     mode: 'ai',
     strength,
   };
-  if (strictPrompt) payload.prompt = strictPrompt;
+  if (promptForThisAttempt) payload.prompt = promptForThisAttempt;
 
   let r, data;
   try {
@@ -1821,6 +1893,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   const { strength = "restore" } = opts;
   const debug = isHeadlightDebugEnabled();
   const strategyOverride = getHeadlightStrategyOverride();
+  const maskMode = getHeadlightMaskMode();
 
   const lights = await detectHeadlights(b64Original);
   if (!lights.length) {
@@ -1832,12 +1905,14 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     window.__headlightDebug = {
       source: null,        // filled at the end: "full-image:1" | "full-image:2" | "full-image:forced" | "per-headlight" | "none"
       strategyOverride,
+      maskMode,
       lights,
       attempts: [],
     };
   }
 
   console.log(`[Headlights] orchestrator start (strategyOverride=${strategyOverride})`);
+  console.log(`[Headlights] mask mode = ${maskMode}`);
 
   // ── per-headlight-only short-circuit ────────────────────────────────────
   if (strategyOverride === "per-headlight-only") {
@@ -1852,7 +1927,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   // ── Attempt 1: full-image with the default strict prompt ──
   console.log("[Headlights] mode=full-image attempt=1");
   const a1 = await tryFullImageRestoration(ctx, W, H, lights, {
-    strength, debug, strictPrompt: null, attempt: 1,
+    strength, debug, strictPrompt: null, attempt: 1, maskMode,
   });
   persistDebugAttempt(debug, a1);
   if (a1.ok) {
@@ -1901,7 +1976,7 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       "The output must be visually indistinguishable from the input outside the headlight lenses.",
     ].join(" ");
     a2 = await tryFullImageRestoration(ctx, W, H, lights, {
-      strength, debug, strictPrompt: STRICTER_PROMPT_FROM_USER, attempt: 2,
+      strength, debug, strictPrompt: STRICTER_PROMPT_FROM_USER, attempt: 2, maskMode,
     });
     persistDebugAttempt(debug, a2);
     if (a2.ok) {
