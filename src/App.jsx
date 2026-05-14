@@ -2809,53 +2809,48 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     finalShadowOpacity: { contact: +(CONTACT_OPACITY * oMul).toFixed(3), tire: +(TIRE_OPACITY * oMul).toFixed(3), ambient: +(AMBIENT_OPACITY * oMul).toFixed(3) },
   });
 
-  // Helper: draw a blurred ellipse onto the main canvas
-  function drawShadowEllipse(cx, cy, rw, rh, opacity, blur, debugColor) {
-    const pad = blur * 3;
-    const ew = Math.round(rw * 2 + pad * 2);
-    const eh = Math.round(rh * 2 + pad * 2);
-    if (ew < 2 || eh < 2) return;
+  // Draw a solid black ellipse, blur it, composite with globalAlpha.
+  // debugColor: 'blue'|'red'|'green' for test mode visualization.
+  function drawShadowEllipse(cx, cy, rw, rh, opacity, blurPx, debugColor) {
+    const pad = blurPx * 3;
+    const ew = Math.ceil(rw * 2 + pad * 2);
+    const eh = Math.ceil(rh * 2 + pad * 2);
+    if (ew < 4 || eh < 4) return;
+
+    // 1) Solid ellipse on offscreen canvas
     const ec = document.createElement('canvas');
     ec.width = ew; ec.height = eh;
     const ectx = ec.getContext('2d');
-    const ecx = ew / 2, ecy = eh / 2;
-    const grad = ectx.createRadialGradient(ecx, ecy, 0, ecx, ecy, 1);
-    const col = debugColor || '0,0,0';
-    grad.addColorStop(0, `rgba(${col},${opacity * oMul})`);
-    grad.addColorStop(0.5, `rgba(${col},${opacity * oMul * 0.6})`);
-    grad.addColorStop(0.85, `rgba(${col},${opacity * oMul * 0.15})`);
-    grad.addColorStop(1, `rgba(${col},0)`);
-    ectx.save();
-    ectx.translate(ecx, ecy);
-    ectx.scale(rw, rh);
-    ectx.fillStyle = grad;
+    ectx.fillStyle = debugColor || '#000';
     ectx.beginPath();
-    ectx.arc(0, 0, 1, 0, Math.PI * 2);
+    ectx.ellipse(ew / 2, eh / 2, rw, rh, 0, 0, Math.PI * 2);
     ectx.fill();
-    ectx.restore();
 
-    const blurred = document.createElement('canvas');
-    blurred.width = ew; blurred.height = eh;
-    const bctx = blurred.getContext('2d');
-    bctx.filter = `blur(${blur}px)`;
+    // 2) Blur
+    const bc = document.createElement('canvas');
+    bc.width = ew; bc.height = eh;
+    const bctx = bc.getContext('2d');
+    bctx.filter = `blur(${blurPx}px)`;
     bctx.drawImage(ec, 0, 0);
 
+    // 3) Composite onto main canvas
     ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.drawImage(blurred, cx - ew / 2, cy - eh / 2, ew, eh);
+    ctx.globalAlpha = opacity * oMul;
+    ctx.drawImage(bc, cx - ew / 2, cy - eh / 2);
     ctx.restore();
   }
 
   // ── Layer 1: Contact shadow (underbody ellipse) ──
   if (SHADOW_CONTACT_ENABLED) {
-    const contactW = cw * CONTACT_WIDTH_RATIO / 2;
-    const contactH = ch * CONTACT_HEIGHT_RATIO / 2;
+    const contactRW = cw * CONTACT_WIDTH_RATIO / 2;
+    const contactRH = ch * CONTACT_HEIGHT_RATIO / 2;
     drawShadowEllipse(
-      carCX, groundY + CONTACT_Y_OFFSET + contactH * 0.3,
-      contactW, contactH,
+      carCX, groundY + CONTACT_Y_OFFSET,
+      contactRW, contactRH,
       CONTACT_OPACITY, CONTACT_BLUR,
-      SHADOW_VISIBLE_TEST_MODE ? '0,0,200' : null,
+      SHADOW_VISIBLE_TEST_MODE ? 'blue' : null,
     );
+    console.log('[Showroom shadow] contact drawn', { cx: Math.round(carCX), cy: Math.round(groundY + CONTACT_Y_OFFSET), rw: Math.round(contactRW), rh: Math.round(contactRH), opacity: +(CONTACT_OPACITY * oMul).toFixed(3) });
   }
 
   // ── Layer 2: Tire spot shadows (forced positions) ──
@@ -2863,25 +2858,28 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     const tireRW = cw * TIRE_WIDTH_RATIO / 2;
     const tireRH = ch * TIRE_HEIGHT_RATIO / 2;
     for (const frac of TIRE_POSITIONS) {
+      const tx = carX + frac * cw;
       drawShadowEllipse(
-        carX + frac * cw, groundY + 2,
+        tx, groundY + 2,
         tireRW, tireRH,
         TIRE_OPACITY, TIRE_BLUR,
-        SHADOW_VISIBLE_TEST_MODE ? '200,0,0' : null,
+        SHADOW_VISIBLE_TEST_MODE ? 'red' : null,
       );
+      console.log('[Showroom shadow] tire drawn', { frac, cx: Math.round(tx), cy: Math.round(groundY + 2), rw: Math.round(tireRW), rh: Math.round(tireRH), opacity: +(TIRE_OPACITY * oMul).toFixed(3) });
     }
   }
 
   // ── Layer 3: Ambient shadow (wide soft glow) ──
   if (SHADOW_AMBIENT_ENABLED) {
     const ambRW = cw * 0.52;
-    const ambRH = ch * 0.03;
+    const ambRH = ch * 0.04;
     drawShadowEllipse(
-      carCX, groundY + AMBIENT_Y_OFFSET + ambRH,
+      carCX, groundY + AMBIENT_Y_OFFSET,
       ambRW, ambRH,
       AMBIENT_OPACITY, AMBIENT_BLUR,
-      SHADOW_VISIBLE_TEST_MODE ? '0,200,0' : null,
+      SHADOW_VISIBLE_TEST_MODE ? 'green' : null,
     );
+    console.log('[Showroom shadow] ambient drawn', { cx: Math.round(carCX), cy: Math.round(groundY + AMBIENT_Y_OFFSET), rw: Math.round(ambRW), rh: Math.round(ambRH), opacity: +(AMBIENT_OPACITY * oMul).toFixed(3) });
   }
   // ── Fin ombre ──
   ctx.save();
