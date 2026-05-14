@@ -2739,17 +2739,37 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     actualBottomFrac = (lastRow + 1) / carImg.height;
   } catch (_) { /* fallback to 1.0 */ }
 
-  // ── Ombre réaliste 2 couches basée sur le vrai masque du véhicule ──
+  // ── Ombre showroom 3 couches : contact + tire spots + ambient ──
+  const SHADOW_DEBUG         = false; // true → couches en couleur pour debug visuel
+  const SHADOW_CONTACT       = true;  // activer/désactiver couche contact
+  const SHADOW_TIRES         = true;  // activer/désactiver couche pneus
+  const SHADOW_AMBIENT       = true;  // activer/désactiver couche ambiante
+
+  const CONTACT_OPACITY      = 0.34;
+  const CONTACT_BLUR         = 10;
+  const CONTACT_HEIGHT_RATIO = 0.10;
+  const CONTACT_Y_OFFSET     = 4;
+
+  const TIRE_SHADOW_OPACITY       = 0.42;
+  const TIRE_SHADOW_BLUR          = 12;
+  const TIRE_SHADOW_WIDTH_RATIO   = 0.11;
+  const TIRE_SHADOW_HEIGHT_RATIO  = 0.035;
+
+  const AMBIENT_OPACITY  = 0.08;
+  const AMBIENT_BLUR     = 45;
+  const AMBIENT_Y_OFFSET = 8;
+
   const groundY = carY + actualBottomFrac * ch;
+
+  // Scan cutout to extract mask + bottom profile
   const maskC = document.createElement('canvas');
   maskC.width = Math.round(cw); maskC.height = Math.round(ch);
   const maskCtx = maskC.getContext('2d');
   maskCtx.drawImage(carImg, 0, 0, maskC.width, maskC.height);
   const maskData = maskCtx.getImageData(0, 0, maskC.width, maskC.height).data;
 
-  // Extract bottom silhouette: for each column, find the lowest opaque pixel
-  // in the bottom 25% (tire/underbody zone) for contact shadow
-  const contactZoneStart = Math.floor(maskC.height * 0.75);
+  // Per-column: lowest opaque pixel in bottom 30%
+  const contactZoneStart = Math.floor(maskC.height * 0.70);
   const bottomProfile = new Float32Array(maskC.width);
   for (let x = 0; x < maskC.width; x++) {
     bottomProfile[x] = -1;
@@ -2761,82 +2781,137 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     }
   }
 
-  // Build contact shadow mask from bottom silhouette
-  const contactC = document.createElement('canvas');
-  contactC.width = Math.round(cw); contactC.height = Math.round(ch * 0.15);
-  const contactCtx = contactC.getContext('2d');
-  const contactH = contactC.height;
-  const contactID = contactCtx.createImageData(contactC.width, contactH);
-  const cData = contactID.data;
-  const perspSkew = 0.08;
-  for (let x = 0; x < contactC.width; x++) {
-    if (bottomProfile[x] < 0) continue;
-    const distFromBottom = maskC.height - 1 - bottomProfile[x];
-    const baseOpacity = Math.max(0, 0.35 - distFromBottom * 0.015);
-    for (let y = 0; y < contactH; y++) {
-      const yFrac = y / contactH;
-      const fade = Math.max(0, 1 - yFrac * 1.8);
-      const perspX = Math.round(x + (x - contactC.width / 2) * perspSkew * yFrac);
-      if (perspX < 0 || perspX >= contactC.width) continue;
-      const idx = (y * contactC.width + perspX) * 4;
-      const a = Math.round(baseOpacity * fade * 255);
-      if (a > cData[idx + 3]) { cData[idx] = 0; cData[idx+1] = 0; cData[idx+2] = 0; cData[idx+3] = a; }
-    }
-  }
-  contactCtx.putImageData(contactID, 0, 0);
-  const blurContact = Math.max(8, Math.min(15, Math.round(cw * 0.008)));
-  const contactBlurred = document.createElement('canvas');
-  contactBlurred.width = contactC.width; contactBlurred.height = contactH;
-  const cbCtx = contactBlurred.getContext('2d');
-  cbCtx.filter = `blur(${blurContact}px)`;
-  cbCtx.drawImage(contactC, 0, 0);
-
-  ctx.save();
-  ctx.globalCompositeOperation = 'multiply';
-  ctx.drawImage(contactBlurred, carX, groundY, cw, contactH);
-  ctx.restore();
-
-  // Build ambient shadow from full vehicle silhouette
-  const ambientC = document.createElement('canvas');
-  const ambientH = Math.round(ch * 0.25);
-  ambientC.width = Math.round(cw * 1.15);
-  ambientC.height = ambientH;
-  const ambientCtx = ambientC.getContext('2d');
-  const ambXOff = Math.round((ambientC.width - cw) / 2);
-  // Project full mask silhouette downward with heavy perspective squash
-  const ambID = ambientCtx.createImageData(ambientC.width, ambientH);
-  const aData = ambID.data;
-  const perspAmbient = 0.12;
+  // Detect tire clusters: groups of columns where the bottom profile reaches
+  // close to the actual bottom of the car (within 5% of car height)
+  const tireThreshold = maskC.height * 0.97;
+  const tireClusters = [];
+  let clusterStart = -1;
   for (let x = 0; x < maskC.width; x++) {
-    let topY = maskC.height;
-    for (let y = 0; y < maskC.height; y++) {
-      if (maskData[(y * maskC.width + x) * 4 + 3] > 30) { topY = y; break; }
-    }
-    if (topY >= maskC.height) continue;
-    const colHeight = maskC.height - topY;
-    const projHeight = Math.min(ambientH, Math.round(colHeight * 0.2));
-    for (let y = 0; y < projHeight; y++) {
-      const yFrac = y / ambientH;
-      const fade = Math.max(0, 1 - yFrac * 2.5);
-      const perspX = Math.round(ambXOff + x + (x - maskC.width / 2) * perspAmbient * yFrac);
-      if (perspX < 0 || perspX >= ambientC.width) continue;
-      const idx = (y * ambientC.width + perspX) * 4;
-      const a = Math.round(0.10 * fade * 255);
-      if (a > aData[idx + 3]) { aData[idx] = 0; aData[idx+1] = 0; aData[idx+2] = 0; aData[idx+3] = a; }
+    const isTire = bottomProfile[x] >= tireThreshold;
+    if (isTire && clusterStart < 0) clusterStart = x;
+    if (!isTire && clusterStart >= 0) {
+      const len = x - clusterStart;
+      if (len > maskC.width * 0.03) tireClusters.push({ x0: clusterStart, x1: x - 1, cx: clusterStart + len / 2 });
+      clusterStart = -1;
     }
   }
-  ambientCtx.putImageData(ambID, 0, 0);
-  const blurAmbient = Math.max(40, Math.min(80, Math.round(cw * 0.04)));
-  const ambientBlurred = document.createElement('canvas');
-  ambientBlurred.width = ambientC.width; ambientBlurred.height = ambientH;
-  const abCtx = ambientBlurred.getContext('2d');
-  abCtx.filter = `blur(${blurAmbient}px)`;
-  abCtx.drawImage(ambientC, 0, 0);
+  if (clusterStart >= 0) {
+    const len = maskC.width - clusterStart;
+    if (len > maskC.width * 0.03) tireClusters.push({ x0: clusterStart, x1: maskC.width - 1, cx: clusterStart + len / 2 });
+  }
 
-  ctx.save();
-  ctx.globalCompositeOperation = 'multiply';
-  ctx.drawImage(ambientBlurred, carX - ambXOff, groundY, ambientC.width, ambientH);
-  ctx.restore();
+  // ── Layer 1: Contact shadow (underbody strip) ──
+  if (SHADOW_CONTACT) {
+    const contactH = Math.round(ch * CONTACT_HEIGHT_RATIO);
+    const contactC = document.createElement('canvas');
+    contactC.width = Math.round(cw); contactC.height = contactH;
+    const cCtx = contactC.getContext('2d');
+    const cID = cCtx.createImageData(contactC.width, contactH);
+    const cd = cID.data;
+    for (let x = 0; x < contactC.width; x++) {
+      if (bottomProfile[x] < 0) continue;
+      const distFromBottom = maskC.height - 1 - bottomProfile[x];
+      const proximity = Math.max(0, 1 - distFromBottom / (maskC.height * 0.08));
+      for (let y = 0; y < contactH; y++) {
+        const yFrac = y / contactH;
+        const fade = Math.pow(Math.max(0, 1 - yFrac), 1.5);
+        const perspX = Math.round(x + (x - contactC.width / 2) * 0.06 * yFrac);
+        if (perspX < 0 || perspX >= contactC.width) continue;
+        const idx = (y * contactC.width + perspX) * 4;
+        const a = Math.round(CONTACT_OPACITY * proximity * fade * 255);
+        if (a > cd[idx + 3]) {
+          cd[idx] = SHADOW_DEBUG ? 0 : 0; cd[idx+1] = SHADOW_DEBUG ? 0 : 0; cd[idx+2] = SHADOW_DEBUG ? 255 : 0;
+          cd[idx+3] = a;
+        }
+      }
+    }
+    cCtx.putImageData(cID, 0, 0);
+    const blurred = document.createElement('canvas');
+    blurred.width = contactC.width; blurred.height = contactH;
+    const bCtx = blurred.getContext('2d');
+    bCtx.filter = `blur(${CONTACT_BLUR}px)`;
+    bCtx.drawImage(contactC, 0, 0);
+
+    ctx.save();
+    ctx.globalCompositeOperation = SHADOW_DEBUG ? 'source-over' : 'multiply';
+    ctx.drawImage(blurred, carX, groundY + CONTACT_Y_OFFSET, cw, contactH);
+    ctx.restore();
+  }
+
+  // ── Layer 2: Tire spot shadows (dark ovals under each tire) ──
+  if (SHADOW_TIRES && tireClusters.length > 0) {
+    const tireW = Math.round(cw * TIRE_SHADOW_WIDTH_RATIO);
+    const tireH = Math.round(ch * TIRE_SHADOW_HEIGHT_RATIO);
+    for (const cluster of tireClusters) {
+      const tcx = carX + (cluster.cx / maskC.width) * cw;
+      const tcy = groundY + 2;
+      const tC = document.createElement('canvas');
+      tC.width = tireW * 2; tC.height = tireH * 2;
+      const tCtx = tC.getContext('2d');
+      const tID = tCtx.createImageData(tC.width, tC.height);
+      const td = tID.data;
+      const tw2 = tC.width / 2, th2 = tC.height / 2;
+      for (let py = 0; py < tC.height; py++) {
+        for (let px = 0; px < tC.width; px++) {
+          const dx = (px - tw2) / tw2, dy = (py - th2) / th2;
+          const dist = dx * dx + dy * dy;
+          if (dist > 1) continue;
+          const a = Math.round(TIRE_SHADOW_OPACITY * Math.pow(1 - dist, 1.2) * 255);
+          const idx = (py * tC.width + px) * 4;
+          td[idx] = SHADOW_DEBUG ? 255 : 0; td[idx+1] = 0; td[idx+2] = 0; td[idx+3] = a;
+        }
+      }
+      tCtx.putImageData(tID, 0, 0);
+      const tBlurred = document.createElement('canvas');
+      tBlurred.width = tC.width; tBlurred.height = tC.height;
+      const tbCtx = tBlurred.getContext('2d');
+      tbCtx.filter = `blur(${TIRE_SHADOW_BLUR}px)`;
+      tbCtx.drawImage(tC, 0, 0);
+
+      ctx.save();
+      ctx.globalCompositeOperation = SHADOW_DEBUG ? 'source-over' : 'multiply';
+      ctx.drawImage(tBlurred, tcx - tireW, tcy - tireH * 0.3, tireW * 2, tireH * 2);
+      ctx.restore();
+    }
+  }
+
+  // ── Layer 3: Ambient shadow (very soft, wide underbody glow) ──
+  if (SHADOW_AMBIENT) {
+    const ambW = Math.round(cw * 1.05);
+    const ambH = Math.round(ch * 0.08);
+    const ambC = document.createElement('canvas');
+    ambC.width = ambW; ambC.height = ambH;
+    const aCtx = ambC.getContext('2d');
+    const aID = aCtx.createImageData(ambW, ambH);
+    const ad = aID.data;
+    const ambXOff = Math.round((ambW - maskC.width) / 2);
+    for (let x = 0; x < maskC.width; x++) {
+      if (bottomProfile[x] < 0) continue;
+      const mapX = ambXOff + x;
+      if (mapX < 0 || mapX >= ambW) continue;
+      for (let y = 0; y < ambH; y++) {
+        const yFrac = y / ambH;
+        const fade = Math.pow(Math.max(0, 1 - yFrac), 2.0);
+        const idx = (y * ambW + mapX) * 4;
+        const a = Math.round(AMBIENT_OPACITY * fade * 255);
+        if (a > ad[idx + 3]) {
+          ad[idx] = 0; ad[idx+1] = SHADOW_DEBUG ? 255 : 0; ad[idx+2] = 0; ad[idx+3] = a;
+        }
+      }
+    }
+    aCtx.putImageData(aID, 0, 0);
+    const aBlurred = document.createElement('canvas');
+    aBlurred.width = ambW; aBlurred.height = ambH;
+    const abCtx = aBlurred.getContext('2d');
+    abCtx.filter = `blur(${AMBIENT_BLUR}px)`;
+    abCtx.drawImage(ambC, 0, 0);
+
+    ctx.save();
+    ctx.globalCompositeOperation = SHADOW_DEBUG ? 'source-over' : 'multiply';
+    const drawX = carX - (ambW - cw) / 2;
+    ctx.drawImage(aBlurred, drawX, groundY + AMBIENT_Y_OFFSET, ambW, ambH);
+    ctx.restore();
+  }
   // ── Fin ombre ──
   ctx.save();
   ctx.imageSmoothingEnabled = true;
