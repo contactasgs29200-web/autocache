@@ -2739,44 +2739,105 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     actualBottomFrac = (lastRow + 1) / carImg.height;
   } catch (_) { /* fallback to 1.0 */ }
 
-  // Ombre réaliste deux couches — proportionnelle à la voiture
-  const shadowCX = carX + cw / 2;
-  const shadowCY = carY + actualBottomFrac * ch;
+  // ── Ombre réaliste 2 couches basée sur le vrai masque du véhicule ──
+  const groundY = carY + actualBottomFrac * ch;
+  const maskC = document.createElement('canvas');
+  maskC.width = Math.round(cw); maskC.height = Math.round(ch);
+  const maskCtx = maskC.getContext('2d');
+  maskCtx.drawImage(carImg, 0, 0, maskC.width, maskC.height);
+  const maskData = maskCtx.getImageData(0, 0, maskC.width, maskC.height).data;
 
-  // Couche 1 : ombre diffuse large (lumière ambiante, bords très doux)
-  const rx1 = cw * 0.50;
-  const ry1 = ch * 0.058;
-  const sy1 = ry1 / rx1;
-  const grad1 = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, rx1);
-  grad1.addColorStop(0,    'rgba(0,0,0,0.20)');
-  grad1.addColorStop(0.40, 'rgba(0,0,0,0.12)');
-  grad1.addColorStop(0.72, 'rgba(0,0,0,0.04)');
-  grad1.addColorStop(1,    'rgba(0,0,0,0)');
+  // Extract bottom silhouette: for each column, find the lowest opaque pixel
+  // in the bottom 25% (tire/underbody zone) for contact shadow
+  const contactZoneStart = Math.floor(maskC.height * 0.75);
+  const bottomProfile = new Float32Array(maskC.width);
+  for (let x = 0; x < maskC.width; x++) {
+    bottomProfile[x] = -1;
+    for (let y = maskC.height - 1; y >= contactZoneStart; y--) {
+      if (maskData[(y * maskC.width + x) * 4 + 3] > 30) {
+        bottomProfile[x] = y;
+        break;
+      }
+    }
+  }
+
+  // Build contact shadow mask from bottom silhouette
+  const contactC = document.createElement('canvas');
+  contactC.width = Math.round(cw); contactC.height = Math.round(ch * 0.15);
+  const contactCtx = contactC.getContext('2d');
+  const contactH = contactC.height;
+  const contactID = contactCtx.createImageData(contactC.width, contactH);
+  const cData = contactID.data;
+  const perspSkew = 0.08;
+  for (let x = 0; x < contactC.width; x++) {
+    if (bottomProfile[x] < 0) continue;
+    const distFromBottom = maskC.height - 1 - bottomProfile[x];
+    const baseOpacity = Math.max(0, 0.35 - distFromBottom * 0.015);
+    for (let y = 0; y < contactH; y++) {
+      const yFrac = y / contactH;
+      const fade = Math.max(0, 1 - yFrac * 1.8);
+      const perspX = Math.round(x + (x - contactC.width / 2) * perspSkew * yFrac);
+      if (perspX < 0 || perspX >= contactC.width) continue;
+      const idx = (y * contactC.width + perspX) * 4;
+      const a = Math.round(baseOpacity * fade * 255);
+      if (a > cData[idx + 3]) { cData[idx] = 0; cData[idx+1] = 0; cData[idx+2] = 0; cData[idx+3] = a; }
+    }
+  }
+  contactCtx.putImageData(contactID, 0, 0);
+  const blurContact = Math.max(8, Math.min(15, Math.round(cw * 0.008)));
+  const contactBlurred = document.createElement('canvas');
+  contactBlurred.width = contactC.width; contactBlurred.height = contactH;
+  const cbCtx = contactBlurred.getContext('2d');
+  cbCtx.filter = `blur(${blurContact}px)`;
+  cbCtx.drawImage(contactC, 0, 0);
+
   ctx.save();
-  ctx.transform(1, 0, 0, sy1, 0, shadowCY * (1 - sy1));
-  ctx.fillStyle = grad1;
-  ctx.beginPath();
-  ctx.arc(shadowCX, shadowCY, rx1, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.drawImage(contactBlurred, carX, groundY, cw, contactH);
   ctx.restore();
 
-  // Couche 2 : ombre de contact étroite (zone de contact pneus/sol, plus sombre)
-  const rx2 = cw * 0.38;
-  const ry2 = ch * 0.020;
-  const sy2 = ry2 / rx2;
-  const grad2 = ctx.createRadialGradient(shadowCX, shadowCY, 0, shadowCX, shadowCY, rx2);
-  grad2.addColorStop(0,    'rgba(0,0,0,0.52)');
-  grad2.addColorStop(0.38, 'rgba(0,0,0,0.28)');
-  grad2.addColorStop(0.70, 'rgba(0,0,0,0.07)');
-  grad2.addColorStop(1,    'rgba(0,0,0,0)');
+  // Build ambient shadow from full vehicle silhouette
+  const ambientC = document.createElement('canvas');
+  const ambientH = Math.round(ch * 0.25);
+  ambientC.width = Math.round(cw * 1.15);
+  ambientC.height = ambientH;
+  const ambientCtx = ambientC.getContext('2d');
+  const ambXOff = Math.round((ambientC.width - cw) / 2);
+  // Project full mask silhouette downward with heavy perspective squash
+  const ambID = ambientCtx.createImageData(ambientC.width, ambientH);
+  const aData = ambID.data;
+  const perspAmbient = 0.12;
+  for (let x = 0; x < maskC.width; x++) {
+    let topY = maskC.height;
+    for (let y = 0; y < maskC.height; y++) {
+      if (maskData[(y * maskC.width + x) * 4 + 3] > 30) { topY = y; break; }
+    }
+    if (topY >= maskC.height) continue;
+    const colHeight = maskC.height - topY;
+    const projHeight = Math.min(ambientH, Math.round(colHeight * 0.2));
+    for (let y = 0; y < projHeight; y++) {
+      const yFrac = y / ambientH;
+      const fade = Math.max(0, 1 - yFrac * 2.5);
+      const perspX = Math.round(ambXOff + x + (x - maskC.width / 2) * perspAmbient * yFrac);
+      if (perspX < 0 || perspX >= ambientC.width) continue;
+      const idx = (y * ambientC.width + perspX) * 4;
+      const a = Math.round(0.10 * fade * 255);
+      if (a > aData[idx + 3]) { aData[idx] = 0; aData[idx+1] = 0; aData[idx+2] = 0; aData[idx+3] = a; }
+    }
+  }
+  ambientCtx.putImageData(ambID, 0, 0);
+  const blurAmbient = Math.max(40, Math.min(80, Math.round(cw * 0.04)));
+  const ambientBlurred = document.createElement('canvas');
+  ambientBlurred.width = ambientC.width; ambientBlurred.height = ambientH;
+  const abCtx = ambientBlurred.getContext('2d');
+  abCtx.filter = `blur(${blurAmbient}px)`;
+  abCtx.drawImage(ambientC, 0, 0);
+
   ctx.save();
-  ctx.transform(1, 0, 0, sy2, 0, shadowCY * (1 - sy2));
-  ctx.fillStyle = grad2;
-  ctx.beginPath();
-  ctx.arc(shadowCX, shadowCY, rx2, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.drawImage(ambientBlurred, carX - ambXOff, groundY, ambientC.width, ambientH);
   ctx.restore();
-  // Voiture (sans drop shadow générique)
+  // ── Fin ombre ──
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
