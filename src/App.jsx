@@ -593,6 +593,56 @@ function createSingleHeadlightAssets(ctx, light, crop, W, H) {
   };
 }
 
+// Tighter assets for the per-headlight REFINE pass (runs after the full-image
+// edit). Differences with createSingleHeadlightAssets:
+//   - the polygon is SHRUNK by 1–3% (negative expand) so the editable area is
+//     strictly inside the lens, never touching the headlight rim or
+//     surrounding bodywork. This prevents the "détourage" / black line we
+//     saw on earlier per-headlight runs.
+//   - feather is gentler and applied with a smaller blur — keeps the
+//     transition smooth without leaking onto the body.
+function createRefineAssets(ctx, light, crop, W, H) {
+  const localLight = transformLightToCrop(light, crop, W, H);
+
+  const image = document.createElement('canvas');
+  image.width = crop.workW;
+  image.height = crop.workH;
+  const ictx = image.getContext('2d');
+  ictx.imageSmoothingEnabled = true;
+  ictx.imageSmoothingQuality = 'high';
+  ictx.drawImage(
+    ctx.canvas,
+    crop.sourceX, crop.sourceY, crop.sourceW, crop.sourceH,
+    0, 0, crop.workW, crop.workH,
+  );
+
+  const mask = document.createElement('canvas');
+  mask.width = crop.workW;
+  mask.height = crop.workH;
+  const mctx = mask.getContext('2d');
+  mctx.fillStyle = 'rgba(0,0,0,1)';
+  mctx.fillRect(0, 0, crop.workW, crop.workH);
+  mctx.globalCompositeOperation = 'destination-out';
+  // Tight feathered outer (1% expand) + crisp inner (-2% SHRUNK).
+  mctx.filter = `blur(${Math.max(2, Math.round(Math.min(crop.workW, crop.workH) * 0.0025))}px)`;
+  drawHeadlightShape(mctx, localLight, crop.workW, crop.workH, 0.01);
+  mctx.filter = 'none';
+  drawHeadlightShape(mctx, localLight, crop.workW, crop.workH, -0.02);
+  mctx.globalCompositeOperation = 'source-over';
+
+  const maskCoverage = computeMaskCoverage(mask);
+  return {
+    imageCanvas: image,
+    maskCanvas: mask,
+    localLight,
+    imageBase64: dataURLBase64(image.toDataURL('image/jpeg', 0.95)),
+    imageMime: 'image/jpeg',
+    maskBase64: dataURLBase64(mask.toDataURL('image/png')),
+    maskCoverage,
+    size: crop.size,
+  };
+}
+
 // Mean per-pixel RGB diff (0-255) inside an alpha-mask region (alpha<8 = masked).
 function diffInsideMask(beforeCanvas, afterCanvas, maskCanvas) {
   const W = beforeCanvas.width;
@@ -642,6 +692,126 @@ function applyColorGain(canvas, gainR, gainG, gainB) {
     d[i + 2] = Math.max(0, Math.min(255, Math.round(d[i + 2] * gainB)));
   }
   cctx.putImageData(id, 0, 0);
+}
+
+// Anti-artifact validator for the REFINE pass.
+// Compares the full-image baseline crop with the AI's refined crop and
+// rejects responses that introduce visible defects:
+//   - meanRing  : diff in the ~4% ring around the optic. If high, the AI
+//                 likely drew a black line / dark border along the lens
+//                 edge (the user's main pain point).
+//   - meanOut   : diff in the rest of the crop (bumper, body, grille).
+//                 If high, the AI touched the bodywork it shouldn't have.
+//   - meanIn    : diff inside the optic. Must be > a tiny floor so the
+//                 refine actually changed something. If sky-high (> 60),
+//                 the AI probably redesigned the lens.
+//   - varianceLum : luminance variance INSIDE the optic. If too low, the
+//                 refine flattened the lens into a uniform gray patch.
+//
+// When validation rejects, the orchestrator KEEPS the full-image baseline
+// for that optic instead of compositing the refine on top.
+function validateRefinePass(baselineCrop, refinedCrop, localLight) {
+  const W = baselineCrop.width;
+  const H = baselineCrop.height;
+
+  // Three masks in source-crop pixels:
+  // - inside: the strict optic interior
+  // - ring:   thin band around the optic (where dark-line artifacts appear)
+  // - outside: rest of the crop (bumper / body)
+  const inside = document.createElement('canvas');
+  inside.width = W; inside.height = H;
+  const ictx = inside.getContext('2d');
+  ictx.fillStyle = 'rgba(255,255,255,1)';
+  drawHeadlightShape(ictx, localLight, W, H, -0.02);  // shrunk
+
+  const ring = document.createElement('canvas');
+  ring.width = W; ring.height = H;
+  const rctx = ring.getContext('2d');
+  rctx.fillStyle = 'rgba(255,255,255,1)';
+  drawHeadlightShape(rctx, localLight, W, H, 0.06);   // outer
+  rctx.globalCompositeOperation = 'destination-out';
+  drawHeadlightShape(rctx, localLight, W, H, 0.02);   // punch inner
+  rctx.globalCompositeOperation = 'source-over';
+
+  const outside = document.createElement('canvas');
+  outside.width = W; outside.height = H;
+  const octx = outside.getContext('2d');
+  octx.fillStyle = 'rgba(255,255,255,1)';
+  octx.fillRect(0, 0, W, H);
+  octx.globalCompositeOperation = 'destination-out';
+  drawHeadlightShape(octx, localLight, W, H, 0.08);   // erase optic + margin
+  octx.globalCompositeOperation = 'source-over';
+
+  const bData = baselineCrop.getContext('2d').getImageData(0, 0, W, H).data;
+  const rData = refinedCrop.getContext('2d').getImageData(0, 0, W, H).data;
+  const iMask = ictx.getImageData(0, 0, W, H).data;
+  const rMask = rctx.getImageData(0, 0, W, H).data;
+  const oMask = octx.getImageData(0, 0, W, H).data;
+
+  let inSum = 0, inN = 0;
+  let inLumSum = 0, inLumSqSum = 0;
+  let ringSum = 0, ringN = 0;
+  let outSum = 0, outN = 0;
+  let darkPixelsInRing = 0;
+
+  for (let i = 0; i < bData.length; i += 4) {
+    const d = (Math.abs(bData[i]     - rData[i])
+             + Math.abs(bData[i + 1] - rData[i + 1])
+             + Math.abs(bData[i + 2] - rData[i + 2])) / 3;
+    if (iMask[i + 3] > 8) {
+      inSum += d; inN++;
+      const lum = (rData[i] + rData[i + 1] + rData[i + 2]) / 3;
+      inLumSum += lum;
+      inLumSqSum += lum * lum;
+    }
+    if (rMask[i + 3] > 8) {
+      ringSum += d; ringN++;
+      // Did the refine drop a dark pixel where the baseline was brighter?
+      const baseLum = (bData[i] + bData[i + 1] + bData[i + 2]) / 3;
+      const refLum  = (rData[i] + rData[i + 1] + rData[i + 2]) / 3;
+      if (refLum < 50 && baseLum - refLum > 40) darkPixelsInRing++;
+    }
+    if (oMask[i + 3] > 8) {
+      outSum += d; outN++;
+    }
+  }
+
+  const meanIn    = inN   ? inSum   / inN   : 0;
+  const meanRing  = ringN ? ringSum / ringN : 0;
+  const meanOut   = outN  ? outSum  / outN  : 0;
+  const meanLum   = inN   ? inLumSum / inN  : 0;
+  const varianceLum = inN > 1 ? (inLumSqSum / inN) - meanLum * meanLum : 0;
+  const pctDarkRing = ringN ? (darkPixelsInRing / ringN) * 100 : 0;
+
+  const THRESHOLDS = {
+    meanInMin: 1.0,         // refine must actually do something
+    meanInMax: 60,          // not a redesign
+    meanRingMax: 22,        // no big drift at the optic edge
+    meanOutMax: 8,          // body unchanged
+    pctDarkRingMax: 0.5,    // no significant dark pixels added at the edge
+    varianceLumMin: 40,     // not a uniform gray patch
+  };
+
+  const reasons = [];
+  if (meanIn < THRESHOLDS.meanInMin)
+    reasons.push(`no-change: meanIn ${meanIn.toFixed(2)} < ${THRESHOLDS.meanInMin}`);
+  if (meanIn > THRESHOLDS.meanInMax)
+    reasons.push(`redesign-suspected: meanIn ${meanIn.toFixed(2)} > ${THRESHOLDS.meanInMax}`);
+  if (meanRing > THRESHOLDS.meanRingMax)
+    reasons.push(`ring-drift: meanRing ${meanRing.toFixed(2)} > ${THRESHOLDS.meanRingMax} (dark line risk)`);
+  if (pctDarkRing > THRESHOLDS.pctDarkRingMax)
+    reasons.push(`dark-line: ${pctDarkRing.toFixed(2)}% dark pixels added to the optic ring`);
+  if (meanOut > THRESHOLDS.meanOutMax)
+    reasons.push(`outside-changed: meanOut ${meanOut.toFixed(2)} > ${THRESHOLDS.meanOutMax}`);
+  if (varianceLum < THRESHOLDS.varianceLumMin)
+    reasons.push(`gray-patch: varianceLum ${varianceLum.toFixed(1)} < ${THRESHOLDS.varianceLumMin}`);
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    stats: { meanIn, meanRing, meanOut, varianceLum, pctDarkRing, meanLum },
+    thresholds: THRESHOLDS,
+  };
 }
 
 // Composite a per-headlight AI result back into the source canvas at the
@@ -1474,6 +1644,179 @@ function persistDebugAttempt(debug, attempt) {
   console.log(`[Headlights:debug] attempt ${entry.attempt} stored at window.__headlightDebug.attempts[${window.__headlightDebug.attempts.length - 1}]`);
 }
 
+// ── REFINE PASS (per-optic polish on top of an accepted full-image result) ──
+//
+// Runs AFTER the full-image edit has been accepted. For each detected
+// headlight, builds a tight crop + a SHRUNK mask (interior of the lens only),
+// asks the model to polish sharpness / transparency, then validates the
+// response against an anti-artifact checklist (dark lines, gray patches,
+// bodywork drift, redesign). If the refine validates, it's composited over
+// the full-image baseline at that optic. If it doesn't, the baseline is
+// preserved untouched.
+async function callHeadlightRefineApi(idx, assets, strength, debug) {
+  const url = debug ? "/api/lustrage-pro?debug=1" : "/api/lustrage-pro";
+  const REFINE_PROMPT = "Refine only this car headlight lens. Make it clearer, sharper, more transparent and professionally polished while preserving the exact original headlight shape, internal reflector details, lens geometry, perspective, highlights and surrounding bodywork. Remove yellow oxidation, haze and cloudiness. Do not redesign the headlight, do not change its shape, do not add black lines, seams, borders, scratches, shadows, stickers, fake reflections, blur or artifacts. The result must remain photorealistic and match the original car.";
+  const payload = {
+    imageBase64: assets.imageBase64,
+    imageMime: assets.imageMime,
+    maskBase64: assets.maskBase64,
+    size: assets.size,
+    maskCoverage: assets.maskCoverage,
+    mode: "ai",
+    strength,
+    prompt: REFINE_PROMPT,
+  };
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data?.imageBase64) {
+      console.warn(`[Headlights:refine#${idx}] API failed`, { status: r.status, error: data?.error });
+      return { ok: false, idx, status: r.status, error: data?.error || "ai-failed", details: data?.details };
+    }
+    return { ok: true, idx, ...data };
+  } catch (e) {
+    console.warn(`[Headlights:refine#${idx}] Network error:`, e.message);
+    return { ok: false, idx, error: e.message, reason: "network" };
+  }
+}
+
+async function runRefinePass(ctx, lights, W, H, opts = {}) {
+  const { strength = "restore", debug = false } = opts;
+
+  // Snapshot the post-full-image baseline so we can rollback per-optic on reject.
+  const baseline = document.createElement('canvas');
+  baseline.width = W;
+  baseline.height = H;
+  baseline.getContext('2d').drawImage(ctx.canvas, 0, 0);
+
+  const tasks = lights.map((light, idx) => {
+    const crop = computeLightCrop(light, W, H);
+    const assets = createRefineAssets(ctx, light, crop, W, H);
+    console.log(`[Headlights:refine#${idx}] crop`, {
+      bbox: { x: light.x.toFixed(3), y: light.y.toFixed(3), w: light.w.toFixed(3), h: light.h.toFixed(3) },
+      sendSize: crop.size,
+      maskCoveragePct: (assets.maskCoverage * 100).toFixed(2) + '%',
+    });
+    return { idx, light, crop, assets };
+  });
+
+  if (debug) {
+    window.__headlightDebug.refines = tasks.map(t => ({
+      idx: t.idx,
+      light: t.light,
+      crop: t.crop,
+      sentImage: t.assets.imageCanvas,
+      sentMask: t.assets.maskCanvas,
+      maskCoverage: t.assets.maskCoverage,
+    }));
+  }
+
+  // Parallel API calls.
+  const apiResults = await Promise.all(tasks.map(t =>
+    callHeadlightRefineApi(t.idx, t.assets, strength, debug)
+  ));
+
+  // Sequential validate + composite.
+  const perLight = [];
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    const apiR = apiResults[i];
+    const dbg = debug ? window.__headlightDebug.refines[i] : null;
+
+    if (!apiR.ok) {
+      console.warn(`[Headlights:refine#${i}] API failed → keep baseline`);
+      perLight.push({ idx: i, ok: false, reason: "ai-failed", error: apiR.error });
+      if (dbg) dbg.outcome = "ai-failed";
+      continue;
+    }
+
+    try {
+      const editedImg = await loadImg(`data:image/png;base64,${apiR.imageBase64}`);
+
+      // Snapshot the baseline crop (full-image result inside this region).
+      const baselineCrop = document.createElement('canvas');
+      baselineCrop.width = t.crop.sourceW;
+      baselineCrop.height = t.crop.sourceH;
+      baselineCrop.getContext('2d').drawImage(
+        baseline,
+        t.crop.sourceX, t.crop.sourceY, t.crop.sourceW, t.crop.sourceH,
+        0, 0, t.crop.sourceW, t.crop.sourceH,
+      );
+
+      // Render the AI output at the crop's source size.
+      const refinedCrop = document.createElement('canvas');
+      refinedCrop.width = t.crop.sourceW;
+      refinedCrop.height = t.crop.sourceH;
+      const rctx = refinedCrop.getContext('2d');
+      rctx.imageSmoothingEnabled = true;
+      rctx.imageSmoothingQuality = 'high';
+      rctx.drawImage(editedImg, 0, 0, t.crop.sourceW, t.crop.sourceH);
+
+      const localLight = transformLightToCrop(t.light, t.crop, W, H);
+      const validation = validateRefinePass(baselineCrop, refinedCrop, localLight);
+
+      console.log(`[Headlights:refine#${i}] validation`, {
+        ok: validation.ok,
+        reasons: validation.reasons,
+        stats: {
+          meanIn: validation.stats.meanIn.toFixed(2),
+          meanRing: validation.stats.meanRing.toFixed(2),
+          meanOut: validation.stats.meanOut.toFixed(2),
+          varianceLum: validation.stats.varianceLum.toFixed(1),
+          pctDarkRing: validation.stats.pctDarkRing.toFixed(3) + '%',
+        },
+      });
+
+      if (dbg) {
+        dbg.baselineCrop = baselineCrop;
+        dbg.refinedCrop = refinedCrop;
+        dbg.validation = validation;
+        dbg.aiResultRaw = editedImg;
+      }
+
+      if (!validation.ok) {
+        console.warn(`[Headlights:refine#${i}] ✗ rejected → keep baseline:`, validation.reasons);
+        perLight.push({ idx: i, ok: false, reason: "validation-rejected", validation });
+        if (dbg) dbg.outcome = "rejected";
+        continue;
+      }
+
+      // Composite the refine on top of the baseline. Strict mask, no color
+      // match (the full-image baseline + the refine are both AI-generated
+      // and share the photo's lighting context).
+      compositeSingleHeadlight(ctx, editedImg, t.light, t.crop, W, H, {
+        expandOuter: 0.03,
+        expandInner: -0.005,
+        edgeBlur: 0.003,
+        aiOpacity: 1.0,
+      });
+
+      perLight.push({
+        idx: i,
+        ok: true,
+        provider: apiR.provider,
+        model: apiR.model,
+        meanIn: validation.stats.meanIn,
+        meanRing: validation.stats.meanRing,
+      });
+      if (dbg) dbg.outcome = "accepted";
+      console.log(`[Headlights:refine#${i}] ✓ accepted (meanIn=${validation.stats.meanIn.toFixed(1)})`);
+    } catch (e) {
+      console.warn(`[Headlights:refine#${i}] composite error → keep baseline:`, e.message);
+      perLight.push({ idx: i, ok: false, reason: "composite", error: e.message });
+      if (dbg) dbg.outcome = "composite-error";
+    }
+  }
+
+  const acceptedCount = perLight.filter(r => r.ok).length;
+  console.log(`[Headlights] refine pass done — ${acceptedCount}/${perLight.length} optics refined, ${perLight.length - acceptedCount} kept baseline`);
+  return perLight;
+}
+
 async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   const { strength = "restore" } = opts;
   const debug = isHeadlightDebugEnabled();
@@ -1521,14 +1864,24 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
     }
     console.log("[Headlights] ✓ full-image attempt 1 accepted by validator");
     console.log("[Headlights] OUTPUT SOURCE = full-image:1");
+    // Hybrid pipeline: now polish each optic on top of the accepted baseline.
+    const refine = await runRefinePass(ctx, lights, W, H, { strength, debug });
+    const acceptedRefines = refine.filter(r => r.ok).length;
+    const finalSource = acceptedRefines > 0
+      ? `full-image:1 + refine:${acceptedRefines}/${refine.length}`
+      : "full-image:1";
+    if (debug) window.__headlightDebug.finalSource = finalSource;
+    console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
     return {
       ok: true,
       mode: "full-image",
       source: "full-image:1",
+      finalSource,
       attempt: 1,
       provider: a1.aiResponse?.provider,
       model: a1.aiResponse?.model,
       validation: a1.validation,
+      refine,
     };
   }
   console.warn("[Headlights] ✗ full-image attempt 1 rejected:", a1.reason, a1.validation?.reasons || a1.error || "");
@@ -1560,14 +1913,23 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
       }
       console.log("[Headlights] ✓ full-image attempt 2 accepted by validator");
       console.log("[Headlights] OUTPUT SOURCE = full-image:2");
+      const refine = await runRefinePass(ctx, lights, W, H, { strength, debug });
+      const acceptedRefines = refine.filter(r => r.ok).length;
+      const finalSource = acceptedRefines > 0
+        ? `full-image:2 + refine:${acceptedRefines}/${refine.length}`
+        : "full-image:2";
+      if (debug) window.__headlightDebug.finalSource = finalSource;
+      console.log(`[Headlights] FINAL SOURCE = ${finalSource}`);
       return {
         ok: true,
         mode: "full-image",
         source: "full-image:2",
+        finalSource,
         attempt: 2,
         provider: a2.aiResponse?.provider,
         model: a2.aiResponse?.model,
         validation: a2.validation,
+        refine,
       };
     }
     console.warn("[Headlights] ✗ full-image attempt 2 rejected:", a2.reason, a2.validation?.reasons || a2.error || "");
@@ -1588,10 +1950,16 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
         if (last) { last.fusedCanvas = c?.fusedCanvas; last.alphaCanvas = c?.alphaCanvas; }
       }
       console.log("[Headlights] OUTPUT SOURCE = full-image:forced");
+      // Strategy = full-image-only is explicitly for inspecting the raw
+      // full-image result. Skip the refine pass so the user sees exactly
+      // what the model produced, no extra AI work piled on top.
+      if (debug) window.__headlightDebug.finalSource = "full-image:forced";
+      console.log("[Headlights] FINAL SOURCE = full-image:forced (refine skipped on full-image-only)");
       return {
         ok: true,
         mode: "full-image",
         source: "full-image:forced",
+        finalSource: "full-image:forced",
         attempt: best.attempt,
         provider: best.aiResponse?.provider,
         model: best.aiResponse?.model,
@@ -1605,18 +1973,28 @@ async function aiPolishHeadlights(ctx, W, H, b64Original, opts = {}) {
   }
 
   // ── Fallback (auto strategy): per-headlight crops ──
+  // No refine pass here — the per-headlight pipeline is already per-optic and
+  // would just be doing the same work twice with worse blending.
   console.warn("[Headlights] mode=per-headlight (fallback)");
   const fallback = await aiPolishHeadlightsPerLight(ctx, W, H, lights, { strength, debug });
   if (fallback.ok) {
-    if (debug) window.__headlightDebug.source = "per-headlight";
+    if (debug) {
+      window.__headlightDebug.source = "per-headlight";
+      window.__headlightDebug.finalSource = "per-headlight";
+    }
     console.log("[Headlights] OUTPUT SOURCE = per-headlight");
-    return { ...fallback, mode: "per-headlight", source: "per-headlight" };
+    console.log("[Headlights] FINAL SOURCE = per-headlight (refine skipped on fallback)");
+    return { ...fallback, mode: "per-headlight", source: "per-headlight", finalSource: "per-headlight" };
   }
 
   console.warn("[Headlights] all strategies failed:", fallback);
-  if (debug) window.__headlightDebug.source = "none";
+  if (debug) {
+    window.__headlightDebug.source = "none";
+    window.__headlightDebug.finalSource = "none";
+  }
   console.log("[Headlights] OUTPUT SOURCE = none");
-  return { ok: false, mode: "all-failed", source: "none", perLight: fallback.perLight };
+  console.log("[Headlights] FINAL SOURCE = none");
+  return { ok: false, mode: "all-failed", source: "none", finalSource: "none", perLight: fallback.perLight };
 }
 
 // ── Lustrage carrosserie ─────────────────────────────────────────────────────
