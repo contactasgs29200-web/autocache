@@ -54,6 +54,42 @@ export const DEFAULT_NEGATIVE_PROMPT = [
   'grey blob',
 ].join(', ');
 
+// Used by the second-pass per-optic REFINE step that runs AFTER the
+// full-image edit. The prompt is scoped to a tight crop containing one
+// headlight and is meant to add sharpness / transparency without any
+// redesign. Combined with a shrunk mask and the anti-artifact validator,
+// this is the "polish" pass that gives the premium feel.
+export const REFINE_PROMPT = [
+  'Refine only this car headlight lens.',
+  'Make it clearer, sharper, more transparent and professionally polished',
+  'while preserving the exact original headlight shape, internal reflector details,',
+  'lens geometry, perspective, highlights and surrounding bodywork.',
+  'Remove yellow oxidation, haze and cloudiness.',
+  'Do not redesign the headlight, do not change its shape, do not add black lines,',
+  'seams, borders, scratches, shadows, stickers, fake reflections, blur or artifacts.',
+  'The result must remain photorealistic and match the original car.',
+].join(' ');
+
+export const REFINE_NEGATIVE_PROMPT = [
+  'blurred headlight',
+  'soft details',
+  'redesigned headlight',
+  'different headlight model',
+  'black line',
+  'black seam',
+  'dark border',
+  'artificial outline',
+  'gray patch',
+  'visible cutout',
+  'halo',
+  'sticker',
+  'distorted geometry',
+  'changed bodywork',
+  'changed paint',
+  'changed bumper',
+  'artifacts',
+].join(', ');
+
 // Strength controls how aggressive the model is allowed to redraw the masked area.
 export const STRENGTH_PRESETS = {
   restore: { label: 'restore', denoise: 0.40, openaiQuality: 'medium', openaiFidelity: 'high' },

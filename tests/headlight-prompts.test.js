@@ -6,6 +6,8 @@ import {
   DEFAULT_PROMPT,
   DEFAULT_NEGATIVE_PROMPT,
   STRICT_RETRY_PROMPT,
+  REFINE_PROMPT,
+  REFINE_NEGATIVE_PROMPT,
   STRENGTH_PRESETS,
   DEFAULT_STRENGTH,
   resolveStrength,
@@ -58,6 +60,32 @@ test('resolveStrength defaults to "restore"', () => {
 test('resolveStrength returns the named preset when valid', () => {
   for (const key of ['restore', 'low', 'medium', 'high']) {
     assert.equal(resolveStrength(key).label, key);
+  }
+});
+
+test('REFINE_PROMPT is scoped to a single optic and forbids redesign', () => {
+  // Singular wording: the refine pass sees a crop with ONE optic.
+  assert.match(REFINE_PROMPT, /refine only this car headlight lens/i);
+  // Must forbid redesign and any of the user-reported artifacts.
+  assert.match(REFINE_PROMPT, /do not redesign/i);
+  assert.match(REFINE_PROMPT, /black line|seams|borders/i);
+  assert.match(REFINE_PROMPT, /artifacts/i);
+  // Must explicitly mention the goal of the pass.
+  assert.match(REFINE_PROMPT, /clearer|sharper|more transparent/i);
+});
+
+test('REFINE_NEGATIVE_PROMPT covers the failure modes the validator looks for', () => {
+  for (const phrase of [
+    'black line',
+    'dark border',
+    'gray patch',
+    'redesigned headlight',
+    'changed bodywork',
+  ]) {
+    assert.ok(
+      REFINE_NEGATIVE_PROMPT.toLowerCase().includes(phrase.toLowerCase()),
+      `REFINE_NEGATIVE_PROMPT must mention "${phrase}"`,
+    );
   }
 });
 
