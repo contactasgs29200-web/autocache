@@ -2677,21 +2677,29 @@ async function preloadSegmentation() {
   }
 }
 
+const SAM_TIMEOUT_MS = 60000;
+
 async function removeBackground(dataUrl) {
   if (samModel) {
     try {
-      return await samSegment(dataUrl);
+      const result = await Promise.race([
+        samSegment(dataUrl),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('SAM timeout (' + SAM_TIMEOUT_MS + 'ms)')), SAM_TIMEOUT_MS)),
+      ]);
+      return result;
     } catch (e) {
-      console.warn('[SAM] Segmentation failed, falling back to @imgly:', e.message);
+      console.warn('[SAM] Failed (%s), falling back to @imgly', e.message);
     }
   }
   return await imglyRemoveBackground(dataUrl);
 }
 
 async function samSegment(dataUrl) {
+  const t0 = performance.now();
   const small = await shrinkDataUrl(dataUrl, 2000, 0.96);
   const img = await SamRawImage.read(small);
   const W = img.width, H = img.height;
+  console.log('[SAM] image loaded %dx%d (%.0fms)', W, H, performance.now() - t0);
 
   const points = [
     [W * 0.50, H * 0.55],
@@ -2701,12 +2709,16 @@ async function samSegment(dataUrl) {
     [W * 0.50, H * 0.70],
   ];
 
+  console.log('[SAM] running processor…');
   const inputs = await samProcessor(img, {
     input_points: [points],
     input_labels: [points.map(() => 1)],
   });
+  console.log('[SAM] processor done (%.0fms), running model…', performance.now() - t0);
 
   const { pred_masks, iou_scores } = await samModel(inputs);
+  console.log('[SAM] model done (%.0fms), post-processing…', performance.now() - t0);
+
   const masks = await samProcessor.post_process_masks(
     pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes,
   );
@@ -2728,7 +2740,7 @@ async function samSegment(dataUrl) {
     if (scores[i] > bestScore) { bestScore = scores[i]; bestIdx = i; }
   }
 
-  console.log('[SAM] mask idx=%d score=%.3f dims=%dx%d', bestIdx, bestScore, mW, mH);
+  console.log('[SAM] mask idx=%d score=%.3f dims=%dx%d total=%.1fs', bestIdx, bestScore, mW, mH, (performance.now() - t0) / 1000);
 
   const off = bestIdx * pxCount;
   const binary = new Uint8Array(pxCount);
