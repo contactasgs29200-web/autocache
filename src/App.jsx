@@ -2739,77 +2739,95 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     actualBottomFrac = (lastRow + 1) / carImg.height;
   } catch (_) { /* fallback to 1.0 */ }
 
-  // ── Showroom shadow v4 — attached to car, no detection ──
+  // ── Showroom shadow v5 — continuous polygon, no circles ──
   const SHADOW_VISIBLE_TEST_MODE = false;
-  const SHADOW_ATTACH_TO_CAR     = true;
+  const showroomShadowPreset     = 'natural_3_4_front';
   const shadowIntensity          = 1.0;
   const oMul = SHADOW_VISIBLE_TEST_MODE ? 2.5 * shadowIntensity : shadowIntensity;
 
   const carBottom = carY + actualBottomFrac * ch;
-  const maxShadowY = carBottom + ch * 0.025;
 
-  function drawShadowEllipse(x, y, w, h, opacity, blurPx, debugColor) {
-    const rw = w / 2, rh = h / 2;
-    const cx = x + rw, cy = y + rh;
+  // Helper: draw a filled polygon on offscreen canvas, blur, composite
+  function drawShadowPoly(points, opacity, blurPx, debugColor) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [px, py] of points) {
+      if (px < minX) minX = px; if (px > maxX) maxX = px;
+      if (py < minY) minY = py; if (py > maxY) maxY = py;
+    }
     const pad = blurPx * 3;
-    const ew = Math.ceil(w + pad * 2);
-    const eh = Math.ceil(h + pad * 2);
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    const ew = Math.ceil(maxX - minX);
+    const eh = Math.ceil(maxY - minY);
     if (ew < 4 || eh < 4) return;
+
     const ec = document.createElement('canvas');
     ec.width = ew; ec.height = eh;
     const ectx = ec.getContext('2d');
     ectx.fillStyle = debugColor || '#000';
     ectx.beginPath();
-    ectx.ellipse(ew / 2, eh / 2, rw, rh, 0, 0, Math.PI * 2);
+    ectx.moveTo(points[0][0] - minX, points[0][1] - minY);
+    for (let i = 1; i < points.length; i++) {
+      ectx.lineTo(points[i][0] - minX, points[i][1] - minY);
+    }
+    ectx.closePath();
     ectx.fill();
+
     const bc = document.createElement('canvas');
     bc.width = ew; bc.height = eh;
     const bctx = bc.getContext('2d');
     bctx.filter = `blur(${blurPx}px)`;
     bctx.drawImage(ec, 0, 0);
+
     ctx.save();
     ctx.globalAlpha = opacity * oMul;
-    ctx.drawImage(bc, cx - ew / 2, cy - eh / 2);
+    ctx.drawImage(bc, minX, minY);
     ctx.restore();
   }
 
-  // All positions relative to car bbox (carX, carY, cw, ch)
-  // Shadows drawn partially UNDER the car — car is drawn AFTER
+  // ── Main underbody shadow: continuous polygon from rear to front ──
+  // Denser at center/front, lighter at rear — achieved by layering
+  const mainPoly = [
+    [carX + cw * 0.20, carBottom - ch * 0.030],
+    [carX + cw * 0.58, carBottom - ch * 0.045],
+    [carX + cw * 0.86, carBottom - ch * 0.020],
+    [carX + cw * 0.82, carBottom + ch * 0.035],
+    [carX + cw * 0.50, carBottom + ch * 0.045],
+    [carX + cw * 0.18, carBottom + ch * 0.020],
+  ];
+  drawShadowPoly(mainPoly, 0.25, 22,
+    SHADOW_VISIBLE_TEST_MODE ? 'rgba(0,0,180,1)' : null);
 
-  // ── Rear tire shadow ──
-  const rearX = carX + cw * 0.26 - cw * 0.10 / 2;
-  const rearY = carBottom - ch * 0.015 - ch * 0.035 / 2;
-  drawShadowEllipse(rearX, rearY, cw * 0.10, ch * 0.035, 0.32, 8,
-    SHADOW_VISIBLE_TEST_MODE ? 'red' : null);
+  // ── Inner density layer: heavier shadow under front+center zone ──
+  const innerPoly = [
+    [carX + cw * 0.30, carBottom - ch * 0.020],
+    [carX + cw * 0.60, carBottom - ch * 0.035],
+    [carX + cw * 0.78, carBottom - ch * 0.015],
+    [carX + cw * 0.74, carBottom + ch * 0.025],
+    [carX + cw * 0.48, carBottom + ch * 0.035],
+    [carX + cw * 0.28, carBottom + ch * 0.012],
+  ];
+  drawShadowPoly(innerPoly, 0.10, 16,
+    SHADOW_VISIBLE_TEST_MODE ? 'rgba(180,0,0,1)' : null);
 
-  // ── Front tire shadow ──
-  const frontX = carX + cw * 0.62 - cw * 0.10 / 2;
-  const frontY = carBottom - ch * 0.015 - ch * 0.035 / 2;
-  drawShadowEllipse(frontX, frontY, cw * 0.10, ch * 0.035, 0.32, 8,
-    SHADOW_VISIBLE_TEST_MODE ? 'red' : null);
+  // ── Front bumper shadow: small dense patch under front overhang ──
+  const bumperPoly = [
+    [carX + cw * 0.48, carBottom - ch * 0.020],
+    [carX + cw * 0.84, carBottom - ch * 0.025],
+    [carX + cw * 0.82, carBottom + ch * 0.025],
+    [carX + cw * 0.46, carBottom + ch * 0.020],
+  ];
+  drawShadowPoly(bumperPoly, 0.18, 14,
+    SHADOW_VISIBLE_TEST_MODE ? 'rgba(0,180,0,1)' : null);
 
-  // ── Contact shadow (underbody strip) ──
-  const contactX = carX + cw * 0.18;
-  const contactY = carBottom - ch * 0.02 - ch * 0.04 / 2;
-  drawShadowEllipse(contactX, contactY, cw * 0.62, ch * 0.04, 0.14, 12,
-    SHADOW_VISIBLE_TEST_MODE ? 'blue' : null);
-
-  // ── Front bumper/spoiler shadow ──
-  const bumperX = carX + cw * 0.55;
-  const bumperY = carBottom - ch * 0.015 - ch * 0.025 / 2;
-  drawShadowEllipse(bumperX, bumperY, cw * 0.28, ch * 0.025, 0.12, 8,
-    SHADOW_VISIBLE_TEST_MODE ? 'green' : null);
-
-  console.log('[Showroom shadow v4]', {
+  console.log('[Showroom shadow v5]', {
+    preset: showroomShadowPreset,
     testMode: SHADOW_VISIBLE_TEST_MODE,
-    attachToCar: SHADOW_ATTACH_TO_CAR,
     oMul,
     carBounds: { x: Math.round(carX), y: Math.round(carY), w: Math.round(cw), h: Math.round(ch), bottom: Math.round(carBottom) },
-    maxShadowY: Math.round(maxShadowY),
-    rearTire:  { x: Math.round(rearX),  y: Math.round(rearY),  w: Math.round(cw * 0.10), h: Math.round(ch * 0.035), opacity: 0.32 },
-    frontTire: { x: Math.round(frontX), y: Math.round(frontY), w: Math.round(cw * 0.10), h: Math.round(ch * 0.035), opacity: 0.32 },
-    contact:   { x: Math.round(contactX), y: Math.round(contactY), w: Math.round(cw * 0.62), h: Math.round(ch * 0.04), opacity: 0.14 },
-    bumper:    { x: Math.round(bumperX), y: Math.round(bumperY), w: Math.round(cw * 0.28), h: Math.round(ch * 0.025), opacity: 0.12 },
+    mainPoly: mainPoly.map(([x, y]) => [Math.round(x), Math.round(y)]),
+    innerPoly: innerPoly.map(([x, y]) => [Math.round(x), Math.round(y)]),
+    bumperPoly: bumperPoly.map(([x, y]) => [Math.round(x), Math.round(y)]),
+    finalOpacity: { main: +(0.25 * oMul).toFixed(3), inner: +(0.10 * oMul).toFixed(3), bumper: +(0.18 * oMul).toFixed(3) },
   });
   // ── Fin ombre ──
   ctx.save();
