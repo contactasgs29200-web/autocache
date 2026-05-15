@@ -2844,10 +2844,10 @@ async function extractSourceShadow(originalDataUrl, cutoutDataUrl) {
       }
   const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
 
-  const roiX1 = Math.max(0, Math.floor(carL - W * 0.05));
-  const roiX2 = Math.min(W, Math.ceil(carR + W * 0.05));
-  const roiY1 = Math.max(0, Math.floor(carB - H * 0.04));
-  const roiY2 = Math.min(H, Math.ceil(carB + H * 0.14));
+  const roiX1 = Math.max(0, Math.floor(carL - W * 0.08));
+  const roiX2 = Math.min(W, Math.ceil(carR + W * 0.08));
+  const roiY1 = Math.max(0, Math.floor(carB - H * 0.18));
+  const roiY2 = Math.min(H, Math.ceil(carB + H * 0.18));
   const rW = roiX2 - roiX1, rH = roiY2 - roiY1;
 
   if (rW < 10 || rH < 10) {
@@ -2865,19 +2865,29 @@ async function extractSourceShadow(originalDataUrl, cutoutDataUrl) {
       isCar[ry * rW + rx] = maskPx[idx + 3] > 128 ? 1 : 0;
     }
 
-  const floorRef = estimateFloorBrightness(lum, isCar, rW, rH);
+  const floorRef = estimateFloorBrightness2D(lum, isCar, rW, rH);
 
   const matte = new Float32Array(rW * rH);
   let aSum = 0, aCount = 0;
   for (let i = 0; i < rW * rH; i++) {
     if (isCar[i] || floorRef[i] < 15) { matte[i] = 0; continue; }
     const raw = (floorRef[i] - lum[i]) / floorRef[i];
-    matte[i] = Math.max(0, Math.min(0.6, raw));
-    if (matte[i] < 0.03) matte[i] = 0;
+    matte[i] = Math.max(0, Math.min(0.65, raw));
+    if (matte[i] < 0.025) matte[i] = 0;
     aSum += matte[i]; aCount++;
   }
 
-  const smoothed = gaussianBlurMask(matte, rW, rH, 3.0);
+  const smoothed = gaussianBlurMask(matte, rW, rH, 6.0);
+
+  const fadeMargin = Math.min(rW, rH) * 0.15;
+  for (let ry = 0; ry < rH; ry++)
+    for (let rx = 0; rx < rW; rx++) {
+      const d = Math.min(rx, rW - 1 - rx, ry, rH - 1 - ry);
+      if (d < fadeMargin) {
+        const t = d / fadeMargin;
+        smoothed[ry * rW + rx] *= t * t * (3 - 2 * t);
+      }
+    }
 
   const matteCanvas = document.createElement('canvas');
   matteCanvas.width = W; matteCanvas.height = H;
@@ -2885,37 +2895,81 @@ async function extractSourceShadow(originalDataUrl, cutoutDataUrl) {
   const matteImgData = matteCtx.createImageData(W, H);
   for (let ry = 0; ry < rH; ry++)
     for (let rx = 0; rx < rW; rx++) {
-      const gx = roiX1 + rx, gy = roiY1 + ry;
-      matteImgData.data[(gy * W + gx) * 4 + 3] = Math.round(smoothed[ry * rW + rx] * 255);
+      const a = smoothed[ry * rW + rx];
+      if (a > 0.004) {
+        const gx = roiX1 + rx, gy = roiY1 + ry;
+        matteImgData.data[(gy * W + gx) * 4 + 3] = Math.round(a * 255);
+      }
     }
   matteCtx.putImageData(matteImgData, 0, 0);
 
   const meanAlpha = aCount > 0 ? aSum / aCount : 0;
-  console.log('[Shadow] matte extracted: ROI %dx%d meanAlpha=%.4f', rW, rH, meanAlpha);
+  console.log('[Shadow] matte v2: ROI %dx%d [x:%d-%d y:%d-%d] meanAlpha=%.4f',
+    rW, rH, roiX1, roiX2, roiY1, roiY2, meanAlpha);
 
   return { matteDataUrl: matteCanvas.toDataURL('image/png'), meanAlpha, carBounds };
 }
 
-function estimateFloorBrightness(lum, isCar, W, H) {
-  const colRef = new Float32Array(W);
-  for (let x = 0; x < W; x++) {
-    const vals = [];
-    for (let y = 0; y < H; y++) if (!isCar[y * W + x]) vals.push(lum[y * W + x]);
-    vals.sort((a, b) => a - b);
-    colRef[x] = vals.length > 2 ? vals[Math.floor(vals.length * 0.85)] : 128;
-  }
-  const radius = Math.ceil(W * 0.15);
-  const sm = new Float32Array(W);
-  let sum = 0, cnt = 0;
-  for (let x = 0; x <= Math.min(radius, W - 1); x++) { sum += colRef[x]; cnt++; }
-  sm[0] = sum / cnt;
-  for (let x = 1; x < W; x++) {
-    if (x + radius < W) { sum += colRef[x + radius]; cnt++; }
-    if (x - radius - 1 >= 0) { sum -= colRef[x - radius - 1]; cnt--; }
-    sm[x] = sum / cnt;
-  }
+function estimateFloorBrightness2D(lum, isCar, W, H) {
+  const BLK = 32;
+  const gW = Math.ceil(W / BLK), gH = Math.ceil(H / BLK);
+  const grid = new Float32Array(gW * gH);
+
+  for (let gy = 0; gy < gH; gy++)
+    for (let gx = 0; gx < gW; gx++) {
+      const vals = [];
+      const x1 = gx * BLK, x2 = Math.min(x1 + BLK, W);
+      const y1 = gy * BLK, y2 = Math.min(y1 + BLK, H);
+      for (let y = y1; y < y2; y++)
+        for (let x = x1; x < x2; x++)
+          if (!isCar[y * W + x]) vals.push(lum[y * W + x]);
+      vals.sort((a, b) => a - b);
+      grid[gy * gW + gx] = vals.length > 2 ? vals[Math.floor(vals.length * 0.85)] : -1;
+    }
+
+  for (let gy = 0; gy < gH; gy++)
+    for (let gx = 0; gx < gW; gx++) {
+      if (grid[gy * gW + gx] >= 0) continue;
+      let s = 0, c = 0;
+      for (let dy = -3; dy <= 3; dy++)
+        for (let dx = -3; dx <= 3; dx++) {
+          const ny = gy + dy, nx = gx + dx;
+          if (ny >= 0 && ny < gH && nx >= 0 && nx < gW && grid[ny * gW + nx] >= 0) {
+            s += grid[ny * gW + nx]; c++;
+          }
+        }
+      grid[gy * gW + gx] = c > 0 ? s / c : 128;
+    }
+
+  const sg = new Float32Array(gW * gH);
+  for (let gy = 0; gy < gH; gy++)
+    for (let gx = 0; gx < gW; gx++) {
+      let s = 0, c = 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const ny = gy + dy, nx = gx + dx;
+          if (ny >= 0 && ny < gH && nx >= 0 && nx < gW) { s += grid[ny * gW + nx]; c++; }
+        }
+      sg[gy * gW + gx] = s / c;
+    }
+
   const result = new Float32Array(W * H);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) result[y * W + x] = sm[x];
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const gxf = (x + 0.5) / BLK - 0.5;
+      const gyf = (y + 0.5) / BLK - 0.5;
+      const gx0 = Math.max(0, Math.floor(gxf));
+      const gy0 = Math.max(0, Math.floor(gyf));
+      const gx1 = Math.min(gW - 1, gx0 + 1);
+      const gy1 = Math.min(gH - 1, gy0 + 1);
+      const fx = Math.max(0, Math.min(1, gxf - gx0));
+      const fy = Math.max(0, Math.min(1, gyf - gy0));
+      result[y * W + x] =
+        sg[gy0 * gW + gx0] * (1 - fx) * (1 - fy) +
+        sg[gy0 * gW + gx1] * fx * (1 - fy) +
+        sg[gy1 * gW + gx0] * (1 - fx) * fy +
+        sg[gy1 * gW + gx1] * fx * fy;
+    }
   return result;
 }
 
