@@ -2739,15 +2739,18 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     actualBottomFrac = (lastRow + 1) / carImg.height;
   } catch (_) { /* fallback to 1.0 */ }
 
-  // ── Showroom shadow v5 — continuous polygon, no circles ──
+  // ── Showroom shadow v6 — overlapping contact, no gap ──
   const SHADOW_VISIBLE_TEST_MODE = false;
+  const SHADOW_OVERLAP_RATIO     = 0.035;
   const showroomShadowPreset     = 'natural_3_4_front';
   const shadowIntensity          = 1.0;
   const oMul = SHADOW_VISIBLE_TEST_MODE ? 2.5 * shadowIntensity : shadowIntensity;
 
   const carBottom = carY + actualBottomFrac * ch;
+  // Anchor point: shadow center sits INSIDE the car bottom by overlap amount.
+  // The car is drawn AFTER shadows, so it naturally masks the top half.
+  const shadowAnchor = carBottom - ch * SHADOW_OVERLAP_RATIO;
 
-  // Helper: draw a filled polygon on offscreen canvas, blur, composite
   function drawShadowPoly(points, opacity, blurPx, debugColor) {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const [px, py] of points) {
@@ -2784,50 +2787,54 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.restore();
   }
 
-  // ── Main underbody shadow: continuous polygon from rear to front ──
-  // Denser at center/front, lighter at rear — achieved by layering
+  // All Y coords relative to shadowAnchor (= carBottom - overlap).
+  // Top points sit well INSIDE the car silhouette → masked by car draw.
+  // Bottom points barely peek below carBottom → visible contact shadow.
+
+  // ── Main underbody shadow ──
   const mainPoly = [
-    [carX + cw * 0.20, carBottom - ch * 0.030],
-    [carX + cw * 0.58, carBottom - ch * 0.045],
-    [carX + cw * 0.86, carBottom - ch * 0.020],
-    [carX + cw * 0.82, carBottom + ch * 0.035],
-    [carX + cw * 0.50, carBottom + ch * 0.045],
-    [carX + cw * 0.18, carBottom + ch * 0.020],
+    [carX + cw * 0.18, shadowAnchor - ch * 0.025],
+    [carX + cw * 0.50, shadowAnchor - ch * 0.040],
+    [carX + cw * 0.84, shadowAnchor - ch * 0.020],
+    [carX + cw * 0.80, shadowAnchor + ch * 0.020],
+    [carX + cw * 0.48, shadowAnchor + ch * 0.028],
+    [carX + cw * 0.16, shadowAnchor + ch * 0.012],
   ];
-  drawShadowPoly(mainPoly, 0.25, 22,
+  drawShadowPoly(mainPoly, 0.28, 20,
     SHADOW_VISIBLE_TEST_MODE ? 'rgba(0,0,180,1)' : null);
 
-  // ── Inner density layer: heavier shadow under front+center zone ──
+  // ── Inner density: reinforces center/front ──
   const innerPoly = [
-    [carX + cw * 0.30, carBottom - ch * 0.020],
-    [carX + cw * 0.60, carBottom - ch * 0.035],
-    [carX + cw * 0.78, carBottom - ch * 0.015],
-    [carX + cw * 0.74, carBottom + ch * 0.025],
-    [carX + cw * 0.48, carBottom + ch * 0.035],
-    [carX + cw * 0.28, carBottom + ch * 0.012],
+    [carX + cw * 0.28, shadowAnchor - ch * 0.018],
+    [carX + cw * 0.58, shadowAnchor - ch * 0.030],
+    [carX + cw * 0.76, shadowAnchor - ch * 0.012],
+    [carX + cw * 0.72, shadowAnchor + ch * 0.016],
+    [carX + cw * 0.46, shadowAnchor + ch * 0.022],
+    [carX + cw * 0.26, shadowAnchor + ch * 0.008],
   ];
-  drawShadowPoly(innerPoly, 0.10, 16,
+  drawShadowPoly(innerPoly, 0.12, 14,
     SHADOW_VISIBLE_TEST_MODE ? 'rgba(180,0,0,1)' : null);
 
-  // ── Front bumper shadow: small dense patch under front overhang ──
+  // ── Front bumper: dense patch under front overhang ──
   const bumperPoly = [
-    [carX + cw * 0.48, carBottom - ch * 0.020],
-    [carX + cw * 0.84, carBottom - ch * 0.025],
-    [carX + cw * 0.82, carBottom + ch * 0.025],
-    [carX + cw * 0.46, carBottom + ch * 0.020],
+    [carX + cw * 0.50, shadowAnchor - ch * 0.022],
+    [carX + cw * 0.85, shadowAnchor - ch * 0.028],
+    [carX + cw * 0.83, shadowAnchor + ch * 0.014],
+    [carX + cw * 0.48, shadowAnchor + ch * 0.010],
   ];
-  drawShadowPoly(bumperPoly, 0.18, 14,
+  drawShadowPoly(bumperPoly, 0.20, 12,
     SHADOW_VISIBLE_TEST_MODE ? 'rgba(0,180,0,1)' : null);
 
-  console.log('[Showroom shadow v5]', {
+  console.log('[Showroom shadow v6]', {
     preset: showroomShadowPreset,
     testMode: SHADOW_VISIBLE_TEST_MODE,
+    overlapRatio: SHADOW_OVERLAP_RATIO,
     oMul,
     carBounds: { x: Math.round(carX), y: Math.round(carY), w: Math.round(cw), h: Math.round(ch), bottom: Math.round(carBottom) },
+    shadowAnchor: Math.round(shadowAnchor),
+    anchorInsideCar: Math.round(carBottom - shadowAnchor) + 'px above carBottom',
     mainPoly: mainPoly.map(([x, y]) => [Math.round(x), Math.round(y)]),
-    innerPoly: innerPoly.map(([x, y]) => [Math.round(x), Math.round(y)]),
-    bumperPoly: bumperPoly.map(([x, y]) => [Math.round(x), Math.round(y)]),
-    finalOpacity: { main: +(0.25 * oMul).toFixed(3), inner: +(0.10 * oMul).toFixed(3), bumper: +(0.18 * oMul).toFixed(3) },
+    finalOpacity: { main: +(0.28 * oMul).toFixed(3), inner: +(0.12 * oMul).toFixed(3), bumper: +(0.20 * oMul).toFixed(3) },
   });
   // ── Fin ombre ──
   ctx.save();
