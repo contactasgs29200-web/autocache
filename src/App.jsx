@@ -2786,6 +2786,51 @@ function morphCloseMask(mask, W, H) {
   return result;
 }
 
+function morphCloseFloat(data, W, H, radius) {
+  const dilated = sepMaxFilter(data, W, H, radius);
+  return sepMinFilter(dilated, W, H, radius);
+}
+
+function sepMaxFilter(data, W, H, r) {
+  const tmp = new Float32Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let mx = 0;
+      const x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r);
+      for (let i = x0; i <= x1; i++) { const v = data[y * W + i]; if (v > mx) mx = v; }
+      tmp[y * W + x] = mx;
+    }
+  const out = new Float32Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let mx = 0;
+      const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
+      for (let j = y0; j <= y1; j++) { const v = tmp[j * W + x]; if (v > mx) mx = v; }
+      out[y * W + x] = mx;
+    }
+  return out;
+}
+
+function sepMinFilter(data, W, H, r) {
+  const tmp = new Float32Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let mn = 1;
+      const x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r);
+      for (let i = x0; i <= x1; i++) { const v = data[y * W + i]; if (v < mn) mn = v; }
+      tmp[y * W + x] = mn;
+    }
+  const out = new Float32Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let mn = 1;
+      const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
+      for (let j = y0; j <= y1; j++) { const v = tmp[j * W + x]; if (v < mn) mn = v; }
+      out[y * W + x] = mn;
+    }
+  return out;
+}
+
 function gaussianBlurMask(mask, W, H, sigma) {
   const r = Math.ceil(sigma * 3);
   const k = [];
@@ -2877,6 +2922,12 @@ async function extractSourceShadow(originalDataUrl, cutoutDataUrl) {
       isCar[ry * rW + rx] = maskPx[idx + 3] > 128 ? 1 : 0;
     }
 
+  const SHADOW_CLOSE_RADIUS  = 7;
+  const SHADOW_DENSITY_SIGMA = 5.0;
+  const SHADOW_EDGE_SIGMA    = 7.0;
+  const SHADOW_NOISE_GATE    = 0.02;
+  const SHADOW_MAX_ALPHA     = 0.65;
+
   const floorRef = estimateFloorBrightness2D(lum, isCar, rW, rH);
 
   const matte = new Float32Array(rW * rH);
@@ -2884,12 +2935,14 @@ async function extractSourceShadow(originalDataUrl, cutoutDataUrl) {
   for (let i = 0; i < rW * rH; i++) {
     if (isCar[i] || floorRef[i] < 15) { matte[i] = 0; continue; }
     const raw = (floorRef[i] - lum[i]) / floorRef[i];
-    matte[i] = Math.max(0, Math.min(0.65, raw));
-    if (matte[i] < 0.025) matte[i] = 0;
+    matte[i] = Math.max(0, Math.min(SHADOW_MAX_ALPHA, raw));
+    if (matte[i] < SHADOW_NOISE_GATE) matte[i] = 0;
     aSum += matte[i]; aCount++;
   }
 
-  const smoothed = gaussianBlurMask(matte, rW, rH, 6.0);
+  const closed = morphCloseFloat(matte, rW, rH, SHADOW_CLOSE_RADIUS);
+  const density = gaussianBlurMask(closed, rW, rH, SHADOW_DENSITY_SIGMA);
+  const smoothed = gaussianBlurMask(density, rW, rH, SHADOW_EDGE_SIGMA);
 
   const fadeMargin = Math.min(rW, rH) * 0.15;
   for (let ry = 0; ry < rH; ry++)
