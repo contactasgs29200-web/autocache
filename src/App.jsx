@@ -3056,6 +3056,7 @@ function estimateFloorBrightness2D(lum, isCar, W, H) {
 
 function getShowroomDebugMode() {
   const url = window.location.search;
+  if (url.includes('showroomDebug=mainMask')) return 'mainMask';
   if (url.includes('showroomDebug=shadowAlpha')) return 'shadowAlpha';
   if (url.includes('showroomDebug=shadowColor')) return 'shadowColor';
   if (url.includes('showroomDebug=shadowControls')) return 'shadowControls';
@@ -3095,6 +3096,133 @@ function filterContourArtifacts(contour, width, maxGap) {
     if (leftY >= 0 && Math.abs(contour[x] - leftY) > maxGap) contour[x] = -1;
     else if (rightY >= 0 && Math.abs(contour[x] - rightY) > maxGap) contour[x] = -1;
   }
+}
+
+// ── Main vehicle isolation — connected-component filtering ──
+
+async function isolateMainVehicle(cutoutDataURL, plateBox) {
+  console.time('[MainVehicle] isolate');
+  const img = await loadImg(cutoutDataURL);
+  const W = img.naturalWidth || img.width;
+  const H = img.naturalHeight || img.height;
+
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const data = imgData.data;
+  const N = W * H;
+
+  // Binary mask: 1 = opaque (alpha > 128)
+  const mask = new Uint8Array(N);
+  let totalOpaque = 0;
+  for (let i = 0; i < N; i++) {
+    if (data[i * 4 + 3] > 128) { mask[i] = 1; totalOpaque++; }
+  }
+
+  if (totalOpaque === 0) {
+    console.log('[MainVehicle] no opaque pixels, skipping');
+    console.timeEnd('[MainVehicle] isolate');
+    return cutoutDataURL;
+  }
+
+  // Connected component labeling (4-connected BFS)
+  const labels = new Int32Array(N);
+  const components = []; // [{id, size, minX, maxX, minY, maxY, sumX, sumY}]
+  let nextLabel = 1;
+  const queue = [];
+
+  for (let i = 0; i < N; i++) {
+    if (mask[i] === 0 || labels[i] !== 0) continue;
+    const label = nextLabel++;
+    let size = 0, sumX = 0, sumY = 0;
+    let minX = W, maxX = 0, minY = H, maxY = 0;
+    queue.length = 0;
+    queue.push(i);
+    labels[i] = label;
+    while (queue.length > 0) {
+      const idx = queue.pop();
+      const x = idx % W, y = Math.floor(idx / W);
+      size++;
+      sumX += x; sumY += y;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      // 4-connected neighbors
+      if (x > 0     && mask[idx - 1] && !labels[idx - 1]) { labels[idx - 1] = label; queue.push(idx - 1); }
+      if (x < W - 1 && mask[idx + 1] && !labels[idx + 1]) { labels[idx + 1] = label; queue.push(idx + 1); }
+      if (y > 0     && mask[idx - W] && !labels[idx - W]) { labels[idx - W] = label; queue.push(idx - W); }
+      if (y < H - 1 && mask[idx + W] && !labels[idx + W]) { labels[idx + W] = label; queue.push(idx + W); }
+    }
+    components.push({ id: label, size, minX, maxX, minY, maxY, cx: sumX / size, cy: sumY / size });
+  }
+
+  console.log('[MainVehicle] found ' + components.length + ' components, totalOpaque=' + totalOpaque);
+
+  if (components.length <= 1) {
+    console.log('[MainVehicle] single component, no filtering needed');
+    console.timeEnd('[MainVehicle] isolate');
+    return cutoutDataURL;
+  }
+
+  // Score each component to find main vehicle
+  const imgCx = W / 2, imgCy = H / 2;
+  const maxDist = Math.sqrt(imgCx * imgCx + imgCy * imgCy);
+
+  // Plate center in pixel coords (if available)
+  let plateCx = -1, plateCy = -1;
+  if (plateBox) {
+    plateCx = ((plateBox.x1 ?? plateBox.x ?? 0) + (plateBox.x2 ?? ((plateBox.x ?? 0) + (plateBox.w ?? 0)))) / 2 * W;
+    plateCy = ((plateBox.y1 ?? plateBox.y ?? 0) + (plateBox.y2 ?? ((plateBox.y ?? 0) + (plateBox.h ?? 0)))) / 2 * H;
+  }
+
+  let bestScore = -1, bestId = -1;
+  for (const comp of components) {
+    // Size score: fraction of total opaque pixels (0-1)
+    const sizeScore = comp.size / totalOpaque;
+
+    // Center proximity score (0-1, 1 = at center)
+    const dist = Math.sqrt((comp.cx - imgCx) ** 2 + (comp.cy - imgCy) ** 2);
+    const centerScore = 1 - dist / maxDist;
+
+    // Plate containment score (0 or 1): does this component's bbox contain the plate?
+    let plateScore = 0;
+    if (plateCx >= 0) {
+      if (plateCx >= comp.minX && plateCx <= comp.maxX && plateCy >= comp.minY && plateCy <= comp.maxY) {
+        plateScore = 1;
+      }
+    }
+
+    // Weighted score: plate containment is strongest signal
+    const score = sizeScore * 0.3 + centerScore * 0.2 + plateScore * 0.5;
+
+    console.log('[MainVehicle] comp #' + comp.id +
+      ': size=' + comp.size + ' (' + (sizeScore * 100).toFixed(1) + '%)' +
+      ', center=(' + Math.round(comp.cx) + ',' + Math.round(comp.cy) + ')' +
+      ', bbox=[' + comp.minX + ',' + comp.minY + ']->[' + comp.maxX + ',' + comp.maxY + ']' +
+      ', plateContains=' + (plateScore > 0) +
+      ', score=' + score.toFixed(3));
+
+    if (score > bestScore) { bestScore = score; bestId = comp.id; }
+  }
+
+  // Zero out alpha of all non-main components
+  let removed = 0;
+  for (let i = 0; i < N; i++) {
+    if (mask[i] && labels[i] !== bestId) {
+      data[i * 4 + 3] = 0;
+      removed++;
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  const result = c.toDataURL('image/png');
+
+  console.log('[MainVehicle] kept comp #' + bestId + ', removed ' + removed + ' pixels from ' + (components.length - 1) + ' other components');
+  console.timeEnd('[MainVehicle] isolate');
+  return result;
 }
 
 async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, shadowParams = {}) {
@@ -3373,6 +3501,19 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
 
   const carBottom = carY + actualBottomFrac * ch;
   const debugMode = getShowroomDebugMode();
+
+  // ── Debug: mainMask — show isolated car mask on white ──
+  if (debugMode === 'mainMask') {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.drawImage(carImg, carX, carY, cw, ch);
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.font = '24px monospace';
+    ctx.fillText('mainMask — isolated vehicle (post-CC filter)', 20, 40);
+    const dataURL = c.toDataURL('image/jpeg', 0.98);
+    if (returnFull) return { dataURL, baseURL: dataURL, transform: { carX, carY, cw, ch, W, H } };
+    return dataURL;
+  }
 
   // ── Debug: shadow matte on white (black visible) ──
   if (debugMode === 'shadow' || debugMode === 'shadowAlpha') {
@@ -4174,7 +4315,8 @@ export default function AutoCache() {
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
-          const cutout = await removeBackground(r.baseDataURL);
+          const rawCutout = await removeBackground(r.baseDataURL);
+          const cutout = await isolateMainVehicle(rawCutout, r.yoloBbox ?? null);
           let shadowMatteUrl = null;
           if (USE_SOURCE_SHADOW_TRANSFER) {
             const shadow = await extractSourceShadow(r.baseDataURL, cutout);
