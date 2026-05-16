@@ -2573,6 +2573,21 @@ function polishBodywork(ctx, W, H) {
 }
 
 
+// ── Feature flags (shadow system) ──
+const USE_CLIENT_SAM = false;
+const USE_SOURCE_SHADOW_TRANSFER = false;
+
+// ── Shadow generation constants (tunable) ──
+const SHADOW_STRENGTH = 1.0;
+const CONTACT_SHADOW_OPACITY = 0.30;
+const CONTACT_SHADOW_BLUR = 10;
+const UNDERBODY_SHADOW_OPACITY = 0.18;
+const UNDERBODY_SHADOW_BLUR = 24;
+const FRONT_SHADOW_OPACITY = 0.16;
+const SHADOW_OVERLAP_RATIO = 0.025;
+const SHADOW_VERTICAL_COMPRESSION = 0.08;
+const SHADOW_SHEAR = 0.12;
+
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
 function makeShowroomBackground(index, W, H) {
   const c = document.createElement('canvas');
@@ -2659,6 +2674,7 @@ function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
 // ── Segmentation véhicule — SAM (Segment Anything) + @imgly fallback ──
 
 async function preloadSegmentation() {
+  if (!USE_CLIENT_SAM) return;
   if (samModel) return;
   try {
     const hf = await import('@huggingface/transformers');
@@ -2680,7 +2696,7 @@ async function preloadSegmentation() {
 const SAM_TIMEOUT_MS = 60000;
 
 async function removeBackground(dataUrl) {
-  if (samModel) {
+  if (USE_CLIENT_SAM && samModel) {
     try {
       const result = await Promise.race([
         samSegment(dataUrl),
@@ -3040,9 +3056,182 @@ function estimateFloorBrightness2D(lum, isCar, W, H) {
 
 function getShowroomDebugMode() {
   const url = window.location.search;
+  if (url.includes('showroomDebug=shadowAlpha')) return 'shadowAlpha';
   if (url.includes('showroomDebug=shadow')) return 'shadow';
   if (url.includes('showroomDebug=car')) return 'car';
+  if (url.includes('showroomDebug=final')) return null;
   return null;
+}
+
+// ── Shadow generation from car alpha mask ──
+
+function smoothContourMovingAverage(contour, width, windowSize) {
+  const out = new Float32Array(width);
+  const half = Math.floor(windowSize / 2);
+  for (let x = 0; x < width; x++) {
+    if (contour[x] < 0) { out[x] = -1; continue; }
+    let sum = 0, count = 0;
+    for (let dx = -half; dx <= half; dx++) {
+      const nx = x + dx;
+      if (nx >= 0 && nx < width && contour[nx] >= 0) { sum += contour[nx]; count++; }
+    }
+    out[x] = count > 0 ? sum / count : -1;
+  }
+  return out;
+}
+
+function filterContourArtifacts(contour, width, maxGap) {
+  for (let x = 0; x < width; x++) {
+    if (contour[x] < 0) continue;
+    let leftY = -1, rightY = -1;
+    for (let lx = x - 1; lx >= Math.max(0, x - 5); lx--) {
+      if (contour[lx] >= 0) { leftY = contour[lx]; break; }
+    }
+    for (let rx = x + 1; rx <= Math.min(width - 1, x + 5); rx++) {
+      if (contour[rx] >= 0) { rightY = contour[rx]; break; }
+    }
+    if (leftY >= 0 && Math.abs(contour[x] - leftY) > maxGap) contour[x] = -1;
+    else if (rightY >= 0 && Math.abs(contour[x] - rightY) > maxGap) contour[x] = -1;
+  }
+}
+
+async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, shadowParams = {}) {
+  console.time('[Shadow] generateFromAlpha');
+  const img = await loadImg(cutoutDataURL);
+  const fullW = img.naturalWidth || img.width;
+  const fullH = img.naturalHeight || img.height;
+
+  const workScale = Math.min(1, 900 / fullW);
+  const wW = Math.round(fullW * workScale);
+  const wH = Math.round(fullH * workScale);
+
+  const workCanvas = document.createElement('canvas');
+  workCanvas.width = wW; workCanvas.height = wH;
+  const wCtx = workCanvas.getContext('2d');
+  wCtx.drawImage(img, 0, 0, wW, wH);
+  const imgData = wCtx.getImageData(0, 0, wW, wH);
+  const alpha = new Float32Array(wW * wH);
+  for (let i = 0; i < wW * wH; i++) alpha[i] = imgData.data[i * 4 + 3] / 255;
+
+  const cb = {
+    x: Math.round(carBounds.x * workScale),
+    y: Math.round(carBounds.y * workScale),
+    w: Math.round(carBounds.w * workScale),
+    h: Math.round(carBounds.h * workScale),
+  };
+  const carL = cb.x, carR = cb.x + cb.w, carT = cb.y, carB = cb.y + cb.h;
+  const carH = cb.h;
+
+  const opMul = shadowParams.opacity ?? SHADOW_STRENGTH;
+  const extraBlur = (shadowParams.blur ?? 0) * workScale;
+  const yOff = Math.round((shadowParams.yOffset ?? 0) * workScale);
+  const spread = shadowParams.spread ?? 1.0;
+
+  // Extract bottom contour
+  const bottomContour = new Float32Array(wW).fill(-1);
+  for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
+    for (let y = wH - 1; y >= 0; y--) {
+      if (alpha[y * wW + x] > 20 / 255) { bottomContour[x] = y; break; }
+    }
+  }
+
+  const smoothWindow = Math.max(3, Math.round(15 * workScale));
+  const smoothed = smoothContourMovingAverage(bottomContour, wW, smoothWindow);
+  filterContourArtifacts(smoothed, wW, Math.round(20 * workScale));
+
+  // Layer 1: Contact shadow
+  const contactLayer = new Float32Array(wW * wH);
+  const overlapPx = Math.round(SHADOW_OVERLAP_RATIO * carH);
+  const bandHeight = Math.round(0.03 * carH * spread);
+  const contactIntensity = CONTACT_SHADOW_OPACITY * opMul;
+
+  for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
+    const cy = smoothed[x];
+    if (cy < 0) continue;
+    const yStart = Math.round(cy - overlapPx) + yOff;
+    const yEnd = Math.round(cy + bandHeight) + yOff;
+    for (let y = Math.max(0, yStart); y <= Math.min(wH - 1, yEnd); y++) {
+      const dist = (y - yStart) / (yEnd - yStart);
+      const falloff = dist < 0.3 ? 1.0 : 1.0 - (dist - 0.3) / 0.7;
+      contactLayer[y * wW + x] = contactIntensity * Math.max(0, falloff);
+    }
+  }
+
+  const contactSigma = (CONTACT_SHADOW_BLUR + extraBlur) * workScale;
+  const contactBlurred = gaussianBlurMask(contactLayer, wW, wH, Math.max(1, contactSigma));
+
+  // Layer 2: Underbody shadow
+  const underbodyLayer = new Float32Array(wW * wH);
+  const srcTop = Math.round(carB - 0.3 * carH);
+  const compression = SHADOW_VERTICAL_COMPRESSION * spread;
+  const underbodyIntensity = UNDERBODY_SHADOW_OPACITY * opMul;
+
+  for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
+    const anchorY = smoothed[x];
+    if (anchorY < 0) continue;
+    for (let sy = srcTop; sy <= Math.min(carB, wH - 1); sy++) {
+      if (alpha[sy * wW + x] < 0.1) continue;
+      const projY = Math.round(anchorY + (sy - srcTop) * compression) + yOff;
+      const shearX = Math.round(x + (projY - anchorY) * SHADOW_SHEAR);
+      if (projY >= 0 && projY < wH && shearX >= 0 && shearX < wW) {
+        const srcAlpha = alpha[sy * wW + x];
+        const val = underbodyIntensity * srcAlpha;
+        const idx = projY * wW + shearX;
+        if (val > underbodyLayer[idx]) underbodyLayer[idx] = val;
+      }
+    }
+  }
+
+  // Layer 3: Front shadow anchor (merge into underbody BEFORE blur)
+  if (plateBox) {
+    const pxL = Math.round((plateBox.x1 ?? plateBox.x) * fullW * workScale);
+    const pxR = Math.round(((plateBox.x2 ?? (plateBox.x + (plateBox.w || 0))) ) * fullW * workScale);
+    const frontIntensity = FRONT_SHADOW_OPACITY * opMul;
+    for (let x = Math.max(0, pxL - Math.round(carH * 0.05)); x <= Math.min(wW - 1, pxR + Math.round(carH * 0.05)); x++) {
+      const cy = smoothed[x];
+      if (cy < 0) continue;
+      const boostStart = Math.round(cy) + yOff;
+      const boostEnd = Math.round(cy + bandHeight * 1.5) + yOff;
+      for (let y = Math.max(0, boostStart); y <= Math.min(wH - 1, boostEnd); y++) {
+        const dist = (y - boostStart) / (boostEnd - boostStart);
+        const falloff = 1.0 - dist * dist;
+        const idx = y * wW + x;
+        underbodyLayer[idx] = Math.min(0.95, underbodyLayer[idx] + frontIntensity * falloff);
+      }
+    }
+  }
+
+  const underbodySigma = (UNDERBODY_SHADOW_BLUR + extraBlur) * workScale;
+  const underbodyBlurred = gaussianBlurMask(underbodyLayer, wW, wH, Math.max(1, underbodySigma));
+
+  // Compose: max of both layers
+  const combined = new Float32Array(wW * wH);
+  for (let i = 0; i < wW * wH; i++) {
+    combined[i] = Math.max(contactBlurred[i], underbodyBlurred[i]);
+  }
+
+  // Paint to working canvas (alpha only, RGB=0)
+  const shadowCanvas = document.createElement('canvas');
+  shadowCanvas.width = wW; shadowCanvas.height = wH;
+  const sCtx = shadowCanvas.getContext('2d');
+  const shadowImgData = sCtx.createImageData(wW, wH);
+  for (let i = 0; i < wW * wH; i++) {
+    if (combined[i] > 0.003) {
+      shadowImgData.data[i * 4 + 3] = Math.round(Math.min(1, combined[i]) * 255);
+    }
+  }
+  sCtx.putImageData(shadowImgData, 0, 0);
+
+  // Upscale to cutout dimensions
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = fullW; outCanvas.height = fullH;
+  const oCtx = outCanvas.getContext('2d');
+  oCtx.imageSmoothingEnabled = true;
+  oCtx.imageSmoothingQuality = 'high';
+  oCtx.drawImage(shadowCanvas, 0, 0, fullW, fullH);
+
+  console.timeEnd('[Shadow] generateFromAlpha');
+  return outCanvas.toDataURL('image/png');
 }
 
 async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null) {
@@ -3101,7 +3290,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const debugMode = getShowroomDebugMode();
 
   // ── Debug: shadow matte only ──
-  if (debugMode === 'shadow') {
+  if (debugMode === 'shadow' || debugMode === 'shadowAlpha') {
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, W, H);
     if (shadowImg) {
@@ -3681,6 +3870,11 @@ export default function AutoCache() {
   const [showroomZoom,    setShowroomZoom]    = useState(1.0);
   const [showroomNudging, setShowroomNudging] = useState(false);
   const zoomTimerRef = useRef(null);
+  const [shadowOpacity, setShadowOpacity] = useState(SHADOW_STRENGTH);
+  const [shadowBlur, setShadowBlur] = useState(0);
+  const [shadowYOffset, setShadowYOffset] = useState(0);
+  const [shadowSpread, setShadowSpread] = useState(1.0);
+  const shadowTimerRef = useRef(null);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
@@ -3859,11 +4053,34 @@ export default function AutoCache() {
       if (showroomEnabled && showroomBgDataUrl) {
         try {
           const cutout = await removeBackground(r.baseDataURL);
-          const shadow = await extractSourceShadow(r.baseDataURL, cutout);
+          let shadowMatteUrl = null;
+          if (USE_SOURCE_SHADOW_TRANSFER) {
+            const shadow = await extractSourceShadow(r.baseDataURL, cutout);
+            shadowMatteUrl = shadow.matteDataUrl;
+          } else {
+            const cutImg = await loadImg(cutout);
+            const cW = cutImg.naturalWidth || cutImg.width, cH = cutImg.naturalHeight || cutImg.height;
+            const scanC = document.createElement('canvas');
+            scanC.width = cW; scanC.height = cH;
+            const scanCtx = scanC.getContext('2d');
+            scanCtx.drawImage(cutImg, 0, 0);
+            const px = scanCtx.getImageData(0, 0, cW, cH).data;
+            let carL = cW, carR = 0, carT = cH, carB = 0;
+            for (let y = 0; y < cH; y++)
+              for (let x = 0; x < cW; x++)
+                if (px[(y * cW + x) * 4 + 3] > 128) {
+                  if (x < carL) carL = x; if (x > carR) carR = x;
+                  if (y < carT) carT = y; if (y > carB) carB = y;
+                }
+            const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
+            const plateBox = r.yoloBbox ?? null;
+            shadowMatteUrl = await generateShadowFromCarAlpha(cutout, carBounds, plateBox);
+            entry.carBoundsCache = carBounds;
+          }
           const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts, shadow.matteDataUrl);
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts, shadowMatteUrl);
           entry.cutoutDataURL     = cutout;
-          entry.shadowMatteDataURL = shadow.matteDataUrl;
+          entry.shadowMatteDataURL = shadowMatteUrl;
           entry.showroomDataURL   = sr.dataURL;
           entry.showroomBaseURL   = sr.baseURL;
           entry.showroomTransform = sr.transform;
@@ -3984,6 +4201,10 @@ export default function AutoCache() {
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
     setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
     setShowroomZoom(r.showroomZoom ?? 1.0);
+    setShadowOpacity(SHADOW_STRENGTH);
+    setShadowBlur(0);
+    setShadowYOffset(0);
+    setShadowSpread(1.0);
   };
 
   const NUDGE_STEP = 75; // pas de déplacement en px sur canvas 2400×1350
@@ -4023,6 +4244,51 @@ export default function AutoCache() {
     clearTimeout(zoomTimerRef.current);
     zoomTimerRef.current = setTimeout(() => recompositeShowroom(showroomNudge, z), 250);
   };
+
+  const onShadowParamChange = (param, value) => {
+    const setters = { opacity: setShadowOpacity, blur: setShadowBlur, yOffset: setShadowYOffset, spread: setShadowSpread };
+    setters[param](value);
+    clearTimeout(shadowTimerRef.current);
+    shadowTimerRef.current = setTimeout(async () => {
+      if (!lightbox?.cutoutDataURL || showroomNudging) return;
+      setShowroomNudging(true);
+      try {
+        let carBounds = lightbox.carBoundsCache;
+        if (!carBounds) {
+          const cutImg = await loadImg(lightbox.cutoutDataURL);
+          const cW = cutImg.naturalWidth || cutImg.width, cH = cutImg.naturalHeight || cutImg.height;
+          const scanC = document.createElement('canvas');
+          scanC.width = cW; scanC.height = cH;
+          const scanCtx = scanC.getContext('2d');
+          scanCtx.drawImage(cutImg, 0, 0);
+          const px = scanCtx.getImageData(0, 0, cW, cH).data;
+          let carL = cW, carR = 0, carT = cH, carB = 0;
+          for (let y = 0; y < cH; y++)
+            for (let x = 0; x < cW; x++)
+              if (px[(y * cW + x) * 4 + 3] > 128) {
+                if (x < carL) carL = x; if (x > carR) carR = x;
+                if (y < carT) carT = y; if (y > carB) carB = y;
+              }
+          carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
+        }
+        const params = { opacity: shadowOpacity, blur: shadowBlur, yOffset: shadowYOffset, spread: shadowSpread, [param]: value };
+        const plateBox = lightbox.yoloBbox ?? null;
+        const newMatte = await generateShadowFromCarAlpha(lightbox.cutoutDataURL, carBounds, plateBox, params);
+        const logoImgEl = await loadImg(lightbox.logoPreview);
+        const wOpts = lightbox.wallLogoSrc ? { src: lightbox.wallLogoSrc, scale: lightbox.wallLogoScale, opacity: lightbox.wallLogoOpacity, x: lightbox.wallLogoPos?.x ?? 0.5, y: lightbox.wallLogoPos?.y ?? 0.25 } : null;
+        const sr = await compositeCarOnBg(
+          lightbox.cutoutDataURL, lightbox.showroomBgUrl, 2400, 1350,
+          logoImgEl, lightbox.corners, lightbox.bgColor,
+          showroomNudge.x, showroomNudge.y, showroomZoom, true, wOpts, newMatte
+        );
+        const updated = { ...lightbox, shadowMatteDataURL: newMatte, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, carBoundsCache: carBounds };
+        setLightbox(updated);
+        setResults(rs => rs.map(r => r.name === lightbox.name ? updated : r));
+      } catch(e) { console.error('shadow adjust error', e); }
+      setShowroomNudging(false);
+    }, 300);
+  };
+
   const closeLightbox = () => {
     setLightbox(null);
     setCropMode(false); setCropDrag(null);
@@ -5926,6 +6192,34 @@ export default function AutoCache() {
                 ×{showroomZoom.toFixed(2)}
               </span>
               {showroomNudging && <span style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace" }}>…</span>}
+            </div>
+          )}
+
+          {/* ── Shadow adjustment sliders ── */}
+          {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && (
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, width: "min(500px, 90vw)", background: "rgba(10,10,10,0.85)", border: "1px solid #222", borderRadius: 4, padding: "10px 14px" }}
+            >
+              <div style={{ fontSize: 8, letterSpacing: 2, color: "#666", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 2 }}>Ombre</div>
+              {[
+                { label: "Opacité", param: "opacity", value: shadowOpacity, min: 0, max: 1, step: 0.05 },
+                { label: "Flou", param: "blur", value: shadowBlur, min: 0, max: 40, step: 1 },
+                { label: "Décalage Y", param: "yOffset", value: shadowYOffset, min: -20, max: 20, step: 1 },
+                { label: "Étendue", param: "spread", value: shadowSpread, min: 0.5, max: 2.0, step: 0.05 },
+              ].map(({ label, param, value, min, max, step }) => (
+                <div key={param} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 9, color: "#888", fontFamily: "'JetBrains Mono',monospace", minWidth: 64 }}>{label}</span>
+                  <input type="range" min={min} max={max} step={step} value={value}
+                    onChange={e => onShadowParamChange(param, parseFloat(e.target.value))}
+                    disabled={showroomNudging}
+                    style={{ flex: 1, accentColor: "#f26522", height: 3, cursor: showroomNudging ? "not-allowed" : "pointer" }}
+                  />
+                  <span style={{ fontSize: 9, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", minWidth: 30, textAlign: "right" }}>
+                    {param === "blur" || param === "yOffset" ? value.toFixed(0) : value.toFixed(2)}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
 
