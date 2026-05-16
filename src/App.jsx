@@ -3127,14 +3127,28 @@ async function isolateMainVehicle(cutoutDataURL, plateBox) {
     return cutoutDataURL;
   }
 
-  // Connected component labeling (4-connected BFS)
+  // Step 1: Erode mask to break thin connections between touching vehicles
+  const erodeR = Math.max(5, Math.round(Math.min(W, H) * 0.008));
+  const eroded = erodeMaskSeparable(mask, W, H, erodeR);
+
+  let erodedCount = 0;
+  for (let i = 0; i < N; i++) if (eroded[i]) erodedCount++;
+  console.log('[MainVehicle] erode R=' + erodeR + ': ' + totalOpaque + ' -> ' + erodedCount + ' pixels');
+
+  if (erodedCount === 0) {
+    console.log('[MainVehicle] erosion removed everything, skipping isolation');
+    console.timeEnd('[MainVehicle] isolate');
+    return cutoutDataURL;
+  }
+
+  // Step 2: CC labeling on eroded mask
   const labels = new Int32Array(N);
-  const components = []; // [{id, size, minX, maxX, minY, maxY, sumX, sumY}]
+  const components = [];
   let nextLabel = 1;
   const queue = [];
 
   for (let i = 0; i < N; i++) {
-    if (mask[i] === 0 || labels[i] !== 0) continue;
+    if (eroded[i] === 0 || labels[i] !== 0) continue;
     const label = nextLabel++;
     let size = 0, sumX = 0, sumY = 0;
     let minX = W, maxX = 0, minY = H, maxY = 0;
@@ -3143,35 +3157,29 @@ async function isolateMainVehicle(cutoutDataURL, plateBox) {
     labels[i] = label;
     while (queue.length > 0) {
       const idx = queue.pop();
-      const x = idx % W, y = Math.floor(idx / W);
-      size++;
-      sumX += x; sumY += y;
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-      // 4-connected neighbors
-      if (x > 0     && mask[idx - 1] && !labels[idx - 1]) { labels[idx - 1] = label; queue.push(idx - 1); }
-      if (x < W - 1 && mask[idx + 1] && !labels[idx + 1]) { labels[idx + 1] = label; queue.push(idx + 1); }
-      if (y > 0     && mask[idx - W] && !labels[idx - W]) { labels[idx - W] = label; queue.push(idx - W); }
-      if (y < H - 1 && mask[idx + W] && !labels[idx + W]) { labels[idx + W] = label; queue.push(idx + W); }
+      const x = idx % W, y = (idx - x) / W;
+      size++; sumX += x; sumY += y;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (x > 0     && eroded[idx - 1] && !labels[idx - 1]) { labels[idx - 1] = label; queue.push(idx - 1); }
+      if (x < W - 1 && eroded[idx + 1] && !labels[idx + 1]) { labels[idx + 1] = label; queue.push(idx + 1); }
+      if (y > 0     && eroded[idx - W] && !labels[idx - W]) { labels[idx - W] = label; queue.push(idx - W); }
+      if (y < H - 1 && eroded[idx + W] && !labels[idx + W]) { labels[idx + W] = label; queue.push(idx + W); }
     }
     components.push({ id: label, size, minX, maxX, minY, maxY, cx: sumX / size, cy: sumY / size });
   }
 
-  console.log('[MainVehicle] found ' + components.length + ' components, totalOpaque=' + totalOpaque);
+  console.log('[MainVehicle] eroded CC: ' + components.length + ' components');
 
-  if (components.length <= 1) {
-    console.log('[MainVehicle] single component, no filtering needed');
+  if (components.length <= 1 && components.length > 0) {
+    console.log('[MainVehicle] single eroded component, no secondary vehicle');
     console.timeEnd('[MainVehicle] isolate');
     return cutoutDataURL;
   }
 
-  // Score each component to find main vehicle
+  // Step 3: Score each eroded component
   const imgCx = W / 2, imgCy = H / 2;
   const maxDist = Math.sqrt(imgCx * imgCx + imgCy * imgCy);
-
-  // Plate center in pixel coords (if available)
   let plateCx = -1, plateCy = -1;
   if (plateBox) {
     plateCx = ((plateBox.x1 ?? plateBox.x ?? 0) + (plateBox.x2 ?? ((plateBox.x ?? 0) + (plateBox.w ?? 0)))) / 2 * W;
@@ -3180,38 +3188,33 @@ async function isolateMainVehicle(cutoutDataURL, plateBox) {
 
   let bestScore = -1, bestId = -1;
   for (const comp of components) {
-    // Size score: fraction of total opaque pixels (0-1)
-    const sizeScore = comp.size / totalOpaque;
-
-    // Center proximity score (0-1, 1 = at center)
+    const sizeScore = comp.size / erodedCount;
     const dist = Math.sqrt((comp.cx - imgCx) ** 2 + (comp.cy - imgCy) ** 2);
     const centerScore = 1 - dist / maxDist;
-
-    // Plate containment score (0 or 1): does this component's bbox contain the plate?
     let plateScore = 0;
-    if (plateCx >= 0) {
-      if (plateCx >= comp.minX && plateCx <= comp.maxX && plateCy >= comp.minY && plateCy <= comp.maxY) {
-        plateScore = 1;
-      }
+    if (plateCx >= 0 && plateCx >= comp.minX && plateCx <= comp.maxX && plateCy >= comp.minY && plateCy <= comp.maxY) {
+      plateScore = 1;
     }
-
-    // Weighted score: plate containment is strongest signal
     const score = sizeScore * 0.3 + centerScore * 0.2 + plateScore * 0.5;
 
     console.log('[MainVehicle] comp #' + comp.id +
       ': size=' + comp.size + ' (' + (sizeScore * 100).toFixed(1) + '%)' +
       ', center=(' + Math.round(comp.cx) + ',' + Math.round(comp.cy) + ')' +
       ', bbox=[' + comp.minX + ',' + comp.minY + ']->[' + comp.maxX + ',' + comp.maxY + ']' +
-      ', plateContains=' + (plateScore > 0) +
-      ', score=' + score.toFixed(3));
+      ', plateContains=' + (plateScore > 0) + ', score=' + score.toFixed(3));
 
     if (score > bestScore) { bestScore = score; bestId = comp.id; }
   }
 
-  // Zero out alpha of all non-main components
+  // Step 4: Dilate the winning component back by erodeR to recover edges
+  const mainMask = new Uint8Array(N);
+  for (let i = 0; i < N; i++) if (labels[i] === bestId) mainMask[i] = 1;
+  const dilated = dilateMaskSeparable(mainMask, W, H, erodeR);
+
+  // Step 5: AND dilated selection with original mask — zero out everything else
   let removed = 0;
   for (let i = 0; i < N; i++) {
-    if (mask[i] && labels[i] !== bestId) {
+    if (mask[i] && !dilated[i]) {
       data[i * 4 + 3] = 0;
       removed++;
     }
@@ -3220,9 +3223,60 @@ async function isolateMainVehicle(cutoutDataURL, plateBox) {
   ctx.putImageData(imgData, 0, 0);
   const result = c.toDataURL('image/png');
 
-  console.log('[MainVehicle] kept comp #' + bestId + ', removed ' + removed + ' pixels from ' + (components.length - 1) + ' other components');
+  console.log('[MainVehicle] kept comp #' + bestId + ', removed ' + removed + ' pixels (' +
+    (removed / totalOpaque * 100).toFixed(1) + '% of original mask)');
   console.timeEnd('[MainVehicle] isolate');
   return result;
+}
+
+function erodeMaskSeparable(mask, W, H, r) {
+  // Horizontal min pass
+  const tmp = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) {
+    const row = y * W;
+    for (let x = 0; x < W; x++) {
+      let allSet = true;
+      const x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r);
+      for (let i = x0; i <= x1; i++) { if (!mask[row + i]) { allSet = false; break; } }
+      tmp[row + x] = allSet ? 1 : 0;
+    }
+  }
+  // Vertical min pass
+  const out = new Uint8Array(W * H);
+  for (let x = 0; x < W; x++) {
+    for (let y = 0; y < H; y++) {
+      let allSet = true;
+      const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
+      for (let j = y0; j <= y1; j++) { if (!tmp[j * W + x]) { allSet = false; break; } }
+      out[y * W + x] = allSet ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+function dilateMaskSeparable(mask, W, H, r) {
+  // Horizontal max pass
+  const tmp = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) {
+    const row = y * W;
+    for (let x = 0; x < W; x++) {
+      let anySet = false;
+      const x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r);
+      for (let i = x0; i <= x1; i++) { if (mask[row + i]) { anySet = true; break; } }
+      tmp[row + x] = anySet ? 1 : 0;
+    }
+  }
+  // Vertical max pass
+  const out = new Uint8Array(W * H);
+  for (let x = 0; x < W; x++) {
+    for (let y = 0; y < H; y++) {
+      let anySet = false;
+      const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
+      for (let j = y0; j <= y1; j++) { if (tmp[j * W + x]) { anySet = true; break; } }
+      out[y * W + x] = anySet ? 1 : 0;
+    }
+  }
+  return out;
 }
 
 async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, shadowParams = {}) {
