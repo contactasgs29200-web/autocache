@@ -2579,13 +2579,13 @@ const USE_SOURCE_SHADOW_TRANSFER = false;
 
 // ── Shadow generation constants (tunable) ──
 const SHADOW_STRENGTH = 1.0;
-const CONTACT_SHADOW_OPACITY = 0.30;
+const CONTACT_SHADOW_OPACITY = 0.35;
 const CONTACT_SHADOW_BLUR = 10;
-const UNDERBODY_SHADOW_OPACITY = 0.18;
-const UNDERBODY_SHADOW_BLUR = 24;
-const FRONT_SHADOW_OPACITY = 0.16;
+const UNDERBODY_SHADOW_OPACITY = 0.24;
+const UNDERBODY_SHADOW_BLUR = 22;
+const FRONT_SHADOW_OPACITY = 0.22;
 const SHADOW_OVERLAP_RATIO = 0.025;
-const SHADOW_VERTICAL_COMPRESSION = 0.08;
+const SHADOW_VERTICAL_COMPRESSION = 0.35;
 const SHADOW_SHEAR = 0.12;
 
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
@@ -3057,6 +3057,8 @@ function estimateFloorBrightness2D(lum, isCar, W, H) {
 function getShowroomDebugMode() {
   const url = window.location.search;
   if (url.includes('showroomDebug=shadowAlpha')) return 'shadowAlpha';
+  if (url.includes('showroomDebug=shadowColor')) return 'shadowColor';
+  if (url.includes('showroomDebug=shadowControls')) return 'shadowControls';
   if (url.includes('showroomDebug=shadow')) return 'shadow';
   if (url.includes('showroomDebug=car')) return 'car';
   if (url.includes('showroomDebug=final')) return null;
@@ -3111,7 +3113,11 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   wCtx.drawImage(img, 0, 0, wW, wH);
   const imgData = wCtx.getImageData(0, 0, wW, wH);
   const alpha = new Float32Array(wW * wH);
-  for (let i = 0; i < wW * wH; i++) alpha[i] = imgData.data[i * 4 + 3] / 255;
+  let alphaOpaqueCount = 0;
+  for (let i = 0; i < wW * wH; i++) {
+    alpha[i] = imgData.data[i * 4 + 3] / 255;
+    if (alpha[i] > 0.08) alphaOpaqueCount++;
+  }
 
   const cb = {
     x: Math.round(carBounds.x * workScale),
@@ -3122,16 +3128,19 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   const carL = cb.x, carR = cb.x + cb.w, carT = cb.y, carB = cb.y + cb.h;
   const carH = cb.h;
 
+  console.log('[Shadow] cutout %dx%d, work %dx%d (scale=%.3f), opaquePixels=%d, carBounds=[%d,%d %dx%d] carH=%d',
+    fullW, fullH, wW, wH, workScale, alphaOpaqueCount, cb.x, cb.y, cb.w, cb.h, carH);
+
   const opMul = shadowParams.opacity ?? SHADOW_STRENGTH;
-  const extraBlur = (shadowParams.blur ?? 0) * workScale;
+  const extraBlur = shadowParams.blur ?? 0;
   const yOff = Math.round((shadowParams.yOffset ?? 0) * workScale);
   const spread = shadowParams.spread ?? 1.0;
 
-  // Extract bottom contour
+  // Extract bottom contour — for each column, find the LOWEST opaque pixel
   const bottomContour = new Float32Array(wW).fill(-1);
   for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
     for (let y = wH - 1; y >= 0; y--) {
-      if (alpha[y * wW + x] > 20 / 255) { bottomContour[x] = y; break; }
+      if (alpha[y * wW + x] > 0.08) { bottomContour[x] = y; break; }
     }
   }
 
@@ -3139,10 +3148,14 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   const smoothed = smoothContourMovingAverage(bottomContour, wW, smoothWindow);
   filterContourArtifacts(smoothed, wW, Math.round(20 * workScale));
 
-  // Layer 1: Contact shadow
+  let contourCount = 0;
+  for (let x = 0; x < wW; x++) if (smoothed[x] >= 0) contourCount++;
+  console.log('[Shadow] bottomContour: %d valid columns out of %d (carL=%d carR=%d)', contourCount, carR - carL, carL, carR);
+
+  // Layer 1: Contact shadow — tight band under car bottom
   const contactLayer = new Float32Array(wW * wH);
-  const overlapPx = Math.round(SHADOW_OVERLAP_RATIO * carH);
-  const bandHeight = Math.round(0.03 * carH * spread);
+  const overlapPx = Math.max(2, Math.round(SHADOW_OVERLAP_RATIO * carH));
+  const bandHeight = Math.max(4, Math.round(0.04 * carH * spread));
   const contactIntensity = CONTACT_SHADOW_OPACITY * opMul;
 
   for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
@@ -3151,18 +3164,21 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
     const yStart = Math.round(cy - overlapPx) + yOff;
     const yEnd = Math.round(cy + bandHeight) + yOff;
     for (let y = Math.max(0, yStart); y <= Math.min(wH - 1, yEnd); y++) {
-      const dist = (y - yStart) / (yEnd - yStart);
-      const falloff = dist < 0.3 ? 1.0 : 1.0 - (dist - 0.3) / 0.7;
+      const totalH = yEnd - yStart;
+      if (totalH <= 0) continue;
+      const dist = (y - yStart) / totalH;
+      const falloff = dist < 0.4 ? 1.0 : 1.0 - (dist - 0.4) / 0.6;
       contactLayer[y * wW + x] = contactIntensity * Math.max(0, falloff);
     }
   }
 
-  const contactSigma = (CONTACT_SHADOW_BLUR + extraBlur) * workScale;
-  const contactBlurred = gaussianBlurMask(contactLayer, wW, wH, Math.max(1, contactSigma));
+  // Blur sigma in working-scale pixels (do NOT multiply by workScale again)
+  const contactSigma = Math.max(2, CONTACT_SHADOW_BLUR * workScale + extraBlur * workScale);
+  const contactBlurred = gaussianBlurMask(contactLayer, wW, wH, contactSigma);
 
-  // Layer 2: Underbody shadow
+  // Layer 2: Underbody shadow — projected bottom portion of car
   const underbodyLayer = new Float32Array(wW * wH);
-  const srcTop = Math.round(carB - 0.3 * carH);
+  const srcTop = Math.max(0, Math.round(carB - 0.3 * carH));
   const compression = SHADOW_VERTICAL_COMPRESSION * spread;
   const underbodyIntensity = UNDERBODY_SHADOW_OPACITY * opMul;
 
@@ -3185,15 +3201,18 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   // Layer 3: Front shadow anchor (merge into underbody BEFORE blur)
   if (plateBox) {
     const pxL = Math.round((plateBox.x1 ?? plateBox.x) * fullW * workScale);
-    const pxR = Math.round(((plateBox.x2 ?? (plateBox.x + (plateBox.w || 0))) ) * fullW * workScale);
+    const pxR = Math.round(((plateBox.x2 ?? (plateBox.x + (plateBox.w || 0)))) * fullW * workScale);
     const frontIntensity = FRONT_SHADOW_OPACITY * opMul;
-    for (let x = Math.max(0, pxL - Math.round(carH * 0.05)); x <= Math.min(wW - 1, pxR + Math.round(carH * 0.05)); x++) {
+    const frontBand = Math.max(4, Math.round(bandHeight * 2));
+    for (let x = Math.max(0, pxL - Math.round(carH * 0.08)); x <= Math.min(wW - 1, pxR + Math.round(carH * 0.08)); x++) {
       const cy = smoothed[x];
       if (cy < 0) continue;
       const boostStart = Math.round(cy) + yOff;
-      const boostEnd = Math.round(cy + bandHeight * 1.5) + yOff;
+      const boostEnd = Math.round(cy + frontBand) + yOff;
       for (let y = Math.max(0, boostStart); y <= Math.min(wH - 1, boostEnd); y++) {
-        const dist = (y - boostStart) / (boostEnd - boostStart);
+        const totalH = boostEnd - boostStart;
+        if (totalH <= 0) continue;
+        const dist = (y - boostStart) / totalH;
         const falloff = 1.0 - dist * dist;
         const idx = y * wW + x;
         underbodyLayer[idx] = Math.min(0.95, underbodyLayer[idx] + frontIntensity * falloff);
@@ -3201,13 +3220,31 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
     }
   }
 
-  const underbodySigma = (UNDERBODY_SHADOW_BLUR + extraBlur) * workScale;
-  const underbodyBlurred = gaussianBlurMask(underbodyLayer, wW, wH, Math.max(1, underbodySigma));
+  const underbodySigma = Math.max(2, UNDERBODY_SHADOW_BLUR * workScale + extraBlur * workScale);
+  const underbodyBlurred = gaussianBlurMask(underbodyLayer, wW, wH, underbodySigma);
 
   // Compose: max of both layers
   const combined = new Float32Array(wW * wH);
+  let shadowNonZeroCount = 0, shadowMaxAlpha = 0;
+  let shadowMinX = wW, shadowMaxX = 0, shadowMinY = wH, shadowMaxY = 0;
   for (let i = 0; i < wW * wH; i++) {
     combined[i] = Math.max(contactBlurred[i], underbodyBlurred[i]);
+    if (combined[i] > 0.003) {
+      shadowNonZeroCount++;
+      if (combined[i] > shadowMaxAlpha) shadowMaxAlpha = combined[i];
+      const px = i % wW, py = Math.floor(i / wW);
+      if (px < shadowMinX) shadowMinX = px;
+      if (px > shadowMaxX) shadowMaxX = px;
+      if (py < shadowMinY) shadowMinY = py;
+      if (py > shadowMaxY) shadowMaxY = py;
+    }
+  }
+
+  console.log('[Shadow] result: nonZeroPixels=%d, maxAlpha=%.4f, bounds=[%d,%d]->[%d,%d], contactSigma=%.1f, underbodySigma=%.1f, bandH=%d, compression=%.3f',
+    shadowNonZeroCount, shadowMaxAlpha, shadowMinX, shadowMinY, shadowMaxX, shadowMaxY, contactSigma, underbodySigma, bandHeight, compression);
+
+  if (shadowNonZeroCount === 0) {
+    console.warn('[Shadow] WARNING: shadow is empty! No visible pixels generated.');
   }
 
   // Paint to working canvas (alpha only, RGB=0)
@@ -3230,8 +3267,10 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   oCtx.imageSmoothingQuality = 'high';
   oCtx.drawImage(shadowCanvas, 0, 0, fullW, fullH);
 
+  const dataUrl = outCanvas.toDataURL('image/png');
+  console.log('[Shadow] output PNG size=%d bytes', dataUrl.length);
   console.timeEnd('[Shadow] generateFromAlpha');
-  return outCanvas.toDataURL('image/png');
+  return dataUrl;
 }
 
 async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null) {
@@ -3289,13 +3328,50 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const carBottom = carY + actualBottomFrac * ch;
   const debugMode = getShowroomDebugMode();
 
-  // ── Debug: shadow matte only ──
+  // ── Debug: shadow matte on white (black visible) ──
   if (debugMode === 'shadow' || debugMode === 'shadowAlpha') {
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, W, H);
     if (shadowImg) {
+      ctx.globalAlpha = 1.0;
       ctx.drawImage(shadowImg, carX, carY, cw, ch);
+    } else {
+      ctx.fillStyle = '#f00';
+      ctx.font = '32px monospace';
+      ctx.fillText('NO SHADOW IMAGE LOADED', 100, 100);
     }
+    const dataURL = c.toDataURL('image/jpeg', 0.98);
+    if (returnFull) return { dataURL, baseURL: dataURL, transform: { carX, carY, cw, ch, W, H } };
+    return dataURL;
+  }
+
+  // ── Debug: shadow as magenta at 100% opacity ──
+  if (debugMode === 'shadowColor') {
+    ctx.drawImage(bgImg, 0, 0, W, H);
+    if (shadowImg) {
+      // Draw shadow matte as magenta: create temp canvas, composite
+      const tmpC = document.createElement('canvas');
+      tmpC.width = W; tmpC.height = H;
+      const tmpCtx = tmpC.getContext('2d');
+      tmpCtx.drawImage(shadowImg, carX, carY, cw, ch);
+      const tmpData = tmpCtx.getImageData(0, 0, W, H);
+      for (let i = 0; i < W * H; i++) {
+        const a = tmpData.data[i * 4 + 3];
+        if (a > 0) {
+          tmpData.data[i * 4] = 255;     // R
+          tmpData.data[i * 4 + 1] = 0;   // G
+          tmpData.data[i * 4 + 2] = 255; // B
+          tmpData.data[i * 4 + 3] = 255; // full alpha
+        }
+      }
+      tmpCtx.putImageData(tmpData, 0, 0);
+      ctx.drawImage(tmpC, 0, 0);
+    } else {
+      ctx.fillStyle = '#f00';
+      ctx.font = '32px monospace';
+      ctx.fillText('NO SHADOW IMAGE', 100, 100);
+    }
+    ctx.drawImage(carImg, carX, carY, cw, ch);
     const dataURL = c.toDataURL('image/jpeg', 0.98);
     if (returnFull) return { dataURL, baseURL: dataURL, transform: { carX, carY, cw, ch, W, H } };
     return dataURL;
@@ -3311,13 +3387,13 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     return dataURL;
   }
 
-  // ── Shadow transfer from source photo ──
+  // ── Shadow layer (drawn BEFORE car) ──
   if (shadowImg) {
     ctx.save();
-    ctx.globalAlpha = 0.85;
+    ctx.globalAlpha = 1.0;
     ctx.drawImage(shadowImg, carX, carY, cw, ch);
     ctx.restore();
-    console.log('[Shadow] transferred matte at car pos', { carX: Math.round(carX), carY: Math.round(carY), cw: Math.round(cw), ch: Math.round(ch) });
+    console.log('[Shadow] drawn at carPos=[%d,%d] size=[%d×%d]', Math.round(carX), Math.round(carY), Math.round(cw), Math.round(ch));
   } else {
     // Fallback: thin contact shadow under car bottom
     const stripH = ch * 0.012;
@@ -6195,8 +6271,8 @@ export default function AutoCache() {
             </div>
           )}
 
-          {/* ── Shadow adjustment sliders ── */}
-          {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && (
+          {/* ── Shadow adjustment sliders (debug only: ?showroomDebug=shadowControls) ── */}
+          {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && getShowroomDebugMode() === 'shadowControls' && (
             <div
               onClick={e => e.stopPropagation()}
               style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, width: "min(500px, 90vw)", background: "rgba(10,10,10,0.85)", border: "1px solid #222", borderRadius: 4, padding: "10px 14px" }}
