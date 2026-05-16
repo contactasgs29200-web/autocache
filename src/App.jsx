@@ -3128,8 +3128,19 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   const carL = cb.x, carR = cb.x + cb.w, carT = cb.y, carB = cb.y + cb.h;
   const carH = cb.h;
 
-  console.log('[Shadow] cutout %dx%d, work %dx%d (scale=%.3f), opaquePixels=%d, carBounds=[%d,%d %dx%d] carH=%d',
-    fullW, fullH, wW, wH, workScale, alphaOpaqueCount, cb.x, cb.y, cb.w, cb.h, carH);
+  // Plate exclusion zone in working coords
+  let plateExcluded = false;
+  let plateLw = -1, plateRw = -1, plateBw = -1;
+  if (plateBox) {
+    plateLw = Math.round((plateBox.x1 ?? plateBox.x ?? 0) * fullW * workScale);
+    plateRw = Math.round((plateBox.x2 ?? ((plateBox.x ?? 0) + (plateBox.w ?? 0))) * fullW * workScale);
+    plateBw = Math.round((plateBox.y2 ?? ((plateBox.y ?? 0) + (plateBox.h ?? 0))) * fullH * workScale);
+    plateExcluded = plateLw >= 0 && plateRw > plateLw;
+  }
+
+  console.log('[Shadow] cutout %dx%d, work %dx%d, scale=' + workScale.toFixed(3) + ', opaquePixels=' + alphaOpaqueCount +
+    ', carBounds=[' + cb.x + ',' + cb.y + ' ' + cb.w + 'x' + cb.h + '], carH=' + carH +
+    (plateExcluded ? ', plateExcluded=[' + plateLw + '-' + plateRw + ']' : ', noPlate'));
 
   const opMul = shadowParams.opacity ?? SHADOW_STRENGTH;
   const extraBlur = shadowParams.blur ?? 0;
@@ -3137,10 +3148,29 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   const spread = shadowParams.spread ?? 1.0;
 
   // Extract bottom contour — for each column, find the LOWEST opaque pixel
+  // Exclude columns in plate bbox to avoid plate cache artifacts
   const bottomContour = new Float32Array(wW).fill(-1);
   for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
+    // Skip plate columns — will be interpolated from neighbors
+    if (plateExcluded && x >= plateLw && x <= plateRw) continue;
     for (let y = wH - 1; y >= 0; y--) {
       if (alpha[y * wW + x] > 0.08) { bottomContour[x] = y; break; }
+    }
+  }
+
+  // Interpolate contour through plate-excluded zone
+  if (plateExcluded && plateLw > carL && plateRw < carR) {
+    const leftY = bottomContour[Math.max(carL, plateLw - 1)];
+    const rightY = bottomContour[Math.min(carR, plateRw + 1)];
+    if (leftY >= 0 && rightY >= 0) {
+      for (let x = plateLw; x <= plateRw; x++) {
+        const t = (x - plateLw) / (plateRw - plateLw);
+        bottomContour[x] = leftY + (rightY - leftY) * t;
+      }
+    } else if (leftY >= 0) {
+      for (let x = plateLw; x <= plateRw; x++) bottomContour[x] = leftY;
+    } else if (rightY >= 0) {
+      for (let x = plateLw; x <= plateRw; x++) bottomContour[x] = rightY;
     }
   }
 
@@ -3150,7 +3180,7 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
 
   let contourCount = 0;
   for (let x = 0; x < wW; x++) if (smoothed[x] >= 0) contourCount++;
-  console.log('[Shadow] bottomContour: %d valid columns out of %d (carL=%d carR=%d)', contourCount, carR - carL, carL, carR);
+  console.log('[Shadow] bottomContour: ' + contourCount + ' valid columns out of ' + (carR - carL) + ' (carL=' + carL + ' carR=' + carR + ')');
 
   // Layer 1: Contact shadow — tight band under car bottom
   const contactLayer = new Float32Array(wW * wH);
@@ -3198,15 +3228,26 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
     }
   }
 
-  // Layer 3: Front shadow anchor (merge into underbody BEFORE blur)
+  // Layer 3: Front bumper shadow reinforcement
+  // Plate bbox is used ONLY to detect which side is "front" — NOT as a shape.
+  // Reinforce shadow across the front ~30% of the car width, merged into underbody.
   if (plateBox) {
-    const pxL = Math.round((plateBox.x1 ?? plateBox.x) * fullW * workScale);
-    const pxR = Math.round(((plateBox.x2 ?? (plateBox.x + (plateBox.w || 0)))) * fullW * workScale);
+    const plateCenterX = Math.round(((plateBox.x1 ?? plateBox.x ?? 0) + (plateBox.x2 ?? ((plateBox.x ?? 0) + (plateBox.w ?? 0)))) / 2 * fullW * workScale);
+    const isFrontLeft = plateCenterX < (carL + carR) / 2;
+    // Front zone: 30% of car width on the front side
+    const frontWidth = Math.round(cb.w * 0.30);
+    const frontL = isFrontLeft ? carL : Math.max(carL, carR - frontWidth);
+    const frontR = isFrontLeft ? Math.min(carR, carL + frontWidth) : carR;
     const frontIntensity = FRONT_SHADOW_OPACITY * opMul;
-    const frontBand = Math.max(4, Math.round(bandHeight * 2));
-    for (let x = Math.max(0, pxL - Math.round(carH * 0.08)); x <= Math.min(wW - 1, pxR + Math.round(carH * 0.08)); x++) {
+    const frontBand = Math.max(4, Math.round(bandHeight * 1.5));
+    for (let x = frontL; x <= Math.min(wW - 1, frontR); x++) {
       const cy = smoothed[x];
       if (cy < 0) continue;
+      // Fade intensity from front edge to back
+      const edgeDist = isFrontLeft
+        ? 1.0 - (x - frontL) / (frontR - frontL)
+        : (x - frontL) / (frontR - frontL);
+      const xFade = 0.3 + 0.7 * edgeDist;
       const boostStart = Math.round(cy) + yOff;
       const boostEnd = Math.round(cy + frontBand) + yOff;
       for (let y = Math.max(0, boostStart); y <= Math.min(wH - 1, boostEnd); y++) {
@@ -3215,9 +3256,10 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
         const dist = (y - boostStart) / totalH;
         const falloff = 1.0 - dist * dist;
         const idx = y * wW + x;
-        underbodyLayer[idx] = Math.min(0.95, underbodyLayer[idx] + frontIntensity * falloff);
+        underbodyLayer[idx] = Math.min(0.95, underbodyLayer[idx] + frontIntensity * xFade * falloff);
       }
     }
+    console.log('[Shadow] frontAnchor: side=' + (isFrontLeft ? 'left' : 'right') + ', range=[' + frontL + '-' + frontR + '], plateExcludedFromShadow=true');
   }
 
   const underbodySigma = Math.max(2, UNDERBODY_SHADOW_BLUR * workScale + extraBlur * workScale);
@@ -3240,8 +3282,12 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
     }
   }
 
-  console.log('[Shadow] result: nonZeroPixels=%d, maxAlpha=%.4f, bounds=[%d,%d]->[%d,%d], contactSigma=%.1f, underbodySigma=%.1f, bandH=%d, compression=%.3f',
-    shadowNonZeroCount, shadowMaxAlpha, shadowMinX, shadowMinY, shadowMaxX, shadowMaxY, contactSigma, underbodySigma, bandHeight, compression);
+  console.log('[Shadow] result: nonZeroPixels=' + shadowNonZeroCount +
+    ', maxAlpha=' + shadowMaxAlpha.toFixed(4) +
+    ', bounds=[' + shadowMinX + ',' + shadowMinY + ']->[' + shadowMaxX + ',' + shadowMaxY + ']' +
+    ', contactSigma=' + contactSigma.toFixed(1) +
+    ', underbodySigma=' + underbodySigma.toFixed(1) +
+    ', bandH=' + bandHeight + ', compression=' + compression.toFixed(3));
 
   if (shadowNonZeroCount === 0) {
     console.warn('[Shadow] WARNING: shadow is empty! No visible pixels generated.');
@@ -3268,7 +3314,7 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   oCtx.drawImage(shadowCanvas, 0, 0, fullW, fullH);
 
   const dataUrl = outCanvas.toDataURL('image/png');
-  console.log('[Shadow] output PNG size=%d bytes', dataUrl.length);
+  console.log('[Shadow] output PNG size=' + dataUrl.length + ' bytes');
   console.timeEnd('[Shadow] generateFromAlpha');
   return dataUrl;
 }
@@ -3393,7 +3439,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.globalAlpha = 1.0;
     ctx.drawImage(shadowImg, carX, carY, cw, ch);
     ctx.restore();
-    console.log('[Shadow] drawn at carPos=[%d,%d] size=[%d×%d]', Math.round(carX), Math.round(carY), Math.round(cw), Math.round(ch));
+    console.log('[Shadow] drawn at carPos=[' + Math.round(carX) + ',' + Math.round(carY) + '] size=[' + Math.round(cw) + 'x' + Math.round(ch) + ']');
   } else {
     // Fallback: thin contact shadow under car bottom
     const stripH = ch * 0.012;
