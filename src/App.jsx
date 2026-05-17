@@ -6745,8 +6745,8 @@ export default function AutoCache() {
               />
             )}
 
-            {/* ── Debug YOLO bbox + corners overlay ── */}
-            {!cropMode && !adjustMode && lightbox.yoloBbox && lightbox.imgW && (
+            {/* ── Debug YOLO bbox + corners overlay (photo mode only, not showroom) ── */}
+            {!cropMode && !adjustMode && !lightbox.showroomDataURL && lightbox.yoloBbox && lightbox.imgW && (
               <svg
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
                 viewBox={`0 0 ${lightbox.imgW} ${lightbox.imgH}`}
