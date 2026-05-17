@@ -3056,6 +3056,8 @@ function estimateFloorBrightness2D(lum, isCar, W, H) {
 
 function getShowroomDebugMode() {
   const url = window.location.search;
+  if (url.includes('showroomDebug=mainVehicleBoxes')) return 'mainVehicleBoxes';
+  if (url.includes('showroomDebug=mainROI')) return 'mainROI';
   if (url.includes('showroomDebug=mainMask')) return 'mainMask';
   if (url.includes('showroomDebug=shadowAlpha')) return 'shadowAlpha';
   if (url.includes('showroomDebug=shadowColor')) return 'shadowColor';
@@ -3100,7 +3102,7 @@ function filterContourArtifacts(contour, width, maxGap) {
 
 // ── Main vehicle isolation — connected-component filtering ──
 
-async function isolateMainVehicle(cutoutDataURL, plateBox) {
+async function isolateMainVehicle(cutoutDataURL, plateBox, mainVehicle) {
   console.time('[MainVehicle] isolate');
   const img = await loadImg(cutoutDataURL);
   const W = img.naturalWidth || img.width;
@@ -3178,6 +3180,7 @@ async function isolateMainVehicle(cutoutDataURL, plateBox) {
   }
 
   // Step 3: Score each eroded component
+  // Priority: overlap with mainVehicle bbox > plate containment > center > size
   const imgCx = W / 2, imgCy = H / 2;
   const maxDist = Math.sqrt(imgCx * imgCx + imgCy * imgCy);
   let plateCx = -1, plateCy = -1;
@@ -3186,22 +3189,47 @@ async function isolateMainVehicle(cutoutDataURL, plateBox) {
     plateCy = ((plateBox.y1 ?? plateBox.y ?? 0) + (plateBox.y2 ?? ((plateBox.y ?? 0) + (plateBox.h ?? 0)))) / 2 * H;
   }
 
+  // mainVehicle bbox in pixel coords
+  let mvX1 = -1, mvY1 = -1, mvX2 = -1, mvY2 = -1;
+  if (mainVehicle) {
+    mvX1 = mainVehicle.bbox.x1 * W;
+    mvY1 = mainVehicle.bbox.y1 * H;
+    mvX2 = mainVehicle.bbox.x2 * W;
+    mvY2 = mainVehicle.bbox.y2 * H;
+  }
+
   let bestScore = -1, bestId = -1;
   for (const comp of components) {
     const sizeScore = comp.size / erodedCount;
     const dist = Math.sqrt((comp.cx - imgCx) ** 2 + (comp.cy - imgCy) ** 2);
     const centerScore = 1 - dist / maxDist;
+
+    // Plate containment
     let plateScore = 0;
     if (plateCx >= 0 && plateCx >= comp.minX && plateCx <= comp.maxX && plateCy >= comp.minY && plateCy <= comp.maxY) {
       plateScore = 1;
     }
-    const score = sizeScore * 0.3 + centerScore * 0.2 + plateScore * 0.5;
+
+    // Overlap with mainVehicle bbox (IoU-like)
+    let vehicleOverlap = 0;
+    if (mvX1 >= 0) {
+      const ox1 = Math.max(comp.minX, mvX1), oy1 = Math.max(comp.minY, mvY1);
+      const ox2 = Math.min(comp.maxX, mvX2), oy2 = Math.min(comp.maxY, mvY2);
+      if (ox2 > ox1 && oy2 > oy1) {
+        const interArea = (ox2 - ox1) * (oy2 - oy1);
+        const compArea = (comp.maxX - comp.minX) * (comp.maxY - comp.minY);
+        vehicleOverlap = compArea > 0 ? interArea / compArea : 0;
+      }
+    }
+
+    const score = vehicleOverlap * 0.35 + plateScore * 0.30 + sizeScore * 0.20 + centerScore * 0.15;
 
     console.log('[MainVehicle] comp #' + comp.id +
       ': size=' + comp.size + ' (' + (sizeScore * 100).toFixed(1) + '%)' +
       ', center=(' + Math.round(comp.cx) + ',' + Math.round(comp.cy) + ')' +
       ', bbox=[' + comp.minX + ',' + comp.minY + ']->[' + comp.maxX + ',' + comp.maxY + ']' +
-      ', plateContains=' + (plateScore > 0) + ', score=' + score.toFixed(3));
+      ', plateContains=' + (plateScore > 0) + ', vehOverlap=' + vehicleOverlap.toFixed(2) +
+      ', score=' + score.toFixed(3));
 
     if (score > bestScore) { bestScore = score; bestId = comp.id; }
   }
@@ -3772,96 +3800,149 @@ async function detectVehicles(imageFile) {
 function selectMainVehicle(vehicles, plateBox, imgW, imgH) {
   if (!vehicles || vehicles.length === 0) return null;
   if (vehicles.length === 1) {
-    console.log('[Vehicles] single vehicle, auto-selected');
+    console.log('[Vehicles] single vehicle, auto-selected: ' + vehicles[0].class);
     return vehicles[0];
   }
 
-  const imgCx = 0.5, imgCy = 0.5;
-  const maxDist = Math.sqrt(0.5 * 0.5 + 0.5 * 0.5);
   let plateCx = -1, plateCy = -1;
   if (plateBox) {
     plateCx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
     plateCy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
   }
 
-  const maxArea = Math.max(...vehicles.map(v => v.area));
-  let bestScore = -1, bestVehicle = null;
-
+  // Tier 1: candidates whose bbox contains the plate center
+  const withPlate = [];
+  const withoutPlate = [];
   for (const v of vehicles) {
+    if (plateCx >= 0 && plateCx >= v.bbox.x1 && plateCx <= v.bbox.x2 &&
+        plateCy >= v.bbox.y1 && plateCy <= v.bbox.y2) {
+      withPlate.push(v);
+    } else {
+      withoutPlate.push(v);
+    }
+  }
+
+  console.log('[Vehicles] plate-containing: ' + withPlate.length + ', others: ' + withoutPlate.length);
+
+  // If exactly one contains the plate, it wins
+  if (withPlate.length === 1) {
+    console.log('[Vehicles] selected (sole plate match): ' + withPlate[0].class +
+      ' conf=' + withPlate[0].conf.toFixed(2) + ' area=' + withPlate[0].area.toFixed(4));
+    return withPlate[0];
+  }
+
+  // Tier 2: multiple contain plate — pick the tightest reasonable bbox (penalize oversized)
+  const candidates = withPlate.length > 0 ? withPlate : vehicles;
+  const maxDist = Math.SQRT2 * 0.5;
+
+  let bestScore = -1, bestVehicle = null;
+  for (const v of candidates) {
     const vCx = (v.bbox.x1 + v.bbox.x2) / 2;
     const vCy = (v.bbox.y1 + v.bbox.y2) / 2;
 
-    // Plate association: does this vehicle bbox contain the plate center?
-    let plateAssoc = 0;
-    if (plateCx >= 0 && plateCx >= v.bbox.x1 && plateCx <= v.bbox.x2 &&
-        plateCy >= v.bbox.y1 && plateCy <= v.bbox.y2) {
-      plateAssoc = 1;
+    // Center proximity
+    const dist = Math.sqrt((vCx - 0.5) ** 2 + (vCy - 0.5) ** 2);
+    const centerProx = 1 - dist / maxDist;
+
+    // Plate proximity (for candidates without plate containment)
+    let plateProx = 0;
+    if (plateCx >= 0) {
+      const pDist = Math.sqrt((vCx - plateCx) ** 2 + (vCy - plateCy) ** 2);
+      plateProx = 1 - Math.min(pDist / maxDist, 1);
     }
 
-    const areaNorm = v.area / maxArea;
-    const dist = Math.sqrt((vCx - imgCx) ** 2 + (vCy - imgCy) ** 2);
-    const centerProx = 1 - dist / maxDist;
+    // Area penalty: penalize very large (>40% of image) and very small (<2%) detections
+    // Sweet spot around 5-30% of image area for a single car
+    let areaPenalty = 0;
+    if (v.area > 0.40) areaPenalty = (v.area - 0.40) * 2.0; // strong penalty for oversized
+    if (v.area < 0.02) areaPenalty = 0.3; // slight penalty for tiny
+
     const confScore = v.conf;
+    const containsPlate = withPlate.includes(v) ? 1 : 0;
 
-    const score = 0.45 * plateAssoc + 0.25 * areaNorm + 0.20 * centerProx + 0.10 * confScore;
+    // Score: plate containment decisive, then confidence, center, penalize oversized
+    const score = 0.40 * containsPlate + 0.25 * confScore + 0.20 * centerProx +
+                  0.15 * plateProx - areaPenalty;
 
-    console.log('[Vehicles] score ' + v.class + ': plate=' + plateAssoc +
-      ' area=' + areaNorm.toFixed(2) + ' center=' + centerProx.toFixed(2) +
-      ' conf=' + confScore.toFixed(2) + ' → ' + score.toFixed(3));
+    console.log('[Vehicles] score ' + v.class + ': plate=' + containsPlate +
+      ' conf=' + confScore.toFixed(2) + ' center=' + centerProx.toFixed(2) +
+      ' plateProx=' + plateProx.toFixed(2) + ' area=' + v.area.toFixed(4) +
+      ' areaPen=' + areaPenalty.toFixed(2) + ' → ' + score.toFixed(3));
 
     if (score > bestScore) { bestScore = score; bestVehicle = v; }
   }
 
-  console.log('[Vehicles] selected: ' + bestVehicle.class + ' score=' + bestScore.toFixed(3));
+  console.log('[Vehicles] selected: ' + bestVehicle.class + ' bbox=(' +
+    bestVehicle.bbox.x1.toFixed(3) + ',' + bestVehicle.bbox.y1.toFixed(3) + ')-(' +
+    bestVehicle.bbox.x2.toFixed(3) + ',' + bestVehicle.bbox.y2.toFixed(3) + ') score=' + bestScore.toFixed(3));
   return bestVehicle;
 }
 
 function estimateMainVehicleROI(mainVehicle, plateBox, imgW, imgH) {
-  // If we have a detected vehicle bbox, use it with generous margins
+  // If we have a detected vehicle bbox, use it with safe margins (never cut wheels/roof/bumpers)
   if (mainVehicle) {
     const b = mainVehicle.bbox;
     const bw = b.x2 - b.x1, bh = b.y2 - b.y1;
     return {
-      x1: Math.max(0, b.x1 - bw * 0.10),
-      y1: Math.max(0, b.y1 - bh * 0.12),
-      x2: Math.min(1, b.x2 + bw * 0.10),
-      y2: Math.min(1, b.y2 + bh * 0.10),
+      x1: Math.max(0, b.x1 - bw * 0.18),
+      y1: Math.max(0, b.y1 - bh * 0.15),
+      x2: Math.min(1, b.x2 + bw * 0.18),
+      y2: Math.min(1, b.y2 + bh * 0.12),
     };
   }
-  // Fallback: estimate from plate position — tighter crop to exclude background vehicles
+  // Fallback: estimate from plate position — generous to avoid cutting the car
   if (plateBox) {
     const pcx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
     const pcy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
-    const pw = Math.abs((plateBox.x2 ?? 0) - (plateBox.x1 ?? 0));
-    // Plate width gives a scale hint: a car is roughly 6-8x plate width
-    const carHalfW = Math.max(0.28, Math.min(0.38, pw * 3.5));
     return {
-      x1: Math.max(0, pcx - carHalfW),
-      y1: Math.max(0, pcy - 0.42),
-      x2: Math.min(1, pcx + carHalfW),
-      y2: Math.min(1, pcy + 0.10),
+      x1: Math.max(0, pcx - 0.42),
+      y1: Math.max(0, pcy - 0.55),
+      x2: Math.min(1, pcx + 0.42),
+      y2: Math.min(1, pcy + 0.15),
     };
   }
   // No anchor: use full image
   return null;
 }
 
-// Hard gate: zero all alpha pixels outside estimated vehicle bbox — last resort filter
-async function hardGateByPlate(cutoutDataURL, plateBox, imgW, imgH) {
-  if (!plateBox) return cutoutDataURL; // Can't gate without plate reference
+// Hard gate: zero alpha outside mainVehicle bbox (expanded) — last resort filter
+// Uses mainVehicle bbox when available, falls back to plate estimate only as last resort
+async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, imgH) {
   console.time('[HardGate]');
 
-  const pcx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
-  const pcy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
-  const pw = Math.abs((plateBox.x2 ?? 0) - (plateBox.x1 ?? 0));
+  // Determine the gate box (normalized coordinates)
+  let gateX1, gateY1, gateX2, gateY2;
+  let gateSource;
 
-  // Tight vehicle zone: use plate as anchor
-  // Car extends ~3x plate width each side, mostly above the plate
-  const gateHalfW = Math.max(0.30, Math.min(0.40, pw * 4.0));
-  const gateX1 = pcx - gateHalfW;
-  const gateX2 = pcx + gateHalfW;
-  const gateY1 = pcy - 0.48; // roof is well above plate
-  const gateY2 = pcy + 0.12; // small margin below plate (wheels)
+  if (mainVehicle) {
+    // Use detected vehicle bbox with generous expansion (never cut the main car)
+    const b = mainVehicle.bbox;
+    const bw = b.x2 - b.x1, bh = b.y2 - b.y1;
+    gateX1 = b.x1 - bw * 0.20;
+    gateY1 = b.y1 - bh * 0.18;
+    gateX2 = b.x2 + bw * 0.20;
+    gateY2 = b.y2 + bh * 0.15;
+    gateSource = 'vehicleBox';
+  } else if (plateBox) {
+    // Fallback: large plate-based estimate (be generous to avoid cutting car)
+    const pcx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
+    const pcy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
+    gateX1 = pcx - 0.45;
+    gateY1 = pcy - 0.55;
+    gateX2 = pcx + 0.45;
+    gateY2 = pcy + 0.15;
+    gateSource = 'plateFallback';
+  } else {
+    console.log('[HardGate] no vehicle box or plate, skipping');
+    console.timeEnd('[HardGate]');
+    return cutoutDataURL;
+  }
+
+  // Clamp to [0,1]
+  gateX1 = Math.max(0, gateX1);
+  gateY1 = Math.max(0, gateY1);
+  gateX2 = Math.min(1, gateX2);
+  gateY2 = Math.min(1, gateY2);
 
   const img = await loadImg(cutoutDataURL);
   const W = img.naturalWidth || img.width;
@@ -3879,8 +3960,8 @@ async function hardGateByPlate(cutoutDataURL, plateBox, imgW, imgH) {
   const py1 = Math.round(gateY1 * H);
   const py2 = Math.round(gateY2 * H);
 
-  // Soft feather zone (20px)
-  const feather = Math.round(Math.min(W, H) * 0.015);
+  // Soft feather zone
+  const feather = Math.round(Math.min(W, H) * 0.012);
   let removed = 0;
 
   for (let y = 0; y < H; y++) {
@@ -3888,21 +3969,19 @@ async function hardGateByPlate(cutoutDataURL, plateBox, imgW, imgH) {
       const idx = (y * W + x) * 4;
       if (data[idx + 3] === 0) continue;
 
-      // Compute distance outside the gate box
       let dx = 0, dy = 0;
       if (x < px1) dx = px1 - x;
       else if (x > px2) dx = x - px2;
       if (y < py1) dy = py1 - y;
       else if (y > py2) dy = y - py2;
 
-      if (dx === 0 && dy === 0) continue; // Inside gate, keep
+      if (dx === 0 && dy === 0) continue; // Inside gate
 
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist > feather) {
-        data[idx + 3] = 0; // Hard zero
+        data[idx + 3] = 0;
         removed++;
       } else {
-        // Soft feather: linear fade
         const factor = dist / feather;
         data[idx + 3] = Math.round(data[idx + 3] * (1 - factor));
         if (data[idx + 3] < 5) { data[idx + 3] = 0; removed++; }
@@ -3911,8 +3990,9 @@ async function hardGateByPlate(cutoutDataURL, plateBox, imgW, imgH) {
   }
 
   ctx.putImageData(imgData, 0, 0);
-  console.log('[HardGate] plate=(' + pcx.toFixed(3) + ',' + pcy.toFixed(3) + ') pw=' + pw.toFixed(3) +
-    ' gate=[' + px1 + ',' + py1 + ']->[' + px2 + ',' + py2 + '] removed=' + removed + ' pixels');
+  console.log('[HardGate] source=' + gateSource +
+    ' gate=[' + px1 + ',' + py1 + ']->[' + px2 + ',' + py2 + '] (img ' + W + 'x' + H + ')' +
+    ' removed=' + removed + ' pixels');
   console.timeEnd('[HardGate]');
 
   if (removed === 0) return cutoutDataURL;
@@ -4574,15 +4654,16 @@ export default function AutoCache() {
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
-          // Detect vehicles + select main → ROI crop → segment → uncrop → CC filter
+          // Detect vehicles + select main → ROI crop → segment → uncrop → CC filter → hard gate
           const vehicleResult = await detectVehicles(photosToProcess[i].file);
-          const mainVehicle = selectMainVehicle(vehicleResult?.vehicles ?? [], r.yoloBbox ?? null, r.imgW, r.imgH);
+          const allVehicles = vehicleResult?.vehicles ?? [];
+          const mainVehicle = selectMainVehicle(allVehicles, r.yoloBbox ?? null, r.imgW, r.imgH);
           const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH);
           const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
           const croppedCutout = await removeBackground(croppedUrl);
           const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
-          const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null);
-          const cutout = await hardGateByPlate(isolatedCutout, r.yoloBbox ?? null, r.imgW, r.imgH);
+          const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle);
+          const cutout = await hardGateByVehicleBox(isolatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH);
           let shadowMatteUrl = null;
           if (USE_SOURCE_SHADOW_TRANSFER) {
             const shadow = await extractSourceShadow(r.baseDataURL, cutout);
@@ -4607,13 +4688,103 @@ export default function AutoCache() {
             shadowMatteUrl = await generateShadowFromCarAlpha(cutout, carBounds, plateBox);
             entry.carBoundsCache = carBounds;
           }
+          // Generate debug images if needed
+          const showroomDebug = getShowroomDebugMode();
+          let debugDataURL = null;
+          if (showroomDebug === 'mainVehicleBoxes' || showroomDebug === 'mainROI') {
+            const debugImg = await loadImg(r.baseDataURL);
+            const dW = debugImg.naturalWidth || debugImg.width;
+            const dH = debugImg.naturalHeight || debugImg.height;
+            const dc = document.createElement('canvas');
+            dc.width = dW; dc.height = dH;
+            const dctx = dc.getContext('2d');
+            dctx.drawImage(debugImg, 0, 0);
+
+            if (showroomDebug === 'mainVehicleBoxes') {
+              // Draw all detected vehicle bboxes
+              for (const v of allVehicles) {
+                const isSelected = mainVehicle && v === mainVehicle;
+                dctx.strokeStyle = isSelected ? '#00ff00' : '#ff4444';
+                dctx.lineWidth = isSelected ? 4 : 2;
+                const bx = v.bbox.x1 * dW, by = v.bbox.y1 * dH;
+                const bw = (v.bbox.x2 - v.bbox.x1) * dW, bh = (v.bbox.y2 - v.bbox.y1) * dH;
+                dctx.strokeRect(bx, by, bw, bh);
+                // Label
+                dctx.fillStyle = isSelected ? '#00ff00' : '#ff4444';
+                dctx.font = 'bold 20px monospace';
+                const label = v.class + ' ' + (v.conf * 100).toFixed(0) + '%' + (isSelected ? ' ★' : '');
+                dctx.fillText(label, bx + 4, by - 6);
+              }
+              // Draw plate box
+              if (r.yoloBbox) {
+                const pb = r.yoloBbox;
+                dctx.strokeStyle = '#ffff00';
+                dctx.lineWidth = 3;
+                dctx.setLineDash([8, 4]);
+                const px = (pb.x1 ?? 0) * dW, py = (pb.y1 ?? 0) * dH;
+                const pw = ((pb.x2 ?? 0) - (pb.x1 ?? 0)) * dW, ph = ((pb.y2 ?? 0) - (pb.y1 ?? 0)) * dH;
+                dctx.strokeRect(px, py, pw, ph);
+                dctx.setLineDash([]);
+                dctx.fillStyle = '#ffff00';
+                dctx.font = 'bold 16px monospace';
+                dctx.fillText('PLATE', px + 4, py - 4);
+              }
+              dctx.fillStyle = 'rgba(0,0,0,0.6)';
+              dctx.fillRect(0, 0, 500, 30);
+              dctx.fillStyle = '#fff';
+              dctx.font = '18px monospace';
+              dctx.fillText('mainVehicleBoxes — green=selected, red=others, yellow=plate', 10, 22);
+            } else if (showroomDebug === 'mainROI') {
+              // Draw ROI rectangle
+              if (roi) {
+                dctx.fillStyle = 'rgba(0,0,0,0.45)';
+                // Darken areas OUTSIDE the ROI
+                dctx.fillRect(0, 0, dW, roi.y1 * dH); // top
+                dctx.fillRect(0, roi.y2 * dH, dW, dH - roi.y2 * dH); // bottom
+                dctx.fillRect(0, roi.y1 * dH, roi.x1 * dW, (roi.y2 - roi.y1) * dH); // left
+                dctx.fillRect(roi.x2 * dW, roi.y1 * dH, dW - roi.x2 * dW, (roi.y2 - roi.y1) * dH); // right
+                // Draw ROI border
+                dctx.strokeStyle = '#00ccff';
+                dctx.lineWidth = 3;
+                dctx.strokeRect(roi.x1 * dW, roi.y1 * dH, (roi.x2 - roi.x1) * dW, (roi.y2 - roi.y1) * dH);
+              }
+              // Draw selected vehicle bbox
+              if (mainVehicle) {
+                dctx.strokeStyle = '#00ff00';
+                dctx.lineWidth = 2;
+                dctx.setLineDash([6, 3]);
+                const bx = mainVehicle.bbox.x1 * dW, by = mainVehicle.bbox.y1 * dH;
+                const bw = (mainVehicle.bbox.x2 - mainVehicle.bbox.x1) * dW;
+                const bh = (mainVehicle.bbox.y2 - mainVehicle.bbox.y1) * dH;
+                dctx.strokeRect(bx, by, bw, bh);
+                dctx.setLineDash([]);
+              }
+              dctx.fillStyle = 'rgba(0,0,0,0.6)';
+              dctx.fillRect(0, 0, 450, 30);
+              dctx.fillStyle = '#fff';
+              dctx.font = '18px monospace';
+              dctx.fillText('mainROI — cyan=ROI, green=vehicle, dark=excluded', 10, 22);
+            }
+            debugDataURL = dc.toDataURL('image/jpeg', 0.95);
+          }
+
           const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
           const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts, shadowMatteUrl);
-          entry.cutoutDataURL     = cutout;
-          entry.shadowMatteDataURL = shadowMatteUrl;
-          entry.showroomDataURL   = sr.dataURL;
-          entry.showroomBaseURL   = sr.baseURL;
-          entry.showroomTransform = sr.transform;
+
+          // For debug modes that show source-based overlays, override the showroom result
+          if (debugDataURL) {
+            entry.cutoutDataURL     = cutout;
+            entry.shadowMatteDataURL = shadowMatteUrl;
+            entry.showroomDataURL   = debugDataURL;
+            entry.showroomBaseURL   = debugDataURL;
+            entry.showroomTransform = sr.transform;
+          } else {
+            entry.cutoutDataURL     = cutout;
+            entry.shadowMatteDataURL = shadowMatteUrl;
+            entry.showroomDataURL   = sr.dataURL;
+            entry.showroomBaseURL   = sr.baseURL;
+            entry.showroomTransform = sr.transform;
+          }
           entry.showroomBgUrl     = showroomBgDataUrl;
           entry.wallLogoSrc       = resolvedWallLogo;
           entry.wallLogoPos       = { x: 0.5, y: 0.25 };
