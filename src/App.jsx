@@ -1,9 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import MaskEditor from "./components/MaskEditor.jsx";
-// SAM (Segment Anything Model) + @imgly fallback — chargé dynamiquement
-let samModel = null;
-let samProcessor = null;
-let SamRawImage = null;
+// @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
 import { MASK_MODE_CONFIGS, LENS_HALO_THRESHOLDS, FULL_PHOTO_IDENTICAL_THRESHOLDS, SAFE_POLISH_PRESETS } from "../api/_lib/headlight/mask.js";
@@ -2575,7 +2572,6 @@ function polishBodywork(ctx, W, H) {
 
 
 // ── Feature flags (shadow system) ──
-const USE_CLIENT_SAM = false;
 const USE_SOURCE_SHADOW_TRANSFER = false;
 
 // ── Shadow generation constants (tunable) ──
@@ -2672,135 +2668,10 @@ function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
   });
 }
 
-// ── Segmentation véhicule — SAM (Segment Anything) + @imgly fallback ──
-
-async function preloadSegmentation() {
-  if (!USE_CLIENT_SAM) return;
-  if (samModel) return;
-  try {
-    const hf = await import(/* @vite-ignore */ '@huggingface/transformers');
-    SamRawImage = hf.RawImage;
-    samProcessor = await hf.AutoProcessor.from_pretrained('Xenova/sam-vit-base');
-    samModel = await hf.SamModel.from_pretrained('Xenova/sam-vit-base', {
-      dtype: {
-        vision_encoder: 'q8',
-        prompt_encoder_mask_downscaler: 'fp32',
-        mask_decoder: 'fp32',
-      },
-    });
-    console.log('[SAM] Model loaded');
-  } catch (e) {
-    console.warn('[SAM] Load failed, will use @imgly fallback:', e.message);
-  }
-}
-
-const SAM_TIMEOUT_MS = 60000;
+// ── Segmentation véhicule — @imgly background removal ──
 
 async function removeBackground(dataUrl) {
-  if (USE_CLIENT_SAM && samModel) {
-    try {
-      const result = await Promise.race([
-        samSegment(dataUrl),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('SAM timeout (' + SAM_TIMEOUT_MS + 'ms)')), SAM_TIMEOUT_MS)),
-      ]);
-      return result;
-    } catch (e) {
-      console.warn('[SAM] Failed (%s), falling back to @imgly', e.message);
-    }
-  }
   return await imglyRemoveBackground(dataUrl);
-}
-
-async function samSegment(dataUrl) {
-  const t0 = performance.now();
-  const small = await shrinkDataUrl(dataUrl, 2000, 0.96);
-  const img = await SamRawImage.read(small);
-  const W = img.width, H = img.height;
-  console.log('[SAM] image loaded %dx%d (%.0fms)', W, H, performance.now() - t0);
-
-  const points = [
-    [W * 0.50, H * 0.55],
-    [W * 0.30, H * 0.55],
-    [W * 0.70, H * 0.55],
-    [W * 0.50, H * 0.40],
-    [W * 0.50, H * 0.70],
-  ];
-
-  console.log('[SAM] running processor…');
-  const inputs = await samProcessor(img, {
-    input_points: [points],
-    input_labels: [points.map(() => 1)],
-  });
-  console.log('[SAM] processor done (%.0fms), running model…', performance.now() - t0);
-
-  const { pred_masks, iou_scores } = await samModel(inputs);
-  console.log('[SAM] model done (%.0fms), post-processing…', performance.now() - t0);
-
-  const masks = await samProcessor.post_process_masks(
-    pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes,
-  );
-
-  const maskTensor = masks[0];
-  const numMasks = maskTensor.dims[0];
-  const mH = maskTensor.dims[1];
-  const mW = maskTensor.dims[2];
-  const scores = iou_scores.data;
-  const pxCount = mH * mW;
-
-  let bestIdx = 0, bestScore = -1;
-  for (let i = 0; i < numMasks; i++) {
-    const off = i * pxCount;
-    let fg = 0;
-    for (let j = 0; j < pxCount; j++) if (maskTensor.data[off + j] > 0) fg++;
-    const cov = fg / pxCount;
-    if (cov > 0.92 || cov < 0.01) continue;
-    if (scores[i] > bestScore) { bestScore = scores[i]; bestIdx = i; }
-  }
-
-  console.log('[SAM] mask idx=%d score=%.3f dims=%dx%d total=%.1fs', bestIdx, bestScore, mW, mH, (performance.now() - t0) / 1000);
-
-  const off = bestIdx * pxCount;
-  const binary = new Uint8Array(pxCount);
-  for (let j = 0; j < pxCount; j++) binary[j] = maskTensor.data[off + j] > 0 ? 1 : 0;
-
-  const closed = morphCloseMask(binary, mW, mH);
-  const feathered = gaussianBlurMask(closed, mW, mH, 1.5);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = mW; canvas.height = mH;
-  const ctx = canvas.getContext('2d');
-  const origImg = await loadImg(small);
-  ctx.drawImage(origImg, 0, 0, mW, mH);
-  const imageData = ctx.getImageData(0, 0, mW, mH);
-  for (let i = 0; i < pxCount; i++) imageData.data[i * 4 + 3] = Math.round(feathered[i] * 255);
-  ctx.putImageData(imageData, 0, 0);
-  return canvas.toDataURL('image/png');
-}
-
-function morphCloseMask(mask, W, H) {
-  const dilated = new Uint8Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      let v = 0;
-      for (let dy = -1; dy <= 1 && !v; dy++)
-        for (let dx = -1; dx <= 1 && !v; dx++) {
-          const ny = y + dy, nx = x + dx;
-          if (ny >= 0 && ny < H && nx >= 0 && nx < W && mask[ny * W + nx]) v = 1;
-        }
-      dilated[y * W + x] = v;
-    }
-  const result = new Uint8Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      let v = 1;
-      for (let dy = -1; dy <= 1 && v; dy++)
-        for (let dx = -1; dx <= 1 && v; dx++) {
-          const ny = y + dy, nx = x + dx;
-          if (ny < 0 || ny >= H || nx < 0 || nx >= W || !dilated[ny * W + nx]) v = 0;
-        }
-      result[y * W + x] = v;
-    }
-  return result;
 }
 
 function morphCloseFloat(data, W, H, radius) {
@@ -6275,7 +6146,7 @@ export default function AutoCache() {
               {/* ── 03 — Showroom Virtuel ── */}
               <section>
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Showroom Virtuel</div>
-                <div onClick={() => { if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); if (next) preloadSegmentation(); }}
+                <div onClick={() => { if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); }}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#1c1c1c"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
                   <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#444"}`, background: showroomEnabled && canUseShowroom ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "#555", fontSize: 10 }}>🔒</span>}
