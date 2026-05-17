@@ -5851,13 +5851,14 @@ export default function AutoCache() {
               const isLow = left <= (PLAN_LIMIT <= 30 ? 5 : 20);
               return (
                 <div ref={creditPopupRef} style={{ position: "relative" }}>
-                  <div onClick={() => {
-                    if (isExpired) { setShowUpgradeModal(true); return; }
-                    if (!showCreditPopup) { fetchSubInfo(); }
-                    setShowCreditPopup(p => !p);
+                  <div onClick={(e) => {
+                    e.stopPropagation();
+                    const next = !showCreditPopup;
+                    setShowCreditPopup(next);
+                    if (next && userPlan !== 'trial') fetchSubInfo();
                   }}
                     style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "4px 6px" : "4px 10px", borderRadius: 2, border: `1px solid ${isExpired ? "#c0392b" : showCreditPopup ? "#f26522" : "#2a2a2a"}`, cursor: "pointer", background: isExpired ? "rgba(192,57,43,0.08)" : showCreditPopup ? "rgba(242,101,34,0.06)" : "transparent", transition: "all 0.15s" }}
-                    title={isExpired ? "Crédits épuisés — cliquez pour mettre à niveau" : "Cliquez pour voir les détails"}
+                    title="Cliquez pour voir les détails"
                   >
                     <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: isExpired ? "#c0392b" : isLow ? "#f26522" : "#666", letterSpacing: 1 }}>
                       {isExpired
@@ -5866,66 +5867,80 @@ export default function AutoCache() {
                     </span>
                   </div>
                   {showCreditPopup && (
-                    <div style={{
+                    <div onClick={e => e.stopPropagation()} style={{
                       position: "fixed", top: 56, right: isMobile ? 4 : 60,
                       background: "#141414", border: "1px solid #2a2a2a", borderRadius: 6,
-                      minWidth: 260, maxWidth: "92vw", boxShadow: "0 8px 32px rgba(0,0,0,0.6)", zIndex: 2000,
+                      minWidth: 280, maxWidth: "92vw", boxShadow: "0 12px 40px rgba(0,0,0,0.7)", zIndex: 3000,
                       fontFamily: "'Rajdhani',sans-serif", overflow: "hidden",
                     }}>
-                      <div style={{ padding: "14px 16px 10px", borderBottom: "1px solid #1c1c1c" }}>
-                        <div style={{ fontSize: 10, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>
-                          {userPlan === "pro" ? "Plan Pro" : userPlan === "essential" ? "Plan Essentiel" : "Essai gratuit"}
+                      {/* En-tete plan + credits */}
+                      <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid #1c1c1c" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                          <div style={{ fontSize: 10, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>
+                            {userPlan === "pro" ? "Plan Pro" : userPlan === "essential" ? "Plan Essentiel" : "Essai gratuit"}
+                          </div>
+                          <div onClick={() => setShowCreditPopup(false)} style={{ color: "#555", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px" }}>✕</div>
                         </div>
-                        <div style={{ fontSize: 13, color: "#ccc" }}>
+                        <div style={{ fontSize: 13, color: "#ccc", marginBottom: 8 }}>
                           {left} / {PLAN_LIMIT} photo{PLAN_LIMIT > 1 ? "s" : ""} restante{left > 1 ? "s" : ""}
                         </div>
-                        <div style={{ marginTop: 6, height: 4, background: "#252525", borderRadius: 2, overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${Math.round((left / PLAN_LIMIT) * 100)}%`, background: isExpired ? "#c0392b" : isLow ? "#f26522" : "#22c55e", borderRadius: 2, transition: "width 0.3s" }} />
+                        <div style={{ height: 4, background: "#252525", borderRadius: 2, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.max(2, Math.round((left / PLAN_LIMIT) * 100))}%`, background: isExpired ? "#c0392b" : isLow ? "#f26522" : "#22c55e", borderRadius: 2, transition: "width 0.3s" }} />
                         </div>
-                      </div>
-                      <div style={{ padding: "12px 16px" }}>
-                        {subInfoLoading ? (
-                          <div style={{ fontSize: 12, color: "#555", textAlign: "center", padding: "6px 0" }}>Chargement...</div>
-                        ) : subInfo?.hasSubscription === false ? (
-                          <div style={{ fontSize: 12, color: "#777" }}>
-                            Aucun abonnement actif.
-                            <div style={{ marginTop: 8 }}>
-                              <button onClick={() => { setShowCreditPopup(false); setShowPlansModal(true); }}
-                                style={{ background: "#f26522", color: "#090909", border: "none", borderRadius: 4, padding: "6px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
-                                S'ABONNER
-                              </button>
-                            </div>
-                          </div>
-                        ) : subInfo ? (
-                          <div style={{ fontSize: 12, color: "#aaa" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                              <span style={{ color: "#777" }}>Debut du cycle</span>
-                              <span style={{ color: "#ccc", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}>
-                                {subInfo.periodStart.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
-                              </span>
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                              <span style={{ color: "#777" }}>Prochain paiement</span>
-                              <span style={{ color: "#ccc", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}>
-                                {subInfo.periodEnd.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
-                              </span>
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                              <span style={{ color: "#777" }}>Renouvellement</span>
-                              <span style={{
-                                color: subInfo.daysLeft <= 3 ? "#f26522" : "#22c55e",
-                                fontFamily: "'JetBrains Mono',monospace", fontSize: 12, fontWeight: 700,
-                              }}>
-                                {subInfo.daysLeft === 0 ? "Aujourd'hui" : `${subInfo.daysLeft} jour${subInfo.daysLeft > 1 ? "s" : ""}`}
-                              </span>
-                            </div>
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: 12, color: "#555" }}>
-                            Informations indisponibles.
+                        {isExpired && (
+                          <div style={{ marginTop: 10 }}>
+                            <button onClick={() => { setShowCreditPopup(false); setShowUpgradeModal(true); }}
+                              style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
+                              RECHARGER
+                            </button>
                           </div>
                         )}
                       </div>
+                      {/* Infos abonnement Stripe (seulement si plan payant) */}
+                      {userPlan !== 'trial' && (
+                        <div style={{ padding: "12px 16px" }}>
+                          {subInfoLoading ? (
+                            <div style={{ fontSize: 12, color: "#555", textAlign: "center", padding: "4px 0" }}>Chargement...</div>
+                          ) : subInfo?.periodEnd ? (
+                            <div style={{ fontSize: 12, color: "#aaa" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                                <span style={{ color: "#777" }}>Debut du cycle</span>
+                                <span style={{ color: "#ccc", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}>
+                                  {subInfo.periodStart.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
+                                </span>
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                                <span style={{ color: "#777" }}>Prochain paiement</span>
+                                <span style={{ color: "#ccc", fontFamily: "'JetBrains Mono',monospace", fontSize: 11 }}>
+                                  {subInfo.periodEnd.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
+                                </span>
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                <span style={{ color: "#777" }}>Renouvellement</span>
+                                <span style={{
+                                  color: subInfo.daysLeft <= 3 ? "#f26522" : "#22c55e",
+                                  fontFamily: "'JetBrains Mono',monospace", fontSize: 12, fontWeight: 700,
+                                }}>
+                                  {subInfo.daysLeft === 0 ? "Aujourd'hui" : `${subInfo.daysLeft} jour${subInfo.daysLeft > 1 ? "s" : ""}`}
+                                </span>
+                              </div>
+                            </div>
+                          ) : subInfo?.hasSubscription === false ? (
+                            <div style={{ fontSize: 12, color: "#666" }}>Credits via code promo.</div>
+                          ) : (
+                            <div style={{ fontSize: 12, color: "#555" }}>Informations indisponibles.</div>
+                          )}
+                        </div>
+                      )}
+                      {/* Lien abonnement pour les utilisateurs trial */}
+                      {userPlan === 'trial' && (
+                        <div style={{ padding: "10px 16px", borderTop: "1px solid #1c1c1c" }}>
+                          <button onClick={() => { setShowCreditPopup(false); setShowPlansModal(true); }}
+                            style={{ width: "100%", background: "transparent", color: "#f26522", border: "1px solid #f26522", borderRadius: 4, padding: "7px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
+                            VOIR LES PLANS
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
