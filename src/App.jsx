@@ -3059,6 +3059,7 @@ function getShowroomDebugMode() {
   if (url.includes('showroomDebug=mainVehicleBoxes')) return 'mainVehicleBoxes';
   if (url.includes('showroomDebug=mainROI')) return 'mainROI';
   if (url.includes('showroomDebug=mainMask')) return 'mainMask';
+  if (url.includes('showroomDebug=mainMaskFinal')) return 'mainMask'; // alias
   if (url.includes('showroomDebug=shadowAlpha')) return 'shadowAlpha';
   if (url.includes('showroomDebug=shadowColor')) return 'shadowColor';
   if (url.includes('showroomDebug=shadowControls')) return 'shadowControls';
@@ -3325,6 +3326,267 @@ function dilateMaskSeparable(mask, W, H, r) {
     }
   }
   return out;
+}
+
+// ── Chamfer distance transform: distance of each FG pixel to nearest BG pixel ──
+function chamferDistTransform(mask, W, H) {
+  const N = W * H;
+  const dist = new Float32Array(N);
+  const INF = (W + H) * 2;
+  for (let i = 0; i < N; i++) dist[i] = mask[i] ? INF : 0;
+
+  // Forward pass (top-left → bottom-right)
+  for (let y = 0; y < H; y++) {
+    const row = y * W;
+    for (let x = 0; x < W; x++) {
+      const i = row + x;
+      if (dist[i] === 0) continue;
+      let d = dist[i];
+      if (x > 0) d = Math.min(d, dist[i - 1] + 1);
+      if (y > 0) {
+        d = Math.min(d, dist[i - W] + 1);
+        if (x > 0) d = Math.min(d, dist[i - W - 1] + 1.41);
+        if (x < W - 1) d = Math.min(d, dist[i - W + 1] + 1.41);
+      }
+      dist[i] = d;
+    }
+  }
+  // Backward pass (bottom-right → top-left)
+  for (let y = H - 1; y >= 0; y--) {
+    const row = y * W;
+    for (let x = W - 1; x >= 0; x--) {
+      const i = row + x;
+      if (dist[i] === 0) continue;
+      let d = dist[i];
+      if (x < W - 1) d = Math.min(d, dist[i + 1] + 1);
+      if (y < H - 1) {
+        d = Math.min(d, dist[i + W] + 1);
+        if (x < W - 1) d = Math.min(d, dist[i + W + 1] + 1.41);
+        if (x > 0) d = Math.min(d, dist[i + W - 1] + 1.41);
+      }
+      dist[i] = d;
+    }
+  }
+  return dist;
+}
+
+// ── Separate attached secondary vehicle from fused mask ──
+// Uses distance transform + seeded region growing, with progressive erosion fallback
+async function separateAttachedSecondary(cutoutDataURL, mainVehicle, plateBox, secondaryVehicles = []) {
+  if (!mainVehicle) return cutoutDataURL;
+  console.time('[SepAttached]');
+
+  const img = await loadImg(cutoutDataURL);
+  const W = img.naturalWidth || img.width;
+  const H = img.naturalHeight || img.height;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const data = imgData.data;
+  const N = W * H;
+
+  // Binary mask
+  const mask = new Uint8Array(N);
+  let totalFG = 0;
+  for (let i = 0; i < N; i++) {
+    if (data[i * 4 + 3] > 128) { mask[i] = 1; totalFG++; }
+  }
+  if (totalFG === 0) { console.timeEnd('[SepAttached]'); return cutoutDataURL; }
+
+  // MainVehicle bbox in pixels
+  const mb = mainVehicle.bbox;
+  const mvPx1 = Math.round(mb.x1 * W), mvPy1 = Math.round(mb.y1 * H);
+  const mvPx2 = Math.round(mb.x2 * W), mvPy2 = Math.round(mb.y2 * H);
+  const mvW = mvPx2 - mvPx1, mvH = mvPy2 - mvPy1;
+
+  // 1. Distance transform
+  console.time('[SepAttached] distTransform');
+  const dist = chamferDistTransform(mask, W, H);
+  console.timeEnd('[SepAttached] distTransform');
+  let maxDist = 0;
+  for (let i = 0; i < N; i++) if (dist[i] > maxDist) maxDist = dist[i];
+
+  // Adaptive seed threshold: deep enough to be interior, not so deep we lose small vehicles
+  const seedThreshold = Math.max(6, maxDist * 0.07);
+
+  // 2. Seed assignment
+  // Expanded mainVehicleBox (small margin for seed containment)
+  const expM = Math.round(Math.min(mvW, mvH) * 0.05);
+  const exPx1 = mvPx1 - expM, exPy1 = mvPy1 - expM;
+  const exPx2 = mvPx2 + expM, exPy2 = mvPy2 + expM;
+
+  // labels: 0=unassigned, 1=main, 2=secondary
+  const labels = new Int8Array(N);
+  let mainSeedCount = 0, secSeedCount = 0;
+
+  // Plate center in pixels
+  let platePx = -1, platePy = -1;
+  if (plateBox) {
+    platePx = Math.round(((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2 * W);
+    platePy = Math.round(((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2 * H);
+  }
+
+  // Main seeds: deep interior pixels inside expanded mainVehicleBox
+  for (let i = 0; i < N; i++) {
+    if (!mask[i] || dist[i] < seedThreshold) continue;
+    const x = i % W, y = (i - x) / W;
+    if (x >= exPx1 && x <= exPx2 && y >= exPy1 && y <= exPy2) {
+      labels[i] = 1;
+      mainSeedCount++;
+    }
+  }
+
+  // Secondary seeds from detected secondary vehicle bboxes
+  for (const sv of secondaryVehicles) {
+    const sb = sv.bbox;
+    const sx1 = Math.round(sb.x1 * W), sy1 = Math.round(sb.y1 * H);
+    const sx2 = Math.round(sb.x2 * W), sy2 = Math.round(sb.y2 * H);
+    for (let y = Math.max(0, sy1); y <= Math.min(H - 1, sy2); y++) {
+      for (let x = Math.max(0, sx1); x <= Math.min(W - 1, sx2); x++) {
+        const i = y * W + x;
+        if (mask[i] && labels[i] === 0 && dist[i] >= seedThreshold * 0.5) {
+          labels[i] = 2;
+          secSeedCount++;
+        }
+      }
+    }
+  }
+
+  // Auto-detect secondary lobes: foreground far outside mainVehicleBox
+  const farM = Math.round(Math.min(mvW, mvH) * 0.12);
+  const farPx1 = mvPx1 - farM, farPy1 = mvPy1 - farM;
+  const farPx2 = mvPx2 + farM, farPy2 = mvPy2 + farM;
+  for (let i = 0; i < N; i++) {
+    if (!mask[i] || labels[i] !== 0 || dist[i] < seedThreshold * 0.3) continue;
+    const x = i % W, y = (i - x) / W;
+    if (x < farPx1 || x > farPx2 || y < farPy1 || y > farPy2) {
+      labels[i] = 2;
+      secSeedCount++;
+    }
+  }
+
+  console.log('[SepAttached] seeds: main=' + mainSeedCount + ' secondary=' + secSeedCount +
+    ' threshold=' + seedThreshold.toFixed(1) + ' maxDist=' + maxDist.toFixed(1));
+
+  if (mainSeedCount === 0 || secSeedCount === 0) {
+    // === Fallback: progressive erosion ===
+    console.log('[SepAttached] insufficient seeds, trying progressive erosion fallback');
+    let separated = false;
+    const baseR = Math.max(5, Math.round(Math.min(W, H) * 0.008));
+    for (let mult = 2; mult <= 6; mult++) {
+      const R = baseR * mult;
+      const eroded = erodeMaskSeparable(mask, W, H, R);
+      // CC label eroded mask
+      const elabels = new Int32Array(N);
+      const ecomps = [];
+      let nextL = 1;
+      const q = [];
+      for (let i = 0; i < N; i++) {
+        if (!eroded[i] || elabels[i] !== 0) continue;
+        const lbl = nextL++;
+        let sz = 0, sX = 0, sY = 0, mnX = W, mxX = 0, mnY = H, mxY = 0;
+        q.length = 0; q.push(i); elabels[i] = lbl;
+        while (q.length > 0) {
+          const idx = q.pop();
+          const px = idx % W, py = (idx - px) / W;
+          sz++; sX += px; sY += py;
+          if (px < mnX) mnX = px; if (px > mxX) mxX = px;
+          if (py < mnY) mnY = py; if (py > mxY) mxY = py;
+          if (px > 0 && eroded[idx-1] && !elabels[idx-1]) { elabels[idx-1]=lbl; q.push(idx-1); }
+          if (px < W-1 && eroded[idx+1] && !elabels[idx+1]) { elabels[idx+1]=lbl; q.push(idx+1); }
+          if (py > 0 && eroded[idx-W] && !elabels[idx-W]) { elabels[idx-W]=lbl; q.push(idx-W); }
+          if (py < H-1 && eroded[idx+W] && !elabels[idx+W]) { elabels[idx+W]=lbl; q.push(idx+W); }
+        }
+        ecomps.push({ id: lbl, size: sz, cx: sX/sz, cy: sY/sz, minX: mnX, maxX: mxX, minY: mnY, maxY: mxY });
+      }
+      if (ecomps.length < 2) continue;
+      console.log('[SepAttached] fallback R=' + R + ': ' + ecomps.length + ' components');
+
+      // Score each component: overlap with mainVehicleBox + plate containment
+      let bestId = -1, bestScore = -1;
+      for (const ec of ecomps) {
+        const ox1 = Math.max(ec.minX, mvPx1), oy1 = Math.max(ec.minY, mvPy1);
+        const ox2 = Math.min(ec.maxX, mvPx2), oy2 = Math.min(ec.maxY, mvPy2);
+        let overlap = 0;
+        if (ox2 > ox1 && oy2 > oy1) {
+          const compA = (ec.maxX - ec.minX) * (ec.maxY - ec.minY);
+          overlap = compA > 0 ? (ox2-ox1)*(oy2-oy1)/compA : 0;
+        }
+        let plateSc = 0;
+        if (platePx >= 0 && platePx >= ec.minX && platePx <= ec.maxX && platePy >= ec.minY && platePy <= ec.maxY) plateSc = 1;
+        const sc = overlap * 0.5 + plateSc * 0.3 + (ec.size / totalFG) * 0.2;
+        if (sc > bestScore) { bestScore = sc; bestId = ec.id; }
+      }
+
+      // Dilate winning component back, AND with original mask
+      const winMask = new Uint8Array(N);
+      for (let i = 0; i < N; i++) if (elabels[i] === bestId) winMask[i] = 1;
+      const dilated = dilateMaskSeparable(winMask, W, H, R);
+      let removed = 0;
+      for (let i = 0; i < N; i++) {
+        if (mask[i] && !dilated[i]) { data[i * 4 + 3] = 0; removed++; }
+      }
+      console.log('[SepAttached] fallback kept comp #' + bestId + ', removed ' + removed +
+        ' (' + (removed / totalFG * 100).toFixed(1) + '%)');
+      if (removed > 0) { separated = true; break; }
+    }
+    if (!separated) console.log('[SepAttached] fallback: no separation achieved');
+    ctx.putImageData(imgData, 0, 0);
+    console.timeEnd('[SepAttached]');
+    return separated ? c.toDataURL('image/png') : cutoutDataURL;
+  }
+
+  // 3. Region growing from seeds (bucket sort by distance, process high→low)
+  console.time('[SepAttached] regionGrow');
+  const maxDistInt = Math.ceil(maxDist);
+  const buckets = new Array(maxDistInt + 1);
+  for (let d = 0; d <= maxDistInt; d++) buckets[d] = [];
+
+  // Add seeded pixels to their distance bucket
+  for (let i = 0; i < N; i++) {
+    if (labels[i] !== 0) {
+      buckets[Math.min(maxDistInt, Math.floor(dist[i]))].push(i);
+    }
+  }
+
+  // Process from high distance (deep interior) to low (edges/bridges)
+  const dx8 = [-1, 0, 1, -1, 1, -1, 0, 1];
+  const dy8 = [-1, -1, -1, 0, 0, 1, 1, 1];
+  for (let d = maxDistInt; d >= 0; d--) {
+    const bucket = buckets[d];
+    for (let bi = 0; bi < bucket.length; bi++) {
+      const idx = bucket[bi];
+      const x = idx % W, y = (idx - x) / W;
+      const myLabel = labels[idx];
+      for (let n = 0; n < 8; n++) {
+        const nx = x + dx8[n], ny = y + dy8[n];
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+        const ni = ny * W + nx;
+        if (!mask[ni] || labels[ni] !== 0) continue;
+        labels[ni] = myLabel;
+        buckets[Math.min(maxDistInt, Math.floor(dist[ni]))].push(ni);
+      }
+    }
+  }
+  console.timeEnd('[SepAttached] regionGrow');
+
+  // 4. Remove pixels assigned to secondary region
+  let removedSec = 0, unassigned = 0;
+  for (let i = 0; i < N; i++) {
+    if (!mask[i]) continue;
+    if (labels[i] === 2) { data[i * 4 + 3] = 0; removedSec++; }
+    else if (labels[i] === 0) unassigned++;
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  console.log('[SepAttached] removed=' + removedSec + ' (' + (removedSec / totalFG * 100).toFixed(1) +
+    '%), kept=' + (totalFG - removedSec) + ', unassigned=' + unassigned);
+  console.timeEnd('[SepAttached]');
+
+  if (removedSec === 0) return cutoutDataURL;
+  return c.toDataURL('image/png');
 }
 
 async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, shadowParams = {}) {
@@ -3611,7 +3873,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     ctx.drawImage(carImg, carX, carY, cw, ch);
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.font = '24px monospace';
-    ctx.fillText('mainMask — isolated vehicle (post-CC filter)', 20, 40);
+    ctx.fillText('mainMask — final mask (CC + separation + gate)', 20, 40);
     const dataURL = c.toDataURL('image/jpeg', 0.98);
     if (returnFull) return { dataURL, baseURL: dataURL, transform: { carX, carY, cw, ch, W, H } };
     return dataURL;
@@ -4772,7 +5034,8 @@ export default function AutoCache() {
           const croppedCutout = await removeBackground(croppedUrl);
           const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
           const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
-          const cutout = await hardGateByVehicleBox(isolatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
+          const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
+          const cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
           let shadowMatteUrl = null;
           if (USE_SOURCE_SHADOW_TRANSFER) {
             const shadow = await extractSourceShadow(r.baseDataURL, cutout);
