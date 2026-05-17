@@ -6576,7 +6576,7 @@ export default function AutoCache() {
       {/* ── Lightbox + rognage ──────────────────────────────────── */}
       {lightbox && (
         <div
-          onClick={cropMode || adjustMode ? undefined : closeLightbox}
+          onClick={cropMode || adjustMode || showMaskEditor ? undefined : closeLightbox}
           onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
           onTouchMove={e => { if (adjustMode) onAdjustTouchMove(e); else onLbTouchMove(e); }}
           onTouchEnd={() => { adjustDragRef.current = null; setAdjustDrag(null); setLbPanDrag(null); pinchRef.current = null; }}

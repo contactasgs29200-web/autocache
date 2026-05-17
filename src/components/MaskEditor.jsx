@@ -19,6 +19,12 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   const [bgMode, setBgMode] = useState('checker'); // 'checker' | 'white' | 'black'
   const [isDrawing, setIsDrawing] = useState(false);
 
+  // Zoom & pan
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const isPanningRef = useRef(false);
+  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+
   // Undo/redo
   const historyRef = useRef([]);
   const historyIdxRef = useRef(-1);
@@ -146,10 +152,10 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     return {
-      x: (clientX - rect.left) / scale,
-      y: (clientY - rect.top) / scale,
+      x: (clientX - rect.left) / (scale * zoom),
+      y: (clientY - rect.top) / (scale * zoom),
     };
-  }, []);
+  }, [zoom]);
 
   const paint = useCallback((x, y) => {
     const canvas = canvasRef.current;
@@ -184,12 +190,26 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
 
   const handlePointerDown = useCallback((e) => {
     e.preventDefault();
+    e.stopPropagation();
+    // Middle click or right click = pan
+    if (e.button === 1 || e.button === 2) {
+      isPanningRef.current = true;
+      panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+      return;
+    }
     setIsDrawing(true);
     const pos = getCanvasPos(e);
     paint(pos.x, pos.y);
-  }, [getCanvasPos, paint]);
+  }, [getCanvasPos, paint, pan]);
 
   const handlePointerMove = useCallback((e) => {
+    e.stopPropagation();
+    if (isPanningRef.current) {
+      const dx = e.clientX - panStartRef.current.x;
+      const dy = e.clientY - panStartRef.current.y;
+      setPan({ x: panStartRef.current.panX + dx, y: panStartRef.current.panY + dy });
+      return;
+    }
     if (!isDrawing) return;
     e.preventDefault();
     const pos = getCanvasPos(e);
@@ -197,17 +217,42 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   }, [isDrawing, getCanvasPos, paint]);
 
   const handlePointerUp = useCallback((e) => {
-    if (!isDrawing) return;
     e.preventDefault();
+    e.stopPropagation();
+    if (isPanningRef.current) {
+      isPanningRef.current = false;
+      return;
+    }
+    if (!isDrawing) return;
     setIsDrawing(false);
     pushHistory();
   }, [isDrawing, pushHistory]);
+
+  // Zoom with mouse wheel
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setZoom(z => Math.min(10, Math.max(0.5, z * delta)));
+  }, []);
+
+  // Prevent context menu on right-click (used for panning)
+  const handleContextMenu = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
 
   const handleApply = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !onApply) return;
     onApply(canvas.toDataURL('image/png'));
   }, [onApply]);
+
+  // Reset zoom
+  const resetZoom = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
 
   const btnStyle = (active) => ({
     padding: '6px 14px',
@@ -223,17 +268,27 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   });
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 9999,
-      background: 'rgba(0,0,0,0.85)',
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    }}>
+    <div
+      onClick={e => e.stopPropagation()}
+      onMouseDown={e => e.stopPropagation()}
+      onMouseUp={e => e.stopPropagation()}
+      onContextMenu={handleContextMenu}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: 'rgba(0,0,0,0.85)',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
       {/* Toolbar */}
-      <div style={{
-        display: 'flex', gap: 8, padding: '10px 16px', marginBottom: 8,
-        background: '#1f2937', borderRadius: 10, alignItems: 'center', flexWrap: 'wrap',
-        justifyContent: 'center',
-      }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        onMouseDown={e => e.stopPropagation()}
+        style={{
+          display: 'flex', gap: 8, padding: '10px 16px', marginBottom: 8,
+          background: '#1f2937', borderRadius: 10, alignItems: 'center', flexWrap: 'wrap',
+          justifyContent: 'center',
+        }}
+      >
         <button style={btnStyle(mode === 'erase')} onClick={() => setMode('erase')}>
           Gomme
         </button>
@@ -245,6 +300,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
           Taille
           <input type="range" min={5} max={120} value={brushSize}
             onChange={e => setBrushSize(Number(e.target.value))}
+            onMouseDown={e => e.stopPropagation()}
             style={{ width: 80 }} />
           <span style={{ minWidth: 24, textAlign: 'right' }}>{brushSize}</span>
         </label>
@@ -253,40 +309,79 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         <button style={btnStyle(canRedo)} onClick={redo} disabled={!canRedo}>Refaire</button>
         <span style={{ color: '#9ca3af', fontSize: 12, margin: '0 4px' }}>|</span>
         <select value={bgMode} onChange={e => setBgMode(e.target.value)}
+          onMouseDown={e => e.stopPropagation()}
           style={{ background: '#374151', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 12 }}>
           <option value="checker">Damier</option>
           <option value="white">Blanc</option>
           <option value="black">Noir</option>
         </select>
+        <span style={{ color: '#9ca3af', fontSize: 12, margin: '0 4px' }}>|</span>
+        <button style={btnStyle(true)} onClick={resetZoom}>
+          {Math.round(zoom * 100)}%
+        </button>
       </div>
 
       {/* Canvas area */}
-      <div ref={containerRef} style={{ position: 'relative', cursor: 'crosshair' }}>
-        <canvas ref={overlayRef} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} />
-        <canvas ref={canvasRef}
-          onMouseDown={handlePointerDown}
-          onMouseMove={handlePointerMove}
-          onMouseUp={handlePointerUp}
-          onMouseLeave={handlePointerUp}
-          onTouchStart={handlePointerDown}
-          onTouchMove={handlePointerMove}
-          onTouchEnd={handlePointerUp}
-          style={{ position: 'relative', zIndex: 1, touchAction: 'none' }}
-        />
+      <div
+        ref={containerRef}
+        onWheel={handleWheel}
+        onContextMenu={handleContextMenu}
+        style={{
+          position: 'relative',
+          cursor: isPanningRef.current ? 'grabbing' : 'crosshair',
+          overflow: 'hidden',
+          width: '88vw',
+          height: '70vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div style={{
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transformOrigin: 'center center',
+          position: 'relative',
+          transition: isPanningRef.current ? 'none' : undefined,
+        }}>
+          <canvas ref={overlayRef} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }} />
+          <canvas ref={canvasRef}
+            onMouseDown={handlePointerDown}
+            onMouseMove={handlePointerMove}
+            onMouseUp={handlePointerUp}
+            onMouseLeave={handlePointerUp}
+            onTouchStart={handlePointerDown}
+            onTouchMove={handlePointerMove}
+            onTouchEnd={handlePointerUp}
+            style={{ position: 'relative', zIndex: 1, touchAction: 'none' }}
+          />
+        </div>
+      </div>
+
+      {/* Help text */}
+      <div style={{ color: '#6b7280', fontSize: 11, marginTop: 6, textAlign: 'center' }}>
+        Molette = zoom &nbsp;|&nbsp; Clic droit + glisser = deplacer &nbsp;|&nbsp; Clic gauche = peindre
       </div>
 
       {/* Bottom actions */}
-      <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
-        <button onClick={onCancel} style={{
-          padding: '10px 24px', background: '#4b5563', color: '#fff',
-          border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14,
-        }}>
+      <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); onCancel(); }}
+          onMouseDown={e => e.stopPropagation()}
+          style={{
+            padding: '10px 24px', background: '#4b5563', color: '#fff',
+            border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14,
+          }}
+        >
           Annuler
         </button>
-        <button onClick={handleApply} style={{
-          padding: '10px 24px', background: '#10b981', color: '#fff',
-          border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600,
-        }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); handleApply(); }}
+          onMouseDown={e => e.stopPropagation()}
+          style={{
+            padding: '10px 24px', background: '#10b981', color: '#fff',
+            border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600,
+          }}
+        >
           Appliquer
         </button>
       </div>
