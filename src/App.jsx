@@ -5867,9 +5867,9 @@ export default function AutoCache() {
                   </div>
                   {showCreditPopup && (
                     <div style={{
-                      position: "absolute", top: "calc(100% + 8px)", right: 0,
+                      position: "fixed", top: 56, right: isMobile ? 4 : 60,
                       background: "#141414", border: "1px solid #2a2a2a", borderRadius: 6,
-                      minWidth: 260, boxShadow: "0 8px 32px rgba(0,0,0,0.6)", zIndex: 2000,
+                      minWidth: 260, maxWidth: "92vw", boxShadow: "0 8px 32px rgba(0,0,0,0.6)", zIndex: 2000,
                       fontFamily: "'Rajdhani',sans-serif", overflow: "hidden",
                     }}>
                       <div style={{ padding: "14px 16px 10px", borderBottom: "1px solid #1c1c1c" }}>
