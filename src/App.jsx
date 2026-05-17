@@ -2678,7 +2678,7 @@ async function preloadSegmentation() {
   if (!USE_CLIENT_SAM) return;
   if (samModel) return;
   try {
-    const hf = await import('@huggingface/transformers');
+    const hf = await import(/* @vite-ignore */ '@huggingface/transformers');
     SamRawImage = hf.RawImage;
     samProcessor = await hf.AutoProcessor.from_pretrained('Xenova/sam-vit-base');
     samModel = await hf.SamModel.from_pretrained('Xenova/sam-vit-base', {
