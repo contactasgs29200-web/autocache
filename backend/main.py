@@ -31,6 +31,10 @@ app.add_middleware(
 _MODEL_PATH = Path(os.environ.get("MODEL_CACHE_DIR", "/app/models")) / "best.pt"
 _model: YOLO | None = None
 
+# Pretrained COCO model for general vehicle detection
+_vehicle_model: YOLO | None = None
+_VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+
 
 def _is_lfs_pointer(path: Path) -> bool:
     try:
@@ -1756,4 +1760,67 @@ async def detect_plate(file: UploadFile = File(...)):
         # Full diagnostic landscape.
         "debug":                          refine_debug,
         "gate_telemetry":                 pick_telemetry,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Vehicle detection (pretrained COCO yolov8n — car, truck, bus, motorcycle)
+# ---------------------------------------------------------------------------
+
+def get_vehicle_model() -> YOLO:
+    global _vehicle_model
+    if _vehicle_model is not None:
+        return _vehicle_model
+    logger.info("Loading pretrained yolov8n for vehicle detection…")
+    _vehicle_model = YOLO("yolov8n.pt")
+    return _vehicle_model
+
+
+@app.post("/detect-vehicles")
+async def detect_vehicles(file: UploadFile = File(...)):
+    """
+    Detect all vehicles in an image.  Returns a list of bounding boxes
+    with class and confidence, sorted by area (largest first).
+    """
+    raw = await file.read()
+    pil = Image.open(io.BytesIO(raw)).convert("RGB")
+    w, h = pil.size
+
+    model = get_vehicle_model()
+    results = model.predict(
+        source=np.array(pil),
+        conf=0.25,
+        iou=0.45,
+        verbose=False,
+    )
+
+    vehicles = []
+    for r in results:
+        if r.boxes is None:
+            continue
+        for box in r.boxes:
+            cls_id = int(box.cls[0])
+            if cls_id not in _VEHICLE_CLASSES:
+                continue
+            x1, y1, x2, y2 = box.xyxyn[0].tolist()
+            conf = float(box.conf[0])
+            area = (x2 - x1) * (y2 - y1)
+            vehicles.append({
+                "class": _VEHICLE_CLASSES[cls_id],
+                "conf": round(conf, 3),
+                "bbox": {
+                    "x1": round(x1, 4),
+                    "y1": round(y1, 4),
+                    "x2": round(x2, 4),
+                    "y2": round(y2, 4),
+                },
+                "area": round(area, 6),
+            })
+
+    vehicles.sort(key=lambda v: v["area"], reverse=True)
+
+    return {
+        "count": len(vehicles),
+        "vehicles": vehicles,
+        "image_size": {"w": w, "h": h},
     }

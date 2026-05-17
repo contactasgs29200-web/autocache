@@ -3742,6 +3742,136 @@ async function detectPlateYOLO(imageFile) {
   }
 }
 
+// ── Vehicle detection + main vehicle selection ──
+
+async function detectVehicles(imageFile) {
+  const backendUrl = import.meta.env.VITE_YOLO_BACKEND_URL;
+  if (!backendUrl) return null;
+  try {
+    const formData = new FormData();
+    formData.append('file', imageFile);
+    const r = await fetch(`${backendUrl}/detect-vehicles`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!r.ok) { console.warn('[Vehicles] backend HTTP', r.status); return null; }
+    const d = await r.json();
+    console.log('[Vehicles] detected ' + d.count + ' vehicles');
+    d.vehicles.forEach((v, i) => {
+      console.log('[Vehicles] #' + (i + 1) + ': ' + v.class + ' conf=' + v.conf +
+        ' bbox=(' + v.bbox.x1.toFixed(3) + ',' + v.bbox.y1.toFixed(3) + ')-(' +
+        v.bbox.x2.toFixed(3) + ',' + v.bbox.y2.toFixed(3) + ') area=' + v.area.toFixed(4));
+    });
+    return d;
+  } catch (e) {
+    console.warn('[Vehicles] detection failed:', e.message);
+    return null;
+  }
+}
+
+function selectMainVehicle(vehicles, plateBox, imgW, imgH) {
+  if (!vehicles || vehicles.length === 0) return null;
+  if (vehicles.length === 1) {
+    console.log('[Vehicles] single vehicle, auto-selected');
+    return vehicles[0];
+  }
+
+  const imgCx = 0.5, imgCy = 0.5;
+  const maxDist = Math.sqrt(0.5 * 0.5 + 0.5 * 0.5);
+  let plateCx = -1, plateCy = -1;
+  if (plateBox) {
+    plateCx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
+    plateCy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
+  }
+
+  const maxArea = Math.max(...vehicles.map(v => v.area));
+  let bestScore = -1, bestVehicle = null;
+
+  for (const v of vehicles) {
+    const vCx = (v.bbox.x1 + v.bbox.x2) / 2;
+    const vCy = (v.bbox.y1 + v.bbox.y2) / 2;
+
+    // Plate association: does this vehicle bbox contain the plate center?
+    let plateAssoc = 0;
+    if (plateCx >= 0 && plateCx >= v.bbox.x1 && plateCx <= v.bbox.x2 &&
+        plateCy >= v.bbox.y1 && plateCy <= v.bbox.y2) {
+      plateAssoc = 1;
+    }
+
+    const areaNorm = v.area / maxArea;
+    const dist = Math.sqrt((vCx - imgCx) ** 2 + (vCy - imgCy) ** 2);
+    const centerProx = 1 - dist / maxDist;
+    const confScore = v.conf;
+
+    const score = 0.45 * plateAssoc + 0.25 * areaNorm + 0.20 * centerProx + 0.10 * confScore;
+
+    console.log('[Vehicles] score ' + v.class + ': plate=' + plateAssoc +
+      ' area=' + areaNorm.toFixed(2) + ' center=' + centerProx.toFixed(2) +
+      ' conf=' + confScore.toFixed(2) + ' → ' + score.toFixed(3));
+
+    if (score > bestScore) { bestScore = score; bestVehicle = v; }
+  }
+
+  console.log('[Vehicles] selected: ' + bestVehicle.class + ' score=' + bestScore.toFixed(3));
+  return bestVehicle;
+}
+
+function estimateMainVehicleROI(mainVehicle, plateBox, imgW, imgH) {
+  // If we have a detected vehicle bbox, use it with generous margins
+  if (mainVehicle) {
+    const b = mainVehicle.bbox;
+    const bw = b.x2 - b.x1, bh = b.y2 - b.y1;
+    return {
+      x1: Math.max(0, b.x1 - bw * 0.10),
+      y1: Math.max(0, b.y1 - bh * 0.12),
+      x2: Math.min(1, b.x2 + bw * 0.10),
+      y2: Math.min(1, b.y2 + bh * 0.10),
+    };
+  }
+  // Fallback: estimate from plate position
+  if (plateBox) {
+    const pcx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
+    const pcy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
+    // Vehicle is roughly centered around plate, extends far above
+    return {
+      x1: Math.max(0, pcx - 0.40),
+      y1: Math.max(0, pcy - 0.55),
+      x2: Math.min(1, pcx + 0.40),
+      y2: Math.min(1, pcy + 0.15),
+    };
+  }
+  // No anchor: use full image
+  return null;
+}
+
+async function cropToROI(dataUrl, roi) {
+  if (!roi) return { croppedUrl: dataUrl, roi: { x1: 0, y1: 0, x2: 1, y2: 1 } };
+  const img = await loadImg(dataUrl);
+  const W = img.naturalWidth || img.width;
+  const H = img.naturalHeight || img.height;
+  const cx1 = Math.round(roi.x1 * W), cy1 = Math.round(roi.y1 * H);
+  const cx2 = Math.round(roi.x2 * W), cy2 = Math.round(roi.y2 * H);
+  const cw = cx2 - cx1, ch = cy2 - cy1;
+  if (cw < 100 || ch < 100) return { croppedUrl: dataUrl, roi: { x1: 0, y1: 0, x2: 1, y2: 1 } };
+  const c = document.createElement('canvas');
+  c.width = cw; c.height = ch;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, cx1, cy1, cw, ch, 0, 0, cw, ch);
+  console.log('[ROI] cropped to [' + cx1 + ',' + cy1 + ' ' + cw + 'x' + ch + '] from ' + W + 'x' + H);
+  return { croppedUrl: c.toDataURL('image/jpeg', 0.96), roi };
+}
+
+async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
+  if (roi.x1 === 0 && roi.y1 === 0 && roi.x2 === 1 && roi.y2 === 1) return croppedCutoutUrl;
+  const img = await loadImg(croppedCutoutUrl);
+  const c = document.createElement('canvas');
+  c.width = origW; c.height = origH;
+  const ctx = c.getContext('2d');
+  const cx1 = Math.round(roi.x1 * origW), cy1 = Math.round(roi.y1 * origH);
+  ctx.drawImage(img, cx1, cy1);
+  return c.toDataURL('image/png');
+}
+
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
@@ -4369,8 +4499,14 @@ export default function AutoCache() {
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
-          const rawCutout = await removeBackground(r.baseDataURL);
-          const cutout = await isolateMainVehicle(rawCutout, r.yoloBbox ?? null);
+          // Detect vehicles + select main → ROI crop → segment → uncrop → CC filter
+          const vehicleResult = await detectVehicles(photosToProcess[i].file);
+          const mainVehicle = selectMainVehicle(vehicleResult?.vehicles ?? [], r.yoloBbox ?? null, r.imgW, r.imgH);
+          const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH);
+          const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
+          const croppedCutout = await removeBackground(croppedUrl);
+          const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
+          const cutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null);
           let shadowMatteUrl = null;
           if (USE_SOURCE_SHADOW_TRANSFER) {
             const shadow = await extractSourceShadow(r.baseDataURL, cutout);
