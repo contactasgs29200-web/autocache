@@ -3828,20 +3828,95 @@ function estimateMainVehicleROI(mainVehicle, plateBox, imgW, imgH) {
       y2: Math.min(1, b.y2 + bh * 0.10),
     };
   }
-  // Fallback: estimate from plate position
+  // Fallback: estimate from plate position — tighter crop to exclude background vehicles
   if (plateBox) {
     const pcx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
     const pcy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
-    // Vehicle is roughly centered around plate, extends far above
+    const pw = Math.abs((plateBox.x2 ?? 0) - (plateBox.x1 ?? 0));
+    // Plate width gives a scale hint: a car is roughly 6-8x plate width
+    const carHalfW = Math.max(0.28, Math.min(0.38, pw * 3.5));
     return {
-      x1: Math.max(0, pcx - 0.40),
-      y1: Math.max(0, pcy - 0.55),
-      x2: Math.min(1, pcx + 0.40),
-      y2: Math.min(1, pcy + 0.15),
+      x1: Math.max(0, pcx - carHalfW),
+      y1: Math.max(0, pcy - 0.42),
+      x2: Math.min(1, pcx + carHalfW),
+      y2: Math.min(1, pcy + 0.10),
     };
   }
   // No anchor: use full image
   return null;
+}
+
+// Hard gate: zero all alpha pixels outside estimated vehicle bbox — last resort filter
+async function hardGateByPlate(cutoutDataURL, plateBox, imgW, imgH) {
+  if (!plateBox) return cutoutDataURL; // Can't gate without plate reference
+  console.time('[HardGate]');
+
+  const pcx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
+  const pcy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
+  const pw = Math.abs((plateBox.x2 ?? 0) - (plateBox.x1 ?? 0));
+
+  // Tight vehicle zone: use plate as anchor
+  // Car extends ~3x plate width each side, mostly above the plate
+  const gateHalfW = Math.max(0.30, Math.min(0.40, pw * 4.0));
+  const gateX1 = pcx - gateHalfW;
+  const gateX2 = pcx + gateHalfW;
+  const gateY1 = pcy - 0.48; // roof is well above plate
+  const gateY2 = pcy + 0.12; // small margin below plate (wheels)
+
+  const img = await loadImg(cutoutDataURL);
+  const W = img.naturalWidth || img.width;
+  const H = img.naturalHeight || img.height;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const imgData = ctx.getImageData(0, 0, W, H);
+  const data = imgData.data;
+
+  // Convert normalized gate to pixel coords
+  const px1 = Math.round(gateX1 * W);
+  const px2 = Math.round(gateX2 * W);
+  const py1 = Math.round(gateY1 * H);
+  const py2 = Math.round(gateY2 * H);
+
+  // Soft feather zone (20px)
+  const feather = Math.round(Math.min(W, H) * 0.015);
+  let removed = 0;
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = (y * W + x) * 4;
+      if (data[idx + 3] === 0) continue;
+
+      // Compute distance outside the gate box
+      let dx = 0, dy = 0;
+      if (x < px1) dx = px1 - x;
+      else if (x > px2) dx = x - px2;
+      if (y < py1) dy = py1 - y;
+      else if (y > py2) dy = y - py2;
+
+      if (dx === 0 && dy === 0) continue; // Inside gate, keep
+
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > feather) {
+        data[idx + 3] = 0; // Hard zero
+        removed++;
+      } else {
+        // Soft feather: linear fade
+        const factor = dist / feather;
+        data[idx + 3] = Math.round(data[idx + 3] * (1 - factor));
+        if (data[idx + 3] < 5) { data[idx + 3] = 0; removed++; }
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  console.log('[HardGate] plate=(' + pcx.toFixed(3) + ',' + pcy.toFixed(3) + ') pw=' + pw.toFixed(3) +
+    ' gate=[' + px1 + ',' + py1 + ']->[' + px2 + ',' + py2 + '] removed=' + removed + ' pixels');
+  console.timeEnd('[HardGate]');
+
+  if (removed === 0) return cutoutDataURL;
+  return c.toDataURL('image/png');
 }
 
 async function cropToROI(dataUrl, roi) {
@@ -4506,7 +4581,8 @@ export default function AutoCache() {
           const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
           const croppedCutout = await removeBackground(croppedUrl);
           const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
-          const cutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null);
+          const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null);
+          const cutout = await hardGateByPlate(isolatedCutout, r.yoloBbox ?? null, r.imgW, r.imgH);
           let shadowMatteUrl = null;
           if (USE_SOURCE_SHADOW_TRANSFER) {
             const shadow = await extractSourceShadow(r.baseDataURL, cutout);
