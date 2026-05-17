@@ -4965,29 +4965,14 @@ export default function AutoCache() {
             ', secondary=' + secondaryVehicles.length +
             (secondaryVehicles.length > 0 ? ' [' + secondaryVehicles.map(s => s.class).join(',') + ']' : ''));
 
-          // Strategy 1: Backend instance segmentation (clean, per-instance mask)
-          let cutout = null;
-          const segResult = await segmentMainVehicle(
-            photosToProcess[i].file,
-            r.yoloBbox ?? null,
-            mainVehicle?.bbox ?? null
-          );
-          if (segResult && segResult.confidence > 0.3) {
-            cutout = await applyMaskToCutout(r.baseDataURL, segResult.maskDataURL);
-            console.log('[Pipeline] ✓ backend segmentation, conf=' + segResult.confidence);
-          }
-
-          // Strategy 2: Fallback — @imgly background removal + heuristic isolation
-          if (!cutout) {
-            console.log('[Pipeline] backend unavailable, using @imgly fallback');
-            const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
-            const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
-            const croppedCutout = await removeBackground(croppedUrl);
-            const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
-            const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
-            const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
-            cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
-          }
+          // @imgly background removal + heuristic isolation (primary pipeline)
+          const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
+          const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
+          const croppedCutout = await removeBackground(croppedUrl);
+          const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
+          const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
+          const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
+          const cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
           let shadowMatteUrl = null;
           if (USE_SOURCE_SHADOW_TRANSFER) {
             const shadow = await extractSourceShadow(r.baseDataURL, cutout);
