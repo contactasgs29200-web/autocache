@@ -6374,7 +6374,7 @@ export default function AutoCache() {
                     <div key={i} style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
                         <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#1e1e1e", display: "block" }} />
-                        {r.yoloBbox && r.imgW && (
+                        {!r.showroomDataURL && window.location.search.includes('plateDebug') && r.yoloBbox && r.imgW && (
                           <svg
                             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
                             viewBox={`0 0 ${r.imgW} ${r.imgH}`}
@@ -6745,8 +6745,8 @@ export default function AutoCache() {
               />
             )}
 
-            {/* ── Debug YOLO bbox + corners overlay (photo mode only, not showroom) ── */}
-            {!cropMode && !adjustMode && !lightbox.showroomDataURL && lightbox.yoloBbox && lightbox.imgW && (
+            {/* ── Debug YOLO bbox + corners overlay (only with ?plateDebug in URL) ── */}
+            {!cropMode && !adjustMode && !lightbox.showroomDataURL && window.location.search.includes('plateDebug') && lightbox.yoloBbox && lightbox.imgW && (
               <svg
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
                 viewBox={`0 0 ${lightbox.imgW} ${lightbox.imgH}`}
