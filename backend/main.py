@@ -1,4 +1,6 @@
+import base64
 import io
+import json
 import logging
 import math
 import os
@@ -7,7 +9,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from ultralytics import YOLO
@@ -33,6 +35,8 @@ _model: YOLO | None = None
 
 # Pretrained COCO model for general vehicle detection
 _vehicle_model: YOLO | None = None
+# Instance segmentation model for vehicle mask extraction
+_seg_model: YOLO | None = None
 _VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
 
@@ -1823,4 +1827,167 @@ async def detect_vehicles(file: UploadFile = File(...)):
         "count": len(vehicles),
         "vehicles": vehicles,
         "image_size": {"w": w, "h": h},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Instance segmentation — single main vehicle mask
+# ---------------------------------------------------------------------------
+
+def get_seg_model() -> YOLO:
+    global _seg_model
+    if _seg_model is not None:
+        return _seg_model
+    model_name = os.environ.get("SEG_MODEL", "yolov8n-seg.pt")
+    logger.info(f"Loading instance segmentation model: {model_name}")
+    _seg_model = YOLO(model_name)
+    return _seg_model
+
+
+@app.post("/segment-main-vehicle")
+async def segment_main_vehicle(
+    file: UploadFile = File(...),
+    plate_box: str = Form(None),
+    main_vehicle_box: str = Form(None),
+):
+    """
+    Segment the main vehicle instance from the image.
+    Returns a PNG alpha mask (base64) of the selected vehicle only.
+
+    Selection priority:
+    1. Instance whose mask contains the plate center
+    2. Instance with highest IoU vs main_vehicle_box
+    3. Largest instance
+    """
+    raw = await file.read()
+    pil = Image.open(io.BytesIO(raw)).convert("RGB")
+    img_w, img_h = pil.size
+    img_np = np.array(pil)
+
+    # Parse optional inputs
+    pb = json.loads(plate_box) if plate_box else None
+    mvb = json.loads(main_vehicle_box) if main_vehicle_box else None
+
+    plate_cx, plate_cy = -1.0, -1.0
+    if pb:
+        plate_cx = ((pb.get("x1", 0) + pb.get("x2", 0)) / 2) * img_w
+        plate_cy = ((pb.get("y1", 0) + pb.get("y2", 0)) / 2) * img_h
+
+    # Run instance segmentation
+    model = get_seg_model()
+    results = model.predict(
+        source=img_np,
+        conf=0.25,
+        iou=0.45,
+        retina_masks=True,  # high-res masks at original image size
+        verbose=False,
+    )
+
+    r = results[0]
+    if r.boxes is None or r.masks is None or len(r.boxes) == 0:
+        return {"success": False, "error": "no_instances", "instances_found": 0}
+
+    # Filter to vehicle classes only
+    vehicle_indices = []
+    for i, box in enumerate(r.boxes):
+        cls_id = int(box.cls[0])
+        if cls_id in _VEHICLE_CLASSES:
+            vehicle_indices.append(i)
+
+    if not vehicle_indices:
+        return {"success": False, "error": "no_vehicles", "instances_found": 0}
+
+    logger.info(f"[Segment] {len(vehicle_indices)} vehicle instances found")
+
+    # Score each vehicle instance to select the main one
+    best_idx = -1
+    best_score = -1.0
+    scores_debug = []
+
+    for vi in vehicle_indices:
+        box = r.boxes[vi]
+        cls_id = int(box.cls[0])
+        conf = float(box.conf[0])
+        x1, y1, x2, y2 = box.xyxyn[0].tolist()
+
+        # 1. Plate containment — does the mask contain the plate center?
+        plate_score = 0.0
+        if plate_cx >= 0:
+            mask_data = r.masks.data[vi].cpu().numpy()  # (mask_h, mask_w)
+            mh, mw = mask_data.shape
+            # Map plate center to mask coordinates
+            mpx = int(plate_cx / img_w * mw)
+            mpy = int(plate_cy / img_h * mh)
+            mpx = max(0, min(mw - 1, mpx))
+            mpy = max(0, min(mh - 1, mpy))
+            if mask_data[mpy, mpx] > 0.5:
+                plate_score = 1.0
+
+        # 2. IoU with main_vehicle_box
+        iou_score = 0.0
+        if mvb:
+            ix1 = max(x1, mvb.get("x1", 0))
+            iy1 = max(y1, mvb.get("y1", 0))
+            ix2 = min(x2, mvb.get("x2", 1))
+            iy2 = min(y2, mvb.get("y2", 1))
+            if ix2 > ix1 and iy2 > iy1:
+                inter = (ix2 - ix1) * (iy2 - iy1)
+                area_det = (x2 - x1) * (y2 - y1)
+                area_mvb = (mvb["x2"] - mvb["x1"]) * (mvb["y2"] - mvb["y1"])
+                union = area_det + area_mvb - inter
+                iou_score = inter / union if union > 0 else 0
+
+        # 3. Area
+        area = (x2 - x1) * (y2 - y1)
+
+        score = plate_score * 0.50 + iou_score * 0.30 + conf * 0.10 + min(area * 2, 0.1) * 0.10
+
+        scores_debug.append({
+            "class": _VEHICLE_CLASSES[cls_id],
+            "conf": round(conf, 3),
+            "plate": round(plate_score, 1),
+            "iou": round(iou_score, 3),
+            "area": round(area, 4),
+            "score": round(score, 4),
+        })
+
+        if score > best_score:
+            best_score = score
+            best_idx = vi
+
+    logger.info(f"[Segment] selected index={best_idx}, scores={scores_debug}")
+
+    # Extract the mask at original image resolution
+    mask_tensor = r.masks.data[best_idx].cpu().numpy()  # (mask_h, mask_w) float32
+    mh, mw = mask_tensor.shape
+
+    if mh != img_h or mw != img_w:
+        mask_full = cv2.resize(mask_tensor, (img_w, img_h), interpolation=cv2.INTER_LINEAR)
+    else:
+        mask_full = mask_tensor
+
+    # Threshold and clean up
+    mask_binary = (mask_full > 0.5).astype(np.uint8) * 255
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask_binary = cv2.morphologyEx(mask_binary, cv2.MORPH_CLOSE, kernel)
+
+    # Optional: feather edges with small blur for smoother compositing
+    mask_smooth = cv2.GaussianBlur(mask_binary, (3, 3), sigmaX=1.0)
+
+    # Encode as PNG (single-channel grayscale)
+    _, png_buf = cv2.imencode(".png", mask_smooth)
+    mask_b64 = base64.b64encode(png_buf.tobytes()).decode("ascii")
+
+    sel_box = r.boxes[best_idx]
+    sel_cls = int(sel_box.cls[0])
+
+    return {
+        "success": True,
+        "mask_base64": mask_b64,
+        "confidence": round(float(sel_box.conf[0]), 3),
+        "instance_class": _VEHICLE_CLASSES.get(sel_cls, str(sel_cls)),
+        "instances_found": len(vehicle_indices),
+        "selected_index": best_idx,
+        "scores": scores_debug,
+        "image_size": {"w": img_w, "h": img_h},
     }

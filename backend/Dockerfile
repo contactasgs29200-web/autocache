@@ -31,5 +31,9 @@ print(f'Model downloaded ({dest.stat().st_size//1024} KB)') \
 " 2>&1 || echo "Build-time download failed — model will be fetched at runtime"; \
     fi
 
+# Pre-download instance segmentation model at build time
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8n-seg.pt')" \
+    2>&1 || echo "Seg model download failed — will retry at runtime"
+
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

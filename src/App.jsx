@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import MaskEditor from "./components/MaskEditor.jsx";
 // SAM (Segment Anything Model) + @imgly fallback — chargé dynamiquement
 let samModel = null;
 let samProcessor = null;
@@ -4079,6 +4080,68 @@ async function detectVehicles(imageFile) {
   }
 }
 
+// Backend instance segmentation: returns mask of main vehicle only
+async function segmentMainVehicle(imageFile, plateBox, mainVehicleBox) {
+  const backendUrl = import.meta.env.VITE_YOLO_BACKEND_URL;
+  if (!backendUrl) return null;
+  try {
+    console.time('[Segment] backend');
+    const formData = new FormData();
+    formData.append('file', imageFile);
+    if (plateBox) formData.append('plate_box', JSON.stringify(plateBox));
+    if (mainVehicleBox) formData.append('main_vehicle_box', JSON.stringify(mainVehicleBox));
+    const r = await fetch(`${backendUrl}/segment-main-vehicle`, {
+      method: 'POST',
+      body: formData,
+    });
+    console.timeEnd('[Segment] backend');
+    if (!r.ok) { console.warn('[Segment] backend HTTP', r.status); return null; }
+    const d = await r.json();
+    if (!d.success) {
+      console.warn('[Segment] backend returned error:', d.error);
+      return null;
+    }
+    console.log('[Segment] success: ' + d.instance_class + ' conf=' + d.confidence +
+      ' instances=' + d.instances_found + ' selected=#' + d.selected_index);
+    if (d.scores) d.scores.forEach((s, i) => {
+      console.log('[Segment] score #' + i + ': ' + s.class + ' plate=' + s.plate +
+        ' iou=' + s.iou + ' area=' + s.area + ' → ' + s.score);
+    });
+    return {
+      maskDataURL: 'data:image/png;base64,' + d.mask_base64,
+      confidence: d.confidence,
+      instanceClass: d.instance_class,
+    };
+  } catch (e) {
+    console.warn('[Segment] failed:', e.message);
+    return null;
+  }
+}
+
+// Apply a grayscale mask PNG to the original image as alpha channel
+async function applyMaskToCutout(originalDataURL, maskDataURL) {
+  const [origImg, maskImg] = await Promise.all([loadImg(originalDataURL), loadImg(maskDataURL)]);
+  const W = origImg.naturalWidth || origImg.width;
+  const H = origImg.naturalHeight || origImg.height;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(origImg, 0, 0);
+  const imgData = ctx.getImageData(0, 0, W, H);
+  // Draw mask at original image dimensions
+  const mc = document.createElement('canvas');
+  mc.width = W; mc.height = H;
+  const mctx = mc.getContext('2d');
+  mctx.drawImage(maskImg, 0, 0, W, H);
+  const maskData = mctx.getImageData(0, 0, W, H).data;
+  // Use first channel of mask (grayscale) as alpha
+  for (let i = 0; i < W * H; i++) {
+    imgData.data[i * 4 + 3] = maskData[i * 4]; // R channel → alpha
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return c.toDataURL('image/png');
+}
+
 function selectMainVehicle(vehicles, plateBox, imgW, imgH) {
   if (!vehicles || vehicles.length === 0) return null;
   if (vehicles.length === 1) {
@@ -4791,6 +4854,7 @@ export default function AutoCache() {
   const [cropDrag, setCropDrag] = useState(null); // { type, startMx, startMy, startBox }
   const [cropAngle, setCropAngle] = useState(180); // 0-360, 180 = photo droite (0° de rotation)
   const [adjustMode, setAdjustMode] = useState(false);
+  const [showMaskEditor, setShowMaskEditor] = useState(false);
   const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
   const [manualPlateMode, setManualPlateMode] = useState(false); // true = pose manuelle (plaque non détectée)
@@ -5021,7 +5085,7 @@ export default function AutoCache() {
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
-          // Detect vehicles + select main → ROI crop → segment → uncrop → CC filter → hard gate
+          // Vehicle detection + instance segmentation (backend) or fallback (@imgly + heuristics)
           const vehicleResult = await detectVehicles(photosToProcess[i].file);
           const allVehicles = vehicleResult?.vehicles ?? [];
           const mainVehicle = selectMainVehicle(allVehicles, r.yoloBbox ?? null, r.imgW, r.imgH);
@@ -5029,13 +5093,30 @@ export default function AutoCache() {
           console.log('[Pipeline] mainVehicle=' + (mainVehicle ? mainVehicle.class : 'none') +
             ', secondary=' + secondaryVehicles.length +
             (secondaryVehicles.length > 0 ? ' [' + secondaryVehicles.map(s => s.class).join(',') + ']' : ''));
-          const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
-          const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
-          const croppedCutout = await removeBackground(croppedUrl);
-          const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
-          const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
-          const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
-          const cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
+
+          // Strategy 1: Backend instance segmentation (clean, per-instance mask)
+          let cutout = null;
+          const segResult = await segmentMainVehicle(
+            photosToProcess[i].file,
+            r.yoloBbox ?? null,
+            mainVehicle?.bbox ?? null
+          );
+          if (segResult && segResult.confidence > 0.3) {
+            cutout = await applyMaskToCutout(r.baseDataURL, segResult.maskDataURL);
+            console.log('[Pipeline] ✓ backend segmentation, conf=' + segResult.confidence);
+          }
+
+          // Strategy 2: Fallback — @imgly background removal + heuristic isolation
+          if (!cutout) {
+            console.log('[Pipeline] backend unavailable, using @imgly fallback');
+            const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
+            const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
+            const croppedCutout = await removeBackground(croppedUrl);
+            const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
+            const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
+            const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
+            cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
+          }
           let shadowMatteUrl = null;
           if (USE_SOURCE_SHADOW_TRANSFER) {
             const shadow = await extractSourceShadow(r.baseDataURL, cutout);
@@ -5295,6 +5376,7 @@ export default function AutoCache() {
     setLightbox(r);
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
+    setShowMaskEditor(false);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
     setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
     setShowroomZoom(r.showroomZoom ?? 1.0);
@@ -7290,6 +7372,92 @@ export default function AutoCache() {
               </span>
               {showroomNudging && <span style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace" }}>…</span>}
             </div>
+          )}
+
+          {/* ── Corriger le détourage (mask editor) ── */}
+          {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && !showMaskEditor && (
+            <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, display: 'flex', justifyContent: 'center' }}>
+              <button
+                onClick={() => setShowMaskEditor(true)}
+                style={{
+                  padding: '6px 16px', background: 'rgba(30,30,30,0.85)', color: '#d1d5db',
+                  border: '1px solid #444', borderRadius: 6, cursor: 'pointer', fontSize: 11,
+                  fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5,
+                  transition: 'all 0.15s',
+                }}
+                onMouseEnter={e => { e.target.style.background = '#374151'; e.target.style.color = '#fff'; }}
+                onMouseLeave={e => { e.target.style.background = 'rgba(30,30,30,0.85)'; e.target.style.color = '#d1d5db'; }}
+              >
+                Corriger le detourage
+              </button>
+            </div>
+          )}
+
+          {/* ── MaskEditor overlay ── */}
+          {showMaskEditor && lightbox.cutoutDataURL && (
+            <MaskEditor
+              cutoutDataURL={lightbox.cutoutDataURL}
+              originalDataURL={lightbox.baseDataURL || lightbox.cutoutDataURL}
+              onApply={async (correctedDataURL) => {
+                setShowMaskEditor(false);
+                try {
+                  // Recompute shadow from corrected mask
+                  const cutImg = await loadImg(correctedDataURL);
+                  const cW = cutImg.naturalWidth || cutImg.width;
+                  const cH = cutImg.naturalHeight || cutImg.height;
+                  const scanC = document.createElement('canvas');
+                  scanC.width = cW; scanC.height = cH;
+                  scanC.getContext('2d').drawImage(cutImg, 0, 0);
+                  const px = scanC.getContext('2d').getImageData(0, 0, cW, cH).data;
+                  let carL = cW, carR = 0, carT = cH, carB = 0;
+                  for (let y = 0; y < cH; y++)
+                    for (let x = 0; x < cW; x++)
+                      if (px[(y * cW + x) * 4 + 3] > 128) {
+                        if (x < carL) carL = x; if (x > carR) carR = x;
+                        if (y < carT) carT = y; if (y > carB) carB = y;
+                      }
+                  const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
+                  const newShadow = await generateShadowFromCarAlpha(correctedDataURL, carBounds, lightbox.yoloBbox ?? null);
+                  // Recomposite
+                  const wOpts = lightbox.wallLogoSrc ? {
+                    src: lightbox.wallLogoSrc,
+                    scale: lightbox.wallLogoScale ?? 0.18,
+                    opacity: lightbox.wallLogoOpacity ?? 0.85,
+                    x: lightbox.wallLogoPos?.x ?? 0.5,
+                    y: lightbox.wallLogoPos?.y ?? 0.25,
+                  } : null;
+                  const sr = await compositeCarOnBg(
+                    correctedDataURL, lightbox.showroomBgUrl, 2400, 1350,
+                    null, null, lightbox.bgColor || '#ffffff',
+                    0, 0, 1.0, true, wOpts, newShadow
+                  );
+                  // Update lightbox state
+                  setLightbox(prev => ({
+                    ...prev,
+                    cutoutDataURL: correctedDataURL,
+                    shadowMatteDataURL: newShadow,
+                    showroomDataURL: sr.dataURL,
+                    showroomBaseURL: sr.baseURL,
+                    showroomTransform: sr.transform,
+                    carBoundsCache: carBounds,
+                  }));
+                  // Update results array
+                  setResults(prev => prev.map((r, i) => i === lightbox.index ? {
+                    ...r,
+                    cutoutDataURL: correctedDataURL,
+                    shadowMatteDataURL: newShadow,
+                    showroomDataURL: sr.dataURL,
+                    showroomBaseURL: sr.baseURL,
+                    showroomTransform: sr.transform,
+                    carBoundsCache: carBounds,
+                  } : r));
+                  console.log('[MaskEditor] applied correction, regenerated shadow + composite');
+                } catch (e) {
+                  console.error('[MaskEditor] recomposite failed:', e);
+                }
+              }}
+              onCancel={() => setShowMaskEditor(false)}
+            />
           )}
 
           {/* ── Shadow adjustment sliders (debug only: ?showroomDebug=shadowControls) ── */}
