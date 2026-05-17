@@ -3102,7 +3102,7 @@ function filterContourArtifacts(contour, width, maxGap) {
 
 // ── Main vehicle isolation — connected-component filtering ──
 
-async function isolateMainVehicle(cutoutDataURL, plateBox, mainVehicle) {
+async function isolateMainVehicle(cutoutDataURL, plateBox, mainVehicle, secondaryVehicles = []) {
   console.time('[MainVehicle] isolate');
   const img = await loadImg(cutoutDataURL);
   const W = img.naturalWidth || img.width;
@@ -3198,6 +3198,12 @@ async function isolateMainVehicle(cutoutDataURL, plateBox, mainVehicle) {
     mvY2 = mainVehicle.bbox.y2 * H;
   }
 
+  // Secondary vehicle bboxes in pixel coords
+  const secBoxes = secondaryVehicles.map(sv => ({
+    x1: sv.bbox.x1 * W, y1: sv.bbox.y1 * H,
+    x2: sv.bbox.x2 * W, y2: sv.bbox.y2 * H,
+  }));
+
   let bestScore = -1, bestId = -1;
   for (const comp of components) {
     const sizeScore = comp.size / erodedCount;
@@ -3210,7 +3216,7 @@ async function isolateMainVehicle(cutoutDataURL, plateBox, mainVehicle) {
       plateScore = 1;
     }
 
-    // Overlap with mainVehicle bbox (IoU-like)
+    // Overlap with mainVehicle bbox
     let vehicleOverlap = 0;
     if (mvX1 >= 0) {
       const ox1 = Math.max(comp.minX, mvX1), oy1 = Math.max(comp.minY, mvY1);
@@ -3222,14 +3228,28 @@ async function isolateMainVehicle(cutoutDataURL, plateBox, mainVehicle) {
       }
     }
 
-    const score = vehicleOverlap * 0.35 + plateScore * 0.30 + sizeScore * 0.20 + centerScore * 0.15;
+    // Penalty: overlap with secondary vehicle bboxes
+    let secPenalty = 0;
+    for (const sb of secBoxes) {
+      const ox1 = Math.max(comp.minX, sb.x1), oy1 = Math.max(comp.minY, sb.y1);
+      const ox2 = Math.min(comp.maxX, sb.x2), oy2 = Math.min(comp.maxY, sb.y2);
+      if (ox2 > ox1 && oy2 > oy1) {
+        const interArea = (ox2 - ox1) * (oy2 - oy1);
+        const compArea = (comp.maxX - comp.minX) * (comp.maxY - comp.minY);
+        const overlap = compArea > 0 ? interArea / compArea : 0;
+        secPenalty = Math.max(secPenalty, overlap); // worst overlap
+      }
+    }
+
+    const score = vehicleOverlap * 0.35 + plateScore * 0.25 + sizeScore * 0.15 +
+                  centerScore * 0.10 - secPenalty * 0.40;
 
     console.log('[MainVehicle] comp #' + comp.id +
       ': size=' + comp.size + ' (' + (sizeScore * 100).toFixed(1) + '%)' +
       ', center=(' + Math.round(comp.cx) + ',' + Math.round(comp.cy) + ')' +
       ', bbox=[' + comp.minX + ',' + comp.minY + ']->[' + comp.maxX + ',' + comp.maxY + ']' +
       ', plateContains=' + (plateScore > 0) + ', vehOverlap=' + vehicleOverlap.toFixed(2) +
-      ', score=' + score.toFixed(3));
+      ', secPenalty=' + secPenalty.toFixed(2) + ', score=' + score.toFixed(3));
 
     if (score > bestScore) { bestScore = score; bestId = comp.id; }
   }
@@ -3878,17 +3898,72 @@ function selectMainVehicle(vehicles, plateBox, imgW, imgH) {
   return bestVehicle;
 }
 
-function estimateMainVehicleROI(mainVehicle, plateBox, imgW, imgH) {
-  // If we have a detected vehicle bbox, use it with safe margins (never cut wheels/roof/bumpers)
+// Compute secondary vehicles: all detected vehicles that don't overlap heavily with mainVehicle
+function getSecondaryVehicles(allVehicles, mainVehicle) {
+  if (!mainVehicle || !allVehicles || allVehicles.length <= 1) return [];
+  return allVehicles.filter(v => {
+    if (v === mainVehicle) return false;
+    // Skip detections that heavily overlap with mainVehicle (duplicate/overlapping YOLO boxes)
+    const mb = mainVehicle.bbox, vb = v.bbox;
+    const ox1 = Math.max(mb.x1, vb.x1), oy1 = Math.max(mb.y1, vb.y1);
+    const ox2 = Math.min(mb.x2, vb.x2), oy2 = Math.min(mb.y2, vb.y2);
+    if (ox2 > ox1 && oy2 > oy1) {
+      const inter = (ox2 - ox1) * (oy2 - oy1);
+      const vArea = (vb.x2 - vb.x1) * (vb.y2 - vb.y1);
+      if (vArea > 0 && inter / vArea > 0.50) return false; // overlapping with main = same car
+    }
+    return true;
+  });
+}
+
+function estimateMainVehicleROI(mainVehicle, plateBox, imgW, imgH, secondaryVehicles = []) {
+  // If we have a detected vehicle bbox, use it with safe margins
+  // Shrink margins on sides where secondary vehicles exist to exclude them
   if (mainVehicle) {
     const b = mainVehicle.bbox;
     const bw = b.x2 - b.x1, bh = b.y2 - b.y1;
-    return {
-      x1: Math.max(0, b.x1 - bw * 0.18),
-      y1: Math.max(0, b.y1 - bh * 0.15),
-      x2: Math.min(1, b.x2 + bw * 0.18),
-      y2: Math.min(1, b.y2 + bh * 0.12),
+    let marginL = bw * 0.18, marginR = bw * 0.18;
+    let marginT = bh * 0.15, marginB = bh * 0.12;
+
+    for (const sv of secondaryVehicles) {
+      const sb = sv.bbox;
+      // Secondary is to the RIGHT of main vehicle
+      if (sb.x1 > b.x2 - bw * 0.10) {
+        const gap = sb.x1 - b.x2;
+        marginR = Math.min(marginR, Math.max(bw * 0.05, gap * 0.5));
+        console.log('[ROI] shrink right margin: secondary ' + sv.class + ' at x1=' +
+          sb.x1.toFixed(3) + ' → marginR=' + marginR.toFixed(3));
+      }
+      // Secondary is to the LEFT of main vehicle
+      if (sb.x2 < b.x1 + bw * 0.10) {
+        const gap = b.x1 - sb.x2;
+        marginL = Math.min(marginL, Math.max(bw * 0.05, gap * 0.5));
+        console.log('[ROI] shrink left margin: secondary ' + sv.class + ' at x2=' +
+          sb.x2.toFixed(3) + ' → marginL=' + marginL.toFixed(3));
+      }
+      // Secondary is ABOVE main vehicle
+      if (sb.y2 < b.y1 + bh * 0.10) {
+        const gap = b.y1 - sb.y2;
+        marginT = Math.min(marginT, Math.max(bh * 0.05, gap * 0.5));
+      }
+      // Secondary is BELOW main vehicle
+      if (sb.y1 > b.y2 - bh * 0.10) {
+        const gap = sb.y1 - b.y2;
+        marginB = Math.min(marginB, Math.max(bh * 0.05, gap * 0.5));
+      }
+    }
+
+    const roi = {
+      x1: Math.max(0, b.x1 - marginL),
+      y1: Math.max(0, b.y1 - marginT),
+      x2: Math.min(1, b.x2 + marginR),
+      y2: Math.min(1, b.y2 + marginB),
     };
+    console.log('[ROI] mainVehicle bbox=(' + b.x1.toFixed(3) + ',' + b.y1.toFixed(3) + ')-(' +
+      b.x2.toFixed(3) + ',' + b.y2.toFixed(3) + ') → ROI=(' + roi.x1.toFixed(3) + ',' +
+      roi.y1.toFixed(3) + ')-(' + roi.x2.toFixed(3) + ',' + roi.y2.toFixed(3) + ')' +
+      ' secondary=' + secondaryVehicles.length);
+    return roi;
   }
   // Fallback: estimate from plate position — generous to avoid cutting the car
   if (plateBox) {
@@ -3905,9 +3980,9 @@ function estimateMainVehicleROI(mainVehicle, plateBox, imgW, imgH) {
   return null;
 }
 
-// Hard gate: zero alpha outside mainVehicle bbox (expanded) — last resort filter
+// Hard gate: zero alpha outside mainVehicle bbox AND inside secondary vehicle zones
 // Uses mainVehicle bbox when available, falls back to plate estimate only as last resort
-async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, imgH) {
+async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, imgH, secondaryVehicles = []) {
   console.time('[HardGate]');
 
   // Determine the gate box (normalized coordinates)
@@ -3924,7 +3999,6 @@ async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, 
     gateY2 = b.y2 + bh * 0.15;
     gateSource = 'vehicleBox';
   } else if (plateBox) {
-    // Fallback: large plate-based estimate (be generous to avoid cutting car)
     const pcx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
     const pcy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
     gateX1 = pcx - 0.45;
@@ -3960,31 +4034,61 @@ async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, 
   const py1 = Math.round(gateY1 * H);
   const py2 = Math.round(gateY2 * H);
 
-  // Soft feather zone
+  // Main vehicle bbox in pixels (for exclusion zone overlap check)
+  let mainPx1 = px1, mainPy1 = py1, mainPx2 = px2, mainPy2 = py2;
+  if (mainVehicle) {
+    mainPx1 = Math.round(mainVehicle.bbox.x1 * W);
+    mainPy1 = Math.round(mainVehicle.bbox.y1 * H);
+    mainPx2 = Math.round(mainVehicle.bbox.x2 * W);
+    mainPy2 = Math.round(mainVehicle.bbox.y2 * H);
+  }
+
+  // Build secondary exclusion zones (only the parts that don't overlap with mainVehicle)
+  const exclusionZones = secondaryVehicles.map(sv => {
+    const sb = sv.bbox;
+    return {
+      x1: Math.round(sb.x1 * W), y1: Math.round(sb.y1 * H),
+      x2: Math.round(sb.x2 * W), y2: Math.round(sb.y2 * H),
+    };
+  });
+
   const feather = Math.round(Math.min(W, H) * 0.012);
-  let removed = 0;
+  let removedGate = 0, removedExcl = 0;
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const idx = (y * W + x) * 4;
       if (data[idx + 3] === 0) continue;
 
+      // 1. Outside main gate → zero
       let dx = 0, dy = 0;
       if (x < px1) dx = px1 - x;
       else if (x > px2) dx = x - px2;
       if (y < py1) dy = py1 - y;
       else if (y > py2) dy = y - py2;
 
-      if (dx === 0 && dy === 0) continue; // Inside gate
+      if (dx > 0 || dy > 0) {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > feather) {
+          data[idx + 3] = 0;
+          removedGate++;
+        } else {
+          const factor = dist / feather;
+          data[idx + 3] = Math.round(data[idx + 3] * (1 - factor));
+          if (data[idx + 3] < 5) { data[idx + 3] = 0; removedGate++; }
+        }
+        continue;
+      }
 
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > feather) {
-        data[idx + 3] = 0;
-        removed++;
-      } else {
-        const factor = dist / feather;
-        data[idx + 3] = Math.round(data[idx + 3] * (1 - factor));
-        if (data[idx + 3] < 5) { data[idx + 3] = 0; removed++; }
+      // 2. Inside an exclusion zone AND outside the main vehicle bbox → zero
+      if (x < mainPx1 || x > mainPx2 || y < mainPy1 || y > mainPy2) {
+        for (const ez of exclusionZones) {
+          if (x >= ez.x1 && x <= ez.x2 && y >= ez.y1 && y <= ez.y2) {
+            data[idx + 3] = 0;
+            removedExcl++;
+            break;
+          }
+        }
       }
     }
   }
@@ -3992,10 +4096,11 @@ async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, 
   ctx.putImageData(imgData, 0, 0);
   console.log('[HardGate] source=' + gateSource +
     ' gate=[' + px1 + ',' + py1 + ']->[' + px2 + ',' + py2 + '] (img ' + W + 'x' + H + ')' +
-    ' removed=' + removed + ' pixels');
+    ' removedGate=' + removedGate + ' removedExcl=' + removedExcl +
+    ' exclusionZones=' + exclusionZones.length);
   console.timeEnd('[HardGate]');
 
-  if (removed === 0) return cutoutDataURL;
+  if (removedGate === 0 && removedExcl === 0) return cutoutDataURL;
   return c.toDataURL('image/png');
 }
 
@@ -4658,12 +4763,16 @@ export default function AutoCache() {
           const vehicleResult = await detectVehicles(photosToProcess[i].file);
           const allVehicles = vehicleResult?.vehicles ?? [];
           const mainVehicle = selectMainVehicle(allVehicles, r.yoloBbox ?? null, r.imgW, r.imgH);
-          const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH);
+          const secondaryVehicles = getSecondaryVehicles(allVehicles, mainVehicle);
+          console.log('[Pipeline] mainVehicle=' + (mainVehicle ? mainVehicle.class : 'none') +
+            ', secondary=' + secondaryVehicles.length +
+            (secondaryVehicles.length > 0 ? ' [' + secondaryVehicles.map(s => s.class).join(',') + ']' : ''));
+          const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
           const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
           const croppedCutout = await removeBackground(croppedUrl);
           const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
-          const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle);
-          const cutout = await hardGateByVehicleBox(isolatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH);
+          const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
+          const cutout = await hardGateByVehicleBox(isolatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
           let shadowMatteUrl = null;
           if (USE_SOURCE_SHADOW_TRANSFER) {
             const shadow = await extractSourceShadow(r.baseDataURL, cutout);
@@ -4701,18 +4810,29 @@ export default function AutoCache() {
             dctx.drawImage(debugImg, 0, 0);
 
             if (showroomDebug === 'mainVehicleBoxes') {
+              // Draw secondary vehicle exclusion zones (semi-transparent red overlay)
+              for (const sv of secondaryVehicles) {
+                dctx.fillStyle = 'rgba(255,0,0,0.18)';
+                const bx = sv.bbox.x1 * dW, by = sv.bbox.y1 * dH;
+                const bw = (sv.bbox.x2 - sv.bbox.x1) * dW, bh = (sv.bbox.y2 - sv.bbox.y1) * dH;
+                dctx.fillRect(bx, by, bw, bh);
+              }
               // Draw all detected vehicle bboxes
               for (const v of allVehicles) {
                 const isSelected = mainVehicle && v === mainVehicle;
-                dctx.strokeStyle = isSelected ? '#00ff00' : '#ff4444';
+                const isSecondary = secondaryVehicles.includes(v);
+                dctx.strokeStyle = isSelected ? '#00ff00' : (isSecondary ? '#ff4444' : '#ff8800');
                 dctx.lineWidth = isSelected ? 4 : 2;
+                if (!isSelected && !isSecondary) dctx.setLineDash([4, 4]); // duplicate overlapping box
                 const bx = v.bbox.x1 * dW, by = v.bbox.y1 * dH;
                 const bw = (v.bbox.x2 - v.bbox.x1) * dW, bh = (v.bbox.y2 - v.bbox.y1) * dH;
                 dctx.strokeRect(bx, by, bw, bh);
+                dctx.setLineDash([]);
                 // Label
-                dctx.fillStyle = isSelected ? '#00ff00' : '#ff4444';
+                dctx.fillStyle = isSelected ? '#00ff00' : (isSecondary ? '#ff4444' : '#ff8800');
                 dctx.font = 'bold 20px monospace';
-                const label = v.class + ' ' + (v.conf * 100).toFixed(0) + '%' + (isSelected ? ' ★' : '');
+                const tag = isSelected ? ' MAIN' : (isSecondary ? ' EXCL' : ' DUP');
+                const label = v.class + ' ' + (v.conf * 100).toFixed(0) + '%' + tag;
                 dctx.fillText(label, bx + 4, by - 6);
               }
               // Draw plate box
@@ -4730,10 +4850,10 @@ export default function AutoCache() {
                 dctx.fillText('PLATE', px + 4, py - 4);
               }
               dctx.fillStyle = 'rgba(0,0,0,0.6)';
-              dctx.fillRect(0, 0, 500, 30);
+              dctx.fillRect(0, 0, 600, 30);
               dctx.fillStyle = '#fff';
               dctx.font = '18px monospace';
-              dctx.fillText('mainVehicleBoxes — green=selected, red=others, yellow=plate', 10, 22);
+              dctx.fillText('mainVehicleBoxes — green=MAIN, red=EXCL, orange=DUP, yellow=plate', 10, 22);
             } else if (showroomDebug === 'mainROI') {
               // Draw ROI rectangle
               if (roi) {
@@ -4748,6 +4868,19 @@ export default function AutoCache() {
                 dctx.lineWidth = 3;
                 dctx.strokeRect(roi.x1 * dW, roi.y1 * dH, (roi.x2 - roi.x1) * dW, (roi.y2 - roi.y1) * dH);
               }
+              // Draw secondary vehicle exclusion zones
+              for (const sv of secondaryVehicles) {
+                dctx.fillStyle = 'rgba(255,0,0,0.25)';
+                const bx = sv.bbox.x1 * dW, by = sv.bbox.y1 * dH;
+                const bw = (sv.bbox.x2 - sv.bbox.x1) * dW, bh = (sv.bbox.y2 - sv.bbox.y1) * dH;
+                dctx.fillRect(bx, by, bw, bh);
+                dctx.strokeStyle = '#ff4444';
+                dctx.lineWidth = 2;
+                dctx.strokeRect(bx, by, bw, bh);
+                dctx.fillStyle = '#ff4444';
+                dctx.font = 'bold 14px monospace';
+                dctx.fillText('EXCL ' + sv.class, bx + 4, by - 4);
+              }
               // Draw selected vehicle bbox
               if (mainVehicle) {
                 dctx.strokeStyle = '#00ff00';
@@ -4760,10 +4893,10 @@ export default function AutoCache() {
                 dctx.setLineDash([]);
               }
               dctx.fillStyle = 'rgba(0,0,0,0.6)';
-              dctx.fillRect(0, 0, 450, 30);
+              dctx.fillRect(0, 0, 550, 30);
               dctx.fillStyle = '#fff';
               dctx.font = '18px monospace';
-              dctx.fillText('mainROI — cyan=ROI, green=vehicle, dark=excluded', 10, 22);
+              dctx.fillText('mainROI — cyan=ROI, green=vehicle, red=exclusion, dark=outside', 10, 22);
             }
             debugDataURL = dc.toDataURL('image/jpeg', 0.95);
           }
