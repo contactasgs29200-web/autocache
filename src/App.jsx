@@ -5201,10 +5201,10 @@ export default function AutoCache() {
     if (!user?.id || subInfoLoading) return;
     setSubInfoLoading(true);
     try {
-      const r = await fetch('/api/subscription-info', {
+      const r = await fetch('/api/customer-portal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id }),
+        body: JSON.stringify({ userId: user.id, action: 'subscription-info' }),
       });
       const d = await r.json();
       if (d.hasSubscription) {

@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
 
-  const { userId } = req.body || {};
+  const { userId, action } = req.body || {};
   if (!userId) return res.status(400).json({ error: "Missing userId" });
 
   const supabase = createClient(
@@ -17,9 +17,32 @@ export default async function handler(req, res) {
   if (error || !user) return res.status(404).json({ error: "Utilisateur introuvable" });
 
   const stripeCustomerId = user.user_metadata?.stripe_customer_id;
-  if (!stripeCustomerId) return res.status(400).json({ error: "Aucun compte Stripe associé" });
-
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+  /* ── action: "subscription-info" ── */
+  if (action === "subscription-info") {
+    if (!stripeCustomerId) return res.status(200).json({ hasSubscription: false });
+    try {
+      const subscriptions = await stripe.subscriptions.list({
+        customer: stripeCustomerId, status: "active", limit: 1,
+      });
+      if (subscriptions.data.length === 0) return res.status(200).json({ hasSubscription: false });
+      const sub = subscriptions.data[0];
+      return res.status(200).json({
+        hasSubscription: true,
+        periodStart: sub.current_period_start,
+        periodEnd: sub.current_period_end,
+        plan: sub.metadata?.plan || null,
+        status: sub.status,
+      });
+    } catch (e) {
+      console.error("Subscription info error:", e);
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  /* ── default: portal session ── */
+  if (!stripeCustomerId) return res.status(400).json({ error: "Aucun compte Stripe associé" });
   const origin = req.headers.origin || "https://autocache.fr";
 
   try {
