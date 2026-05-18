@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import MaskEditor from "./components/MaskEditor.jsx";
+import Tutorial from "./components/Tutorial.jsx";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -4689,6 +4690,7 @@ export default function AutoCache() {
   const [showPlansModal, setShowPlansModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [showCreditPopup, setShowCreditPopup] = useState(false);
   const [subInfo, setSubInfo] = useState(null); // { periodStart, periodEnd, plan, daysLeft }
   const [subInfoLoading, setSubInfoLoading] = useState(false);
@@ -4851,6 +4853,27 @@ export default function AutoCache() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  // ── Didacticiel automatique à la première connexion ──
+  useEffect(() => {
+    if (!user || authLoading) return;
+    if (!user.user_metadata?.tutorial_seen) {
+      // Basculer sur l'onglet Configuration pour que les éléments cibles existent
+      setTab("setup");
+      const t = setTimeout(() => setShowTutorial(true), 600);
+      return () => clearTimeout(t);
+    }
+  }, [user, authLoading]);
+
+  const closeTutorial = useCallback(async () => {
+    setShowTutorial(false);
+    if (user && !user.user_metadata?.tutorial_seen) {
+      try {
+        await supabase.auth.updateUser({ data: { tutorial_seen: true } });
+        setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, tutorial_seen: true } } : prev);
+      } catch (e) { console.warn('[Tutorial] save failed:', e.message); }
+    }
+  }, [user]);
 
   // ── Auto-déconnexion après 1 h d'inactivité ──
   useEffect(() => {
@@ -5840,7 +5863,7 @@ export default function AutoCache() {
           </div>
           <nav style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 8 }}>
             {[["setup", isMobile ? "Config" : "Configuration"], ["results", `Résultats${results.length ? ` · ${results.length}` : ""}`]].map(([t, label]) => (
-              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: isMobile ? "7px 10px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", minHeight: "unset" }}>{label}</button>
+              <button key={t} onClick={() => setTab(t)} {...(t === "results" ? { "data-tutorial": "results-tab" } : {})} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: isMobile ? "7px 10px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", minHeight: "unset" }}>{label}</button>
             ))}
             {!isMobile && <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />}
             {/* ── Compteur crédits + popup abonnement ── */}
@@ -5850,7 +5873,7 @@ export default function AutoCache() {
               const isExpired = left === 0;
               const isLow = left <= (PLAN_LIMIT <= 30 ? 5 : 20);
               return (
-                <div ref={creditPopupRef} style={{ position: "relative" }}>
+                <div ref={creditPopupRef} data-tutorial="credits" style={{ position: "relative" }}>
                   <div onClick={(e) => {
                     e.stopPropagation();
                     const next = !showCreditPopup;
@@ -5975,6 +5998,7 @@ export default function AutoCache() {
                     { icon: "💳", label: "Abonnement", action: () => { setSettingsOpen(false); setShowPlansModal(true); } },
                     { icon: "🎟", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
                     { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); setShowContactModal(true); } },
+                    { icon: "📖", label: "Revoir le didacticiel", action: () => { setSettingsOpen(false); setShowTutorial(true); } },
                   ].map((item, i) => (
                     <button key={i} onClick={item.action}
                       style={{
@@ -6016,7 +6040,7 @@ export default function AutoCache() {
         {tab === "setup" && (
           <div style={{ maxWidth: 980, margin: "0 auto", padding: isMobile ? "16px 12px" : "32px 28px", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 16 : 28, alignItems: "start" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-              <section>
+              <section data-tutorial="logo">
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>01 — Cache plaque</div>
 
                 {/* ── Onglets Import / Générer ── */}
@@ -6155,7 +6179,7 @@ export default function AutoCache() {
                 </div>
               </section>
 
-              <section>
+              <section data-tutorial="enhancements">
                 {/* ── Cases à cocher : améliorations photo ── */}
                 {[
                   {
@@ -6220,7 +6244,7 @@ export default function AutoCache() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-              <section>
+              <section data-tutorial="photos">
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>02 — Photos de véhicules</div>
                 <div onDragOver={e => { e.preventDefault(); setDragOver("photos"); }} onDragLeave={() => setDragOver(null)}
                   onDrop={e => { e.preventDefault(); setDragOver(null); handlePhotoFiles(e.dataTransfer.files); }}
@@ -6253,7 +6277,7 @@ export default function AutoCache() {
               </section>
 
               {/* ── 03 — Showroom Virtuel ── */}
-              <section>
+              <section data-tutorial="showroom">
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Showroom Virtuel</div>
                 <div onClick={() => { if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); }}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#1c1c1c"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
@@ -6444,7 +6468,7 @@ export default function AutoCache() {
                 )}
               </section>
 
-              <section>
+              <section data-tutorial="process">
                 <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "#1a1a1a", color: canStart ? "#090909" : "#444", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
                   {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}${showroomEnabled ? " + Showroom" : ""}`}
                 </button>
@@ -8007,6 +8031,11 @@ export default function AutoCache() {
             <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
           </div>
         </div>
+      )}
+
+      {/* ── Didacticiel interactif ── */}
+      {showTutorial && (
+        <Tutorial onClose={closeTutorial} isMobile={isMobile} />
       )}
     </div>
   );
