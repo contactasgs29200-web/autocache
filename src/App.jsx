@@ -263,11 +263,12 @@ function cornersFromShowroom(sc, t) {
 
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
-// Uses supersampled offscreen canvas when the logo has more resolution
-// than the plate area to preserve sharp text and details.
+// Quality pipeline: multi-step halving → axis-aligned fast path or
+// supersampled perspective rendering → high-quality composite.
 function drawPerspective(ctx, img, tl, tr, br, bl) {
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
+  if (iw < 1 || ih < 1) return;
 
   // Bounding box of the output quad
   const bboxL = Math.floor(Math.min(tl.x, tr.x, br.x, bl.x));
@@ -278,8 +279,38 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   const plateH = bboxB - bboxT;
   if (plateW < 1 || plateH < 1) return;
 
-  // Supersample: render at higher resolution when logo has more detail
-  const ssScale = Math.max(1, Math.min(iw / plateW, 4));
+  // ── Step 1: multi-step halving ──
+  // Canvas drawImage handles 2× downscale well but degrades at 4×+.
+  // Halve the source progressively until it's close to the output size.
+  const targetW = Math.max(plateW * 3, 600);
+  let src = img, sw = iw, sh = ih;
+  while (sw > targetW * 2 && sw > 2) {
+    const half = document.createElement('canvas');
+    half.width = Math.round(sw / 2);
+    half.height = Math.round(sh / 2);
+    const hCtx = half.getContext('2d');
+    hCtx.imageSmoothingEnabled = true;
+    hCtx.imageSmoothingQuality = 'high';
+    hCtx.drawImage(src, 0, 0, half.width, half.height);
+    src = half; sw = half.width; sh = half.height;
+  }
+
+  // ── Step 2: axis-aligned fast path ──
+  // Near-rectangular plates bypass the band decomposition entirely
+  // for a single, clean drawImage call.
+  const eps = 1.5;
+  if (Math.abs(tl.y - tr.y) < eps && Math.abs(bl.y - br.y) < eps &&
+      Math.abs(tl.x - bl.x) < eps && Math.abs(tr.x - br.x) < eps) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, tl.x, tl.y, tr.x - tl.x, bl.y - tl.y);
+    ctx.restore();
+    return;
+  }
+
+  // ── Step 3: supersampled perspective ──
+  const ssScale = Math.max(1, Math.min(sw / plateW, 4));
   const useOffscreen = ssScale > 1.5;
 
   let tCtx, sTl, sTr, sBr, sBl, offCanvas;
@@ -312,12 +343,12 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
     const x11 = lerp(sTr.x, sBr.x, t2), y11 = lerp(sTr.y, sBr.y, t2);
     const mlx = lerp(sTl.x, sBl.x, tm), mly = lerp(sTl.y, sBl.y, tm);
     const mrx = lerp(sTr.x, sBr.x, tm), mry = lerp(sTr.y, sBr.y, tm);
-    const sym = ih * tm;
-    const srcStripH = ih / STEPS;
+    const sym = sh * tm;
+    const srcStripH = sh / STEPS;
     const avgDx = ((x01 - x00) + (x11 - x10)) / 2;
     const avgDy = ((y01 - y00) + (y11 - y10)) / 2;
-    const a = (mrx - mlx) / iw;
-    const b = (mry - mly) / iw;
+    const a = (mrx - mlx) / sw;
+    const b = (mry - mly) / sw;
     const c = avgDx / srcStripH;
     const d = avgDy / srcStripH;
     const e = mlx - c * sym;
@@ -329,7 +360,7 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
     tCtx.closePath();
     tCtx.clip();
     tCtx.transform(a, b, c, d, e, f);
-    tCtx.drawImage(img, 0, 0, iw, ih);
+    tCtx.drawImage(src, 0, 0, sw, sh);
     tCtx.restore();
   }
   tCtx.restore();
