@@ -263,28 +263,55 @@ function cornersFromShowroom(sc, t) {
 
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
+// Uses supersampled offscreen canvas when the logo has more resolution
+// than the plate area to preserve sharp text and details.
 function drawPerspective(ctx, img, tl, tr, br, bl) {
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
-  // Nombre de bandes adaptatif : au moins 1 bande par pixel de hauteur (min 120, max 400)
+
+  // Bounding box of the output quad
+  const bboxL = Math.floor(Math.min(tl.x, tr.x, br.x, bl.x));
+  const bboxR = Math.ceil(Math.max(tl.x, tr.x, br.x, bl.x));
+  const bboxT = Math.floor(Math.min(tl.y, tr.y, br.y, bl.y));
+  const bboxB = Math.ceil(Math.max(tl.y, tr.y, br.y, bl.y));
+  const plateW = bboxR - bboxL;
+  const plateH = bboxB - bboxT;
+  if (plateW < 1 || plateH < 1) return;
+
+  // Supersample: render at higher resolution when logo has more detail
+  const ssScale = Math.max(1, Math.min(iw / plateW, 4));
+  const useOffscreen = ssScale > 1.5;
+
+  let tCtx, sTl, sTr, sBr, sBl, offCanvas;
+  if (useOffscreen) {
+    offCanvas = document.createElement('canvas');
+    offCanvas.width = Math.ceil(plateW * ssScale);
+    offCanvas.height = Math.ceil(plateH * ssScale);
+    tCtx = offCanvas.getContext('2d');
+    const m = p => ({ x: (p.x - bboxL) * ssScale, y: (p.y - bboxT) * ssScale });
+    sTl = m(tl); sTr = m(tr); sBr = m(br); sBl = m(bl);
+  } else {
+    tCtx = ctx;
+    sTl = tl; sTr = tr; sBr = br; sBl = bl;
+  }
+
   const outH = Math.max(
-    Math.abs(bl.y - tl.y), Math.abs(br.y - tr.y),
-    Math.hypot(bl.x - tl.x, bl.y - tl.y), Math.hypot(br.x - tr.x, br.y - tr.y)
+    Math.abs(sBl.y - sTl.y), Math.abs(sBr.y - sTr.y),
+    Math.hypot(sBl.x - sTl.x, sBl.y - sTl.y), Math.hypot(sBr.x - sTr.x, sBr.y - sTr.y)
   );
-  const STEPS = Math.max(120, Math.min(400, Math.ceil(outH)));
-  ctx.save();
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
+  const STEPS = Math.max(120, Math.min(800, Math.ceil(outH)));
+  tCtx.save();
+  tCtx.imageSmoothingEnabled = true;
+  tCtx.imageSmoothingQuality = 'high';
   for (let i = 0; i < STEPS; i++) {
-    // Chevauchement de 1.5px entre bandes pour éliminer tout gap visible
     const overlap = 1.5 / outH;
     const t1 = Math.max(0, i / STEPS - overlap), t2 = Math.min(1, (i + 1) / STEPS + overlap), tm = (i + 0.5) / STEPS;
-    const x00 = lerp(tl.x, bl.x, t1), y00 = lerp(tl.y, bl.y, t1);
-    const x10 = lerp(tr.x, br.x, t1), y10 = lerp(tr.y, br.y, t1);
-    const x01 = lerp(tl.x, bl.x, t2), y01 = lerp(tl.y, bl.y, t2);
-    const x11 = lerp(tr.x, br.x, t2), y11 = lerp(tr.y, br.y, t2);
-    const mlx = lerp(tl.x, bl.x, tm), mly = lerp(tl.y, bl.y, tm);
-    const mrx = lerp(tr.x, br.x, tm), mry = lerp(tr.y, br.y, tm);
+    const x00 = lerp(sTl.x, sBl.x, t1), y00 = lerp(sTl.y, sBl.y, t1);
+    const x10 = lerp(sTr.x, sBr.x, t1), y10 = lerp(sTr.y, sBr.y, t1);
+    const x01 = lerp(sTl.x, sBl.x, t2), y01 = lerp(sTl.y, sBl.y, t2);
+    const x11 = lerp(sTr.x, sBr.x, t2), y11 = lerp(sTr.y, sBr.y, t2);
+    const mlx = lerp(sTl.x, sBl.x, tm), mly = lerp(sTl.y, sBl.y, tm);
+    const mrx = lerp(sTr.x, sBr.x, tm), mry = lerp(sTr.y, sBr.y, tm);
     const sym = ih * tm;
     const srcStripH = ih / STEPS;
     const avgDx = ((x01 - x00) + (x11 - x10)) / 2;
@@ -295,17 +322,25 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
     const d = avgDy / srcStripH;
     const e = mlx - c * sym;
     const f = mly - d * sym;
+    tCtx.save();
+    tCtx.beginPath();
+    tCtx.moveTo(x00, y00); tCtx.lineTo(x10, y10);
+    tCtx.lineTo(x11, y11); tCtx.lineTo(x01, y01);
+    tCtx.closePath();
+    tCtx.clip();
+    tCtx.transform(a, b, c, d, e, f);
+    tCtx.drawImage(img, 0, 0, iw, ih);
+    tCtx.restore();
+  }
+  tCtx.restore();
+
+  if (useOffscreen) {
     ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(x00, y00); ctx.lineTo(x10, y10);
-    ctx.lineTo(x11, y11); ctx.lineTo(x01, y01);
-    ctx.closePath();
-    ctx.clip();
-    ctx.transform(a, b, c, d, e, f);
-    ctx.drawImage(img, 0, 0, iw, ih);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(offCanvas, bboxL, bboxT, plateW, plateH);
     ctx.restore();
   }
-  ctx.restore();
 }
 
 // Unified plate overlay renderer — fill bg, perspective draw, feather + boost.
