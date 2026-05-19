@@ -4837,6 +4837,10 @@ export default function AutoCache() {
   const [genBorderColor, setGenBorderColor] = useState("#ffffff");
   const [genBorderWidth, setGenBorderWidth] = useState(0); // 0–10 : épaisseur du liseret
   const [logoRadius, setLogoRadius] = useState(1); // 0–10 : arrondi des coins, commun import+génération
+  const [logoCropActive, setLogoCropActive] = useState(false);
+  const [logoCropBox, setLogoCropBox] = useState({ x: 0, y: 0, w: 1, h: 1 });
+  const [logoCropDrag, setLogoCropDrag] = useState(null);
+  const [logoOriginal, setLogoOriginal] = useState(null);
   const [lightbox, setLightbox] = useState(null);
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
@@ -4853,6 +4857,7 @@ export default function AutoCache() {
   const [settingsOpen, setSettingsOpen] = useState(false); // menu settings en haut à droite
   const settingsRef = useRef(null); // ref pour fermer au clic extérieur
   const logoRef        = useRef();
+  const logoCropContainerRef = useRef(null);
   const photosRef      = useRef();
   const cropImgRef       = useRef(null); // ref sur l'<img> de la lightbox (hors crop)
   const cropCanvasRef    = useRef(null); // canvas live-preview en mode Rogner
@@ -4914,6 +4919,8 @@ export default function AutoCache() {
         setLogo({ file: null, preview: savedPreview, generated: wasGenerated, bgColor: savedBg });
         setLogoMode('import');
       }
+      const savedOriginal = localStorage.getItem('ac_logo_original');
+      if (savedOriginal) setLogoOriginal(savedOriginal);
       const savedWallMode = localStorage.getItem('ac_wall_logo_mode');
       const savedWallLogo = localStorage.getItem('ac_wall_logo');
       if (savedWallMode === 'image' && savedWallLogo) {
@@ -4932,6 +4939,21 @@ export default function AutoCache() {
       if (logo.bgColor) localStorage.setItem('ac_logo_bgcolor', logo.bgColor);
     } catch(e) {}
   }, [logo]);
+
+  useEffect(() => {
+    try {
+      if (logoOriginal) localStorage.setItem('ac_logo_original', logoOriginal);
+      else localStorage.removeItem('ac_logo_original');
+    } catch(e) {}
+  }, [logoOriginal]);
+
+  useEffect(() => {
+    if (!logoCropDrag) return;
+    const up = () => setLogoCropDrag(null);
+    document.addEventListener('mouseup', up);
+    document.addEventListener('touchend', up);
+    return () => { document.removeEventListener('mouseup', up); document.removeEventListener('touchend', up); };
+  }, [logoCropDrag]);
 
   // Sauvegarder logo mural → localStorage
   useEffect(() => {
@@ -5025,9 +5047,60 @@ export default function AutoCache() {
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
     setLogoMode("import");
+    setLogoOriginal(null);
+    setLogoCropActive(false);
+    setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 });
     const reader = new FileReader();
     reader.onload = (e) => setLogo({ file: f, preview: e.target.result, generated: false, bgColor: '#ffffff' });
     reader.readAsDataURL(f);
+  };
+
+  const startLogoCropDrag = (e, type) => {
+    e.preventDefault(); e.stopPropagation();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    setLogoCropDrag({ type, startMx: cx, startMy: cy, startBox: { ...logoCropBox } });
+  };
+
+  const onLogoCropMove = (e) => {
+    if (!logoCropDrag || !logoCropContainerRef.current) return;
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = logoCropContainerRef.current.getBoundingClientRect();
+    const dx = (cx - logoCropDrag.startMx) / rect.width;
+    const dy = (cy - logoCropDrag.startMy) / rect.height;
+    let { x, y, w, h } = logoCropDrag.startBox;
+    const t = logoCropDrag.type;
+    if (t === 'move')              { x += dx; y += dy; }
+    if (t === 'tl' || t === 'bl') { const nw = w - dx; if (nw > 0.05) { x += dx; w = nw; } }
+    if (t === 'tr' || t === 'br') { w = Math.max(0.05, w + dx); }
+    if (t === 'tl' || t === 'tr') { const nh = h - dy; if (nh > 0.05) { y += dy; h = nh; } }
+    if (t === 'bl' || t === 'br') { h = Math.max(0.05, h + dy); }
+    x = Math.max(0, Math.min(1 - w, x));
+    y = Math.max(0, Math.min(1 - h, y));
+    w = Math.min(1 - x, w); h = Math.min(1 - y, h);
+    setLogoCropBox({ x, y, w, h });
+  };
+
+  const applyLogoCrop = () => {
+    if (!logo?.preview) return;
+    const srcDataURL = logoOriginal || logo.preview;
+    const img = new Image();
+    img.onload = () => {
+      const { x, y, w, h } = logoCropBox;
+      const sx = Math.round(x * img.naturalWidth);
+      const sy = Math.round(y * img.naturalHeight);
+      const sw = Math.max(1, Math.round(w * img.naturalWidth));
+      const sh = Math.max(1, Math.round(h * img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = sw; c.height = sh;
+      c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      if (!logoOriginal) setLogoOriginal(logo.preview);
+      setLogo({ ...logo, preview: c.toDataURL('image/png') });
+      setLogoCropActive(false);
+      setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 });
+    };
+    img.src = srcDataURL;
   };
 
   const handlePhotoFiles = files => {
@@ -6137,7 +6210,7 @@ export default function AutoCache() {
                 <div style={{ display: "flex", marginBottom: 14, background: "#121212", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                   {[["import","Mon logo"],["generate","Générer"]].map(([m, label]) => (
                     <button key={m} onClick={() => {
-                      if (m === "import") setLogo(null);
+                      if (m === "import") { setLogo(null); setLogoOriginal(null); setLogoCropActive(false); }
                       setLogoMode(m);
                     }} style={{ flex: 1, background: logoMode === m ? "#f26522" : "transparent", color: logoMode === m ? "#090909" : "#555", border: "none", padding: "8px 0", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>
                       {label}
@@ -6150,22 +6223,73 @@ export default function AutoCache() {
                   <div style={{ fontSize: 10, color: "#666", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>
                     {logo ? "✓ Logo chargé · cliquer pour changer" : "PNG avec transparence recommandé"}
                   </div>
-                  <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
-                    onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
-                    onClick={() => logoRef.current?.click()}
-                    style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#161616" }}>
-                    {logo ? (
-                      <div style={{ textAlign: "center" }}>
-                        <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain", borderRadius: logoRadius > 0 ? `${Math.round(logoRadius * 4)}px` : 0 }} />
-                        <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
+                  {!logoCropActive && (
+                    <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
+                      onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
+                      onClick={() => logoRef.current?.click()}
+                      style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#161616" }}>
+                      {logo ? (
+                        <div style={{ textAlign: "center" }}>
+                          <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain", borderRadius: logoRadius > 0 ? `${Math.round(logoRadius * 4)}px` : 0 }} />
+                          <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
+                        </div>
+                      ) : (
+                        <div style={{ textAlign: "center", color: "#555" }}>
+                          <div style={{ fontSize: 32, marginBottom: 8 }}>⬡</div>
+                          <div style={{ fontSize: 12, color: "#666" }}>Glisser votre logo ici</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {logo && !logo.generated && !logoCropActive && (
+                    <div style={{ marginTop: 8, textAlign: "center" }}>
+                      <button onClick={() => { setLogoCropActive(true); setLogoCropBox({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 }); }}
+                        style={{ background: "#181818", color: "#f26522", border: "1px solid #3a1400", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                        ✂ Recadrer
+                      </button>
+                    </div>
+                  )}
+                  {logo && logoCropActive && (
+                    <div style={{ background: "#0a0a0a", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
+                      <div ref={logoCropContainerRef}
+                        onMouseMove={onLogoCropMove} onTouchMove={onLogoCropMove}
+                        style={{ position: "relative", userSelect: "none", touchAction: "none" }}>
+                        <img src={logoOriginal || logo.preview} style={{ width: "100%", display: "block" }} draggable={false} />
+                        {/* Dark overlays */}
+                        <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: `${logoCropBox.y * 100}%`, background: "rgba(0,0,0,0.6)" }} />
+                        <div style={{ position: "absolute", bottom: 0, left: 0, width: "100%", height: `${(1 - logoCropBox.y - logoCropBox.h) * 100}%`, background: "rgba(0,0,0,0.6)" }} />
+                        <div style={{ position: "absolute", top: `${logoCropBox.y * 100}%`, left: 0, width: `${logoCropBox.x * 100}%`, height: `${logoCropBox.h * 100}%`, background: "rgba(0,0,0,0.6)" }} />
+                        <div style={{ position: "absolute", top: `${logoCropBox.y * 100}%`, right: 0, width: `${(1 - logoCropBox.x - logoCropBox.w) * 100}%`, height: `${logoCropBox.h * 100}%`, background: "rgba(0,0,0,0.6)" }} />
+                        {/* Crop rectangle */}
+                        <div onMouseDown={e => startLogoCropDrag(e, 'move')} onTouchStart={e => startLogoCropDrag(e, 'move')}
+                          style={{ position: "absolute", left: `${logoCropBox.x * 100}%`, top: `${logoCropBox.y * 100}%`, width: `${logoCropBox.w * 100}%`, height: `${logoCropBox.h * 100}%`, border: "2px solid #f26522", boxSizing: "border-box", cursor: "move" }} />
+                        {/* Corner handles */}
+                        {['tl','tr','bl','br'].map(corner => {
+                          const isLeft = corner.includes('l'), isTop = corner.includes('t');
+                          return (
+                            <div key={corner}
+                              onMouseDown={e => startLogoCropDrag(e, corner)} onTouchStart={e => startLogoCropDrag(e, corner)}
+                              style={{ position: "absolute",
+                                left: `calc(${(isLeft ? logoCropBox.x : logoCropBox.x + logoCropBox.w) * 100}% - 7px)`,
+                                top: `calc(${(isTop ? logoCropBox.y : logoCropBox.y + logoCropBox.h) * 100}% - 7px)`,
+                                width: 14, height: 14, background: "#f26522", borderRadius: 2,
+                                cursor: corner === 'tl' || corner === 'br' ? 'nwse-resize' : 'nesw-resize',
+                                zIndex: 2 }} />
+                          );
+                        })}
                       </div>
-                    ) : (
-                      <div style={{ textAlign: "center", color: "#555" }}>
-                        <div style={{ fontSize: 32, marginBottom: 8 }}>⬡</div>
-                        <div style={{ fontSize: 12, color: "#666" }}>Glisser votre logo ici</div>
+                      <div style={{ display: "flex", gap: 8, padding: "10px 12px", justifyContent: "center" }}>
+                        <button onClick={applyLogoCrop}
+                          style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                          Appliquer
+                        </button>
+                        <button onClick={() => { setLogoCropActive(false); setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 }); }}
+                          style={{ background: "#181818", color: "#888", border: "1px solid #2a2a2a", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                          Annuler
+                        </button>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </>)}
 
                 {/* ── Mode : générer texte + couleur ── */}
