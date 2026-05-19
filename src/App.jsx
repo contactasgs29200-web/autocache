@@ -465,9 +465,12 @@ function applyFloorBlur(ctx, canvasEl, W, H) {
 //   1. Refroidissement WB marqué (supprime la dominante jaune/chaude LED)
 //   2. Courbe S (ombres plus profondes, hautes lumières préservées)
 //   3. Boost de saturation (bleus plus vifs, couleurs carrosserie plus engageantes)
-function autoEnhance(ctx, W, H, intensity = 5) {
+function autoEnhance(ctx, W, H, intensity = 5, photoName = '') {
   const k = Math.max(0, Math.min(5, Number(intensity))) / 5; // 0 = aucun effet, 1 = pleine intensité
-  if (k === 0) return;
+  if (k === 0) {
+    console.log('[Enhance]', photoName, 'skipped (intensity=0)');
+    return;
+  }
 
   const id = ctx.getImageData(0, 0, W, H);
   const d  = id.data;
@@ -490,6 +493,16 @@ function autoEnhance(ctx, W, H, intensity = 5) {
     bLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(Math.min(1, t * bFactor)) * 255)));
   }
 
+  // Échantillonnage avant / après pour confirmer dans la console que la
+  // correction colorimétrique a bien été appliquée sur CETTE photo.
+  let rBefore = 0, gBefore = 0, bBefore = 0, rAfter = 0, gAfter = 0, bAfter = 0;
+  const sampleStep = Math.max(4, Math.floor(d.length / 4 / 4096) * 4);
+  let sampled = 0;
+  for (let i = 0; i < d.length; i += sampleStep) {
+    rBefore += d[i]; gBefore += d[i + 1]; bBefore += d[i + 2];
+    sampled++;
+  }
+
   const SAT = 1 + (1.17 - 1) * k;
   for (let i = 0; i < d.length; i += 4) {
     let r = rLUT[d[i]];
@@ -500,7 +513,23 @@ function autoEnhance(ctx, W, H, intensity = 5) {
     d[i + 1] = Math.max(0, Math.min(255, Math.round(lum + (g - lum) * SAT)));
     d[i + 2] = Math.max(0, Math.min(255, Math.round(lum + (b - lum) * SAT)));
   }
+  for (let i = 0; i < d.length; i += sampleStep) {
+    rAfter += d[i]; gAfter += d[i + 1]; bAfter += d[i + 2];
+  }
   ctx.putImageData(id, 0, 0);
+
+  if (sampled > 0) {
+    const mean = (a, b, c) => +((a + b + c) / (3 * sampled)).toFixed(1);
+    console.log('[Enhance]', photoName, {
+      intensity,
+      k: +k.toFixed(2),
+      meanBefore: mean(rBefore, gBefore, bBefore),
+      meanAfter:  mean(rAfter,  gAfter,  bAfter),
+      deltaR:     +((rAfter - rBefore) / sampled).toFixed(1),
+      deltaG:     +((gAfter - gBefore) / sampled).toFixed(1),
+      deltaB:     +((bAfter - bBefore) / sampled).toFixed(1),
+    });
+  }
 }
 
 // ── Lustrage des optiques — retouche IA locale au masque ─────────────────────
@@ -4440,7 +4469,15 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.drawImage(photoImg, 0, 0);
   ctx.filter = "none";
   // Amélioration couleurs (canvas) — intensité réglable pour enhancePro
-  if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height, enhancePro ? enhanceProIntensity : 5);
+  // Try/catch défensif : on ne laisse JAMAIS une exception sur une photo
+  // empêcher silencieusement l'application de la correction colorimétrique.
+  if (enhance || enhancePro) {
+    try {
+      autoEnhance(ctx, c.width, c.height, enhancePro ? enhanceProIntensity : 5, photoFile.name);
+    } catch (e) {
+      console.error('[Enhance] échec sur', photoFile.name, e);
+    }
+  }
   // Lustrage des optiques (canvas)
   if (headlightPolish) await aiPolishHeadlights(ctx, c.width, c.height, b64);
   // Lustrage carrosserie (canvas)
