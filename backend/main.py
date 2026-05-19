@@ -1174,6 +1174,207 @@ def _quad_perspective_signature(corners: list[dict]) -> dict:
     }
 
 
+# --- Front-plate detection & refinement ------------------------------------
+
+def _is_front_plate(
+    bbox_stable: list[dict],
+    perspective_sig: dict,
+) -> tuple[bool, dict]:
+    """
+    Classify whether the detected plate is near-frontal (low perspective).
+    Pure geometry — no image processing.
+    """
+    max_tilt = max(
+        abs(perspective_sig.get("top_tilt_deg", 0)),
+        abs(perspective_sig.get("bottom_tilt_deg", 0)),
+        abs(perspective_sig.get("left_tilt_deg", 0)),
+        abs(perspective_sig.get("right_tilt_deg", 0)),
+    )
+    max_skew = max(
+        perspective_sig.get("width_skew", 0),
+        perspective_sig.get("height_skew", 0),
+    )
+
+    tl, tr, br, bl = bbox_stable[0], bbox_stable[1], bbox_stable[2], bbox_stable[3]
+    w = (tr["x"] - tl["x"] + br["x"] - bl["x"]) / 2
+    h = (bl["y"] - tl["y"] + br["y"] - tr["y"]) / 2
+    bbox_ar = w / max(h, 1e-9)
+
+    is_front = (
+        max_tilt < 3.0
+        and max_skew < 0.06
+        and 3.5 <= bbox_ar <= 6.0
+    )
+
+    telemetry = {
+        "max_tilt":  round(max_tilt, 2),
+        "max_skew":  round(max_skew, 4),
+        "bbox_ar":   round(bbox_ar, 2),
+        "is_front":  is_front,
+    }
+    return is_front, telemetry
+
+
+def _front_plate_refine(
+    img_rgb: np.ndarray,
+    bbox: dict,
+    bbox_stable: list[dict],
+) -> tuple[list[dict] | None, dict]:
+    """
+    For near-frontal plates, find the actual white/light plate rectangle
+    inside the YOLO bbox using colour thresholding + contour analysis.
+    Returns refined corners or None on failure.
+    """
+    H_img, W_img = img_rgb.shape[:2]
+    telemetry: dict = {"method": None}
+
+    def _fail(reason: str):
+        telemetry["failed_on"] = reason
+        return None, telemetry
+
+    # --- A. Crop with 5% padding ---
+    pw = (bbox["x2"] - bbox["x1"]) * 0.05
+    ph = (bbox["y2"] - bbox["y1"]) * 0.05
+    cx1 = int(max(0, (bbox["x1"] - pw) * W_img))
+    cy1 = int(max(0, (bbox["y1"] - ph) * H_img))
+    cx2 = int(min(W_img, (bbox["x2"] + pw) * W_img))
+    cy2 = int(min(H_img, (bbox["y2"] + ph) * H_img))
+
+    crop = img_rgb[cy1:cy2, cx1:cx2]
+    ch, cw = crop.shape[:2]
+    if cw < 30 or ch < 10:
+        return _fail("crop_too_small")
+
+    hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
+    lab = cv2.cvtColor(crop, cv2.COLOR_RGB2LAB)
+    v_chan = hsv[:, :, 2]
+    s_chan = hsv[:, :, 1]
+    l_chan = lab[:, :, 0]
+
+    bbox_in_crop = (
+        bbox["x1"] * W_img - cx1,
+        bbox["y1"] * H_img - cy1,
+        bbox["x2"] * W_img - cx1,
+        bbox["y2"] * H_img - cy1,
+    )
+    bbox_area = (bbox_in_crop[2] - bbox_in_crop[0]) * (bbox_in_crop[3] - bbox_in_crop[1])
+    bbox_cx = (bbox_in_crop[0] + bbox_in_crop[2]) / 2
+    bbox_cy = (bbox_in_crop[1] + bbox_in_crop[3]) / 2
+    bbox_w  = bbox_in_crop[2] - bbox_in_crop[0]
+    bbox_h  = bbox_in_crop[3] - bbox_in_crop[1]
+
+    # --- B + C. Multi-threshold white mask sweep ---
+    THRESHOLDS = [
+        (140, 80, 170, "standard"),
+        (160, 60, 180, "bright"),
+        (120, 100, 150, "shadow"),
+    ]
+    kernel_close = np.ones((3, 9), np.uint8)
+    kernel_open  = np.ones((3, 3), np.uint8)
+
+    best_rect = None
+    best_rect_area = 0
+    best_thresh_tag = None
+
+    for v_thr, s_thr, l_thr, tag in THRESHOLDS:
+        white_mask = (
+            (v_chan > v_thr) & (s_chan < s_thr) & (l_chan > l_thr)
+        ).astype(np.uint8) * 255
+
+        mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel_close)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < bbox_area * 0.30 or area > bbox_area * 1.05:
+                continue
+            M = cv2.moments(cnt)
+            if M["m00"] < 1:
+                continue
+            ccx = M["m10"] / M["m00"]
+            ccy = M["m01"] / M["m00"]
+            if abs(ccx - bbox_cx) > bbox_w * 0.25:
+                continue
+            if abs(ccy - bbox_cy) > bbox_h * 0.25:
+                continue
+            if area > best_rect_area:
+                rect = cv2.minAreaRect(cnt)
+                best_rect = rect
+                best_rect_area = area
+                best_thresh_tag = tag
+
+    if best_rect is None:
+        return _fail("no_white_rect_found")
+
+    # --- D. Validate minAreaRect ---
+    (rcx, rcy), (rw, rh), angle = best_rect
+    if rw < rh:
+        rw, rh = rh, rw
+        angle += 90
+    ar = rw / max(rh, 1e-9)
+    telemetry["ar"] = round(ar, 2)
+    telemetry["angle_deg"] = round(angle, 2)
+    telemetry["threshold_set"] = best_thresh_tag
+    telemetry["white_area_ratio"] = round(best_rect_area / max(bbox_area, 1), 3)
+
+    if ar < 3.8 or ar > 5.8:
+        return _fail(f"ar_out_of_range:{ar:.2f}")
+
+    norm_angle = angle % 180
+    if norm_angle > 90:
+        norm_angle -= 180
+    if abs(norm_angle) > 8:
+        return _fail(f"angle_too_large:{norm_angle:.1f}")
+
+    # --- E. Convert to 4 corners, order, and shrink ---
+    box_pts = cv2.boxPoints(best_rect)  # 4×2
+
+    SHRINK_X = 0.015
+    SHRINK_Y = 0.04
+    center = box_pts.mean(axis=0)
+    shrink_factors = np.array([1.0 - SHRINK_X, 1.0 - SHRINK_Y])
+    shrunk = center + (box_pts - center) * shrink_factors
+
+    telemetry["shrink_x"] = SHRINK_X
+    telemetry["shrink_y"] = SHRINK_Y
+    telemetry["method"] = f"front_plate_white_rect:{best_thresh_tag}"
+
+    # Order corners: tl, tr, br, bl
+    ordered = _order_corners(shrunk)
+
+    # --- F. Validate against bbox_stable ---
+    bs_tl, bs_br = bbox_stable[0], bbox_stable[2]
+    bs_x1, bs_y1 = bs_tl["x"] * W_img - cx1, bs_tl["y"] * H_img - cy1
+    bs_x2, bs_y2 = bs_br["x"] * W_img - cx1, bs_br["y"] * H_img - cy1
+    bs_area = (bs_x2 - bs_x1) * (bs_y2 - bs_y1)
+
+    refined_area = cv2.contourArea(ordered.astype(np.float32))
+    area_ratio = refined_area / max(bs_area, 1)
+    telemetry["area_ratio_vs_stable"] = round(area_ratio, 3)
+
+    if area_ratio < 0.60 or area_ratio > 0.98:
+        return _fail(f"area_ratio_vs_stable:{area_ratio:.2f}")
+
+    refined_cx = ordered[:, 0].mean()
+    refined_cy = ordered[:, 1].mean()
+    if abs(refined_cx - bbox_cx) > bbox_w * 0.05:
+        return _fail("centroid_x_offset")
+    if abs(refined_cy - bbox_cy) > bbox_h * 0.05:
+        return _fail("centroid_y_offset")
+
+    # --- G. Convert to normalised image coords ---
+    corners = []
+    for pt in ordered:
+        corners.append({
+            "x": round((pt[0] + cx1) / W_img, 4),
+            "y": round((pt[1] + cy1) / H_img, 4),
+        })
+    telemetry["validation_passed"] = True
+    return corners, telemetry
+
+
 def _validate_candidate(
     candidate: dict | None,
     bbox: dict,
@@ -1581,7 +1782,8 @@ async def detect_plate(file: UploadFile = File(...)):
     Response carries:
       * ``corners``          — render geometry (the quad to draw with).
       * ``source``           — alias of ``render_source`` (legacy field).
-      * ``render_source``    — canonical: keypoints | opencv_promoted | bbox_stable.
+      * ``render_source``    — canonical: keypoints | opencv_promoted |
+                               front_plate_refined | bbox_stable.
       * ``quad_source``      — when render_source == opencv_promoted, the
                                method tag of the picked candidate (e.g.
                                ``"plate_edges:v=2_s=3:eps=0.04"``).
@@ -1728,6 +1930,58 @@ async def detect_plate(file: UploadFile = File(...)):
             "gate_telemetry":                 pick_telemetry,
         }
 
+    # ---- Priority 2.5: front_plate_refined (near-frontal only) ------
+    persp_sig = _quad_perspective_signature(bbox_corners)
+    is_front, front_tel = _is_front_plate(bbox_corners, persp_sig)
+    front_refined_corners = None
+    front_refine_telemetry = front_tel
+
+    if is_front:
+        front_refined_corners, front_refine_tel = _front_plate_refine(
+            img_np, bbox, bbox_corners,
+        )
+        front_refine_telemetry.update(front_refine_tel)
+
+    if front_refined_corners is not None:
+        logger.info(
+            f"Front plate refined: "
+            f"shrink_x={front_refine_telemetry.get('shrink_x')}, "
+            f"shrink_y={front_refine_telemetry.get('shrink_y')}, "
+            f"ar={front_refine_telemetry.get('ar')}, "
+            f"method={front_refine_telemetry.get('method')}"
+        )
+        return {
+            "found":                          True,
+            "conf":                           round(conf, 3),
+            "bbox":                           bbox,
+            "corners":                        front_refined_corners,
+            "render_corners":                 front_refined_corners,
+            "source":                         "front_plate_refined",
+            "render_source":                  "front_plate_refined",
+            "quad_source":                    front_refine_telemetry.get("method"),
+            "promotion_reason":               None,
+            "rejection_reason":               None,
+            "gate_reason":                    "front_plate_refined",
+            "gate_failed_on":                 None,
+            "front_plate_detected":           True,
+            "front_plate_telemetry":          front_refine_telemetry,
+            "best_opencv_candidate_corners":  nm_corners,
+            "best_opencv_candidate_method":   nm_method,
+            "best_opencv_candidate_score":    nm_score,
+            "rejected_opencv_corners":        opencv_corners,
+            "opencv_corners":                 opencv_corners,
+            "bbox_stable_corners":            bbox_corners,
+            "bbox_stable":                    bbox_corners,
+            "debug":                          refine_debug,
+            "gate_telemetry":                 pick_telemetry,
+        }
+
+    if is_front:
+        logger.info(
+            f"Front plate detected but refinement failed: "
+            f"{front_refine_telemetry.get('failed_on', '?')}"
+        )
+
     # ---- Priority 3: bbox_stable (safety fallback) -----------------
     logger.info(
         f"No promotable candidate (reason={pick_reason}, "
@@ -1761,6 +2015,9 @@ async def detect_plate(file: UploadFile = File(...)):
         # Safety quad (== corners here).
         "bbox_stable_corners":            bbox_corners,
         "bbox_stable":                    bbox_corners,
+        # Front-plate refinement attempted but failed (or not frontal).
+        "front_plate_detected":           is_front,
+        "front_plate_telemetry":          front_refine_telemetry if is_front else None,
         # Full diagnostic landscape.
         "debug":                          refine_debug,
         "gate_telemetry":                 pick_telemetry,

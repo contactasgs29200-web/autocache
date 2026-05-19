@@ -308,6 +308,116 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   ctx.restore();
 }
 
+// Unified plate overlay renderer — fill bg, perspective draw, feather + boost.
+function drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, renderSource) {
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  // 1. Fill background behind plate (opaque base)
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+  ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+  ctx.closePath();
+  ctx.fillStyle = bgColor;
+  ctx.fill();
+  ctx.restore();
+
+  // 2. Draw perspective-transformed overlay
+  drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
+
+  // 3. Edge feather for front_plate_refined (anti-sticker effect)
+  if (renderSource === 'front_plate_refined') {
+    const plateDiag = Math.hypot(ptr.x - pbl.x, ptr.y - pbl.y);
+    const featherPx = Math.max(0.5, Math.min(2, plateDiag * 0.004));
+
+    // Sample surrounding luminosity at 8 boundary points for adaptation
+    let lumSum = 0, lumCount = 0;
+    const sampleOffsets = [
+      { x: ptl.x - 3, y: ptl.y - 3 }, { x: ptr.x + 3, y: ptr.y - 3 },
+      { x: pbr.x + 3, y: pbr.y + 3 }, { x: pbl.x - 3, y: pbl.y + 3 },
+      { x: (ptl.x + ptr.x) / 2, y: ptl.y - 3 },
+      { x: (pbl.x + pbr.x) / 2, y: pbl.y + 3 },
+      { x: ptl.x - 3, y: (ptl.y + pbl.y) / 2 },
+      { x: ptr.x + 3, y: (ptr.y + pbr.y) / 2 },
+    ];
+    try {
+      for (const sp of sampleOffsets) {
+        const sx = Math.round(Math.max(0, Math.min(W - 1, sp.x)));
+        const sy = Math.round(Math.max(0, Math.min(H - 1, sp.y)));
+        const px = ctx.getImageData(sx, sy, 1, 1).data;
+        lumSum += (px[0] * 0.299 + px[1] * 0.587 + px[2] * 0.114) / 255;
+        lumCount++;
+      }
+    } catch (_) { /* CORS / security — skip */ }
+    const avgLum = lumCount > 0 ? lumSum / lumCount : 0.5;
+    const brightAdj = avgLum < 0.3 ? 0.92 : avgLum > 0.7 ? 1.05 : 1.0;
+
+    // Draw plate region to offscreen, apply feathered edges
+    const off = document.createElement('canvas');
+    off.width = W; off.height = H;
+    const oCtx = off.getContext('2d');
+    oCtx.drawImage(ctx.canvas, 0, 0);
+
+    // Soft-edge mask via shadowBlur
+    const mask = document.createElement('canvas');
+    mask.width = W; mask.height = H;
+    const mCtx = mask.getContext('2d');
+    mCtx.clearRect(0, 0, W, H);
+    mCtx.save();
+    mCtx.shadowColor = 'white';
+    mCtx.shadowBlur = featherPx;
+    mCtx.shadowOffsetX = 0;
+    mCtx.shadowOffsetY = 0;
+    mCtx.fillStyle = 'white';
+    mCtx.beginPath();
+    mCtx.moveTo(ptl.x, ptl.y); mCtx.lineTo(ptr.x, ptr.y);
+    mCtx.lineTo(pbr.x, pbr.y); mCtx.lineTo(pbl.x, pbl.y);
+    mCtx.closePath();
+    mCtx.fill();
+    mCtx.restore();
+
+    // Apply brightness filter + boost
+    const boosted = document.createElement('canvas');
+    boosted.width = W; boosted.height = H;
+    const bCtx = boosted.getContext('2d');
+    bCtx.filter = `brightness(${brightAdj}) saturate(1.15) contrast(1.08)`;
+    bCtx.drawImage(off, 0, 0);
+    bCtx.filter = 'none';
+
+    // Composite: use mask as alpha over the plate region
+    bCtx.globalCompositeOperation = 'destination-in';
+    bCtx.drawImage(mask, 0, 0);
+    bCtx.globalCompositeOperation = 'source-over';
+
+    // Draw base image without plate overlay, then composite the feathered plate on top
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+    ctx.closePath(); ctx.clip();
+    ctx.drawImage(boosted, 0, 0);
+    ctx.restore();
+    return;
+  }
+
+  // 4. Standard boost (non-front-plate) — saturate + contrast clipped to quad
+  const tmp = document.createElement('canvas');
+  tmp.width = W; tmp.height = H;
+  const tCtx = tmp.getContext('2d');
+  tCtx.filter = 'saturate(1.15) contrast(1.08)';
+  tCtx.drawImage(ctx.canvas, 0, 0);
+  tCtx.filter = 'none';
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
+  ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
+  ctx.closePath(); ctx.clip();
+  ctx.drawImage(tmp, 0, 0);
+  ctx.restore();
+}
+
 
 // ── Amélioration automatique — couleurs froides + flou sol adaptatif ──────────
 // Combine la correction colorimétrique (autoEnhance) et un adoucissement
@@ -3844,27 +3954,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     const mp = p => ({ x: carX + p.x * cw, y: carY + p.y * ch });
     const ptl = mp(corners.tl), ptr = mp(corners.tr);
     const pbr = mp(corners.br), pbl = mp(corners.bl);
-    // Fond opaque sous le logo pour masquer la plaque d'origine sur le cutout
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-    ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
-    ctx.restore();
-    drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
-    const tmp = document.createElement('canvas');
-    tmp.width = c.width; tmp.height = c.height;
-    const tCtx = tmp.getContext('2d');
-    tCtx.filter = 'saturate(1.15) contrast(1.08)';
-    tCtx.drawImage(c, 0, 0);
-    tCtx.filter = 'none';
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-    ctx.closePath(); ctx.clip();
-    ctx.drawImage(tmp, 0, 0);
-    ctx.restore();
+    drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'bbox_stable');
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
   if (returnFull) return { dataURL, baseURL, transform: { carX, carY, cw, ch, W, H } };
@@ -4419,6 +4509,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
         near_miss:                         gt.near_miss,
         picks:                             gt.picks,
         rejection_reasons:                 top_rej,
+        // Front plate refinement
+        front_plate_detected:              yolo.front_plate_detected ?? false,
+        front_plate_telemetry:             yolo.front_plate_telemetry ?? null,
       });
     } catch (e) { /* logging is best-effort */ }
     // ── Render geometry — priorité absolue à `yolo.corners` (le quad
@@ -4444,6 +4537,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // plus exposées et ne sont jamais auto-rendues.
   const autoRenderableSource = yolo?.source === 'keypoints'
                             || yolo?.source === 'opencv_promoted'
+                            || yolo?.source === 'front_plate_refined'
                             || yolo?.source === 'bbox_stable';
 
   if (autoRenderableSource && savedCorners && logoImg) {
@@ -4451,58 +4545,29 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
     const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
 
-    // ── Diagnostic : cross-check label vs render. Si le label dit
-    // ── opencv_promoted mais que ces 4 coins forment un axis-aligned
-    // ── rectangle, on sait que la chaîne casse entre yolo.corners et
-    // ── savedCorners. Si le label dit bbox_stable et que ces 4 coins
-    // ── sont en perspective, idem inverse.
     try {
-      const eps = 1.5; // px
+      const eps = 1.5;
       const isAxisAligned =
         Math.abs(ptl.y - ptr.y) < eps &&
         Math.abs(pbl.y - pbr.y) < eps &&
         Math.abs(ptl.x - pbl.x) < eps &&
         Math.abs(ptr.x - pbr.x) < eps;
-      // eslint-disable-next-line no-console
       console.log('[draw]', photoFile.name, {
         label_source:       yolo.render_source ?? yolo.source,
         gate_reason:        yolo.gate_reason,
         savedCorners_norm:  savedCorners,
         drawPerspective_px: { tl: ptl, tr: ptr, br: pbr, bl: pbl },
         is_axis_aligned:    isAxisAligned,
-        // Sanity check : ces deux jeux de coins doivent être identiques.
+        is_front_plate_refined: (yolo.render_source ?? yolo.source) === 'front_plate_refined',
+        front_plate_telemetry:  yolo.front_plate_telemetry ?? null,
         same_as_render:     JSON.stringify([
           savedCorners.tl, savedCorners.tr, savedCorners.br, savedCorners.bl,
         ]) === JSON.stringify(yolo.corners || []),
       });
     } catch (e) { /* best-effort */ }
 
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(ptl.x, ptl.y);
-    ctx.lineTo(ptr.x, ptr.y);
-    ctx.lineTo(pbr.x, pbr.y);
-    ctx.lineTo(pbl.x, pbl.y);
-    ctx.closePath();
-    ctx.fillStyle = bgColor;
-    ctx.fill();
-    ctx.restore();
-    drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
-    const tmp = document.createElement('canvas');
-    tmp.width = c.width; tmp.height = c.height;
-    const tCtx = tmp.getContext('2d');
-    tCtx.filter = 'saturate(1.15) contrast(1.08)';
-    tCtx.drawImage(c, 0, 0);
-    tCtx.filter = 'none';
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-    ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-    ctx.closePath(); ctx.clip();
-    ctx.drawImage(tmp, 0, 0);
-    ctx.restore();
+    const renderSource = yolo.render_source ?? yolo.source;
+    drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, renderSource);
   }
   const yoloBbox             = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
   const yoloCorners          = yolo?.corners ?? null;       // = render_corners
@@ -4520,7 +4585,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const yoloBboxStable       = yolo?.bbox_stable      ?? null;
   // Telemetry agrégée du gate (picks, rejection_reasons[], counts).
   const yoloGateTelemetry    = yolo?.gate_telemetry   ?? null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, yoloSource, yoloRenderSource, yoloQuadSource, yoloPromotionReason, yoloRejectionReason, yoloOpencvCorners, yoloBboxStable, yoloGateTelemetry, imgW: c.width, imgH: c.height };
+  const yoloFrontPlateDetected  = yolo?.front_plate_detected ?? false;
+  const yoloFrontPlateTelemetry = yolo?.front_plate_telemetry ?? null;
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, yoloSource, yoloRenderSource, yoloQuadSource, yoloPromotionReason, yoloRejectionReason, yoloOpencvCorners, yoloBboxStable, yoloGateTelemetry, yoloFrontPlateDetected, yoloFrontPlateTelemetry, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -5580,30 +5647,8 @@ export default function AutoCache() {
       const toPixel = p => ({ x: p.x * W, y: p.y * H });
       const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
       const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
-      // Fond opaque sous le logo (couvre l'ancienne plaque ou la transparence du cutout)
       const bgColor = adjustLogoBgRef.current || '#ffffff';
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-      ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-      ctx.closePath(); ctx.fillStyle = bgColor; ctx.fill();
-      ctx.restore();
-      drawPerspective(ctx, logoImg, ptl, ptr, pbr, pbl);
-      // Boost saturation + contraste sur la zone plaque (couleurs plus profondes)
-      // Copie via canvas temporaire pour éviter de dessiner le canvas sur lui-même
-      const tmp = document.createElement('canvas');
-      tmp.width = canvas.width; tmp.height = canvas.height;
-      const tCtx = tmp.getContext('2d');
-      tCtx.filter = 'saturate(1.15) contrast(1.08)';
-      tCtx.drawImage(canvas, 0, 0);
-      tCtx.filter = 'none';
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
-      ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
-      ctx.closePath(); ctx.clip();
-      ctx.drawImage(tmp, 0, 0);
-      ctx.restore();
+      drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'bbox_stable');
     }
   };
 
@@ -6610,10 +6655,11 @@ export default function AutoCache() {
                               // bbox_stable = bleu (filet axe-aligné),
                               // (legacy) opencv_fallback = orange,
                               // tightened_bbox = rouge.
-                              const stroke = src === 'keypoints'        ? '#22c55e'
-                                          : src === 'opencv_promoted'  ? '#84cc16'
-                                          : src === 'bbox_stable'      ? '#3b82f6'
-                                          : src === 'tightened_bbox'   ? '#ef4444'
+                              const stroke = src === 'keypoints'             ? '#22c55e'
+                                          : src === 'opencv_promoted'       ? '#84cc16'
+                                          : src === 'front_plate_refined'   ? '#e879f9'
+                                          : src === 'bbox_stable'           ? '#3b82f6'
+                                          : src === 'tightened_bbox'        ? '#ef4444'
                                           : '#f97316';
                               return (
                                 <>
@@ -6639,23 +6685,26 @@ export default function AutoCache() {
                             {(r.yoloRenderSource || r.yoloSource || r.yoloDebug?.method) && (() => {
                               const src = r.yoloRenderSource || r.yoloSource;
                               const method = r.yoloDebug?.method?.split(':')[0];
-                              let label = src === 'keypoints'        ? 'keypoints'
-                                : src === 'opencv_promoted' ? 'opencv_promoted'
-                                : src === 'bbox_stable'     ? 'bbox_stable'
-                                : src === 'tightened_bbox'  ? 'tightened_bbox'
+                              let label = src === 'keypoints'             ? 'keypoints'
+                                : src === 'opencv_promoted'        ? 'opencv_promoted'
+                                : src === 'front_plate_refined'    ? 'front_refined'
+                                : src === 'bbox_stable'            ? 'bbox_stable'
+                                : src === 'tightened_bbox'         ? 'tightened_bbox'
                                 : (method === 'hough_lines' ? 'hough' : method) || src || '?';
-                              // Sub-label : quad_source pour opencv_promoted,
-                              //             rejection_reason pour bbox_stable.
-                              if (src === 'opencv_promoted' && r.yoloQuadSource) {
+                              if (src === 'front_plate_refined' && r.yoloFrontPlateTelemetry) {
+                                const ft = r.yoloFrontPlateTelemetry;
+                                label = `front_refined (AR=${ft.ar || '?'})`;
+                              } else if (src === 'opencv_promoted' && r.yoloQuadSource) {
                                 label = `opencv_promoted (${r.yoloQuadSource.split(':')[0]})`;
                               } else if (src === 'bbox_stable' && r.yoloRejectionReason) {
                                 const reason = r.yoloRejectionReason.split(':').slice(0, 2).join(':');
                                 label = `bbox_stable — ${reason}`;
                               }
-                              const color = src === 'keypoints'        ? '#22c55e'
-                                : src === 'opencv_promoted' ? '#84cc16'
-                                : src === 'bbox_stable'     ? '#3b82f6'
-                                : src === 'tightened_bbox'  ? '#ef4444'
+                              const color = src === 'keypoints'             ? '#22c55e'
+                                : src === 'opencv_promoted'        ? '#84cc16'
+                                : src === 'front_plate_refined'    ? '#e879f9'
+                                : src === 'bbox_stable'            ? '#3b82f6'
+                                : src === 'tightened_bbox'         ? '#ef4444'
                                 : '#f97316';
                               return (
                                 <text x={r.yoloBbox.x1 * r.imgW + r.imgW * 0.078}
@@ -7001,10 +7050,11 @@ export default function AutoCache() {
                   // bbox_stable = bleu (filet axe-aligné),
                   // (legacy) opencv_fallback = orange,
                   // tightened_bbox = rouge.
-                  const stroke = src === 'keypoints'        ? '#22c55e'
-                              : src === 'opencv_promoted'  ? '#84cc16'
-                              : src === 'bbox_stable'      ? '#3b82f6'
-                              : src === 'tightened_bbox'   ? '#ef4444'
+                  const stroke = src === 'keypoints'             ? '#22c55e'
+                              : src === 'opencv_promoted'       ? '#84cc16'
+                              : src === 'front_plate_refined'   ? '#e879f9'
+                              : src === 'bbox_stable'           ? '#3b82f6'
+                              : src === 'tightened_bbox'        ? '#ef4444'
                               : '#f97316';
                   return (
                     <>
@@ -7030,19 +7080,16 @@ export default function AutoCache() {
                 {(lightbox.yoloRenderSource || lightbox.yoloSource || lightbox.yoloDebug?.method) && (() => {
                   const src = lightbox.yoloRenderSource || lightbox.yoloSource;
                   const method = lightbox.yoloDebug?.method?.split(':')[0];
-                  let label = src === 'keypoints'        ? 'keypoints'
-                    : src === 'opencv_promoted' ? 'opencv_promoted'
-                    : src === 'bbox_stable'     ? 'bbox_stable'
-                    : src === 'tightened_bbox'  ? 'tightened_bbox'
+                  let label = src === 'keypoints'             ? 'keypoints'
+                    : src === 'opencv_promoted'        ? 'opencv_promoted'
+                    : src === 'front_plate_refined'    ? 'front_plate_refined'
+                    : src === 'bbox_stable'            ? 'bbox_stable'
+                    : src === 'tightened_bbox'         ? 'tightened_bbox'
                     : (method === 'hough_lines' ? 'hough' : method) || src || '?';
-                  // Sub-label :
-                  //  - opencv_promoted → quad_source (la méthode du
-                  //    candidat promu, ex. plate_edges).
-                  //  - bbox_stable → rejection_reason + near-miss method
-                  //    + gate_failed_on (pour montrer DIRECTEMENT à
-                  //    l'écran quel candidat a failli passer et sur
-                  //    quel critère il a échoué).
-                  if (src === 'opencv_promoted' && lightbox.yoloQuadSource) {
+                  if (src === 'front_plate_refined' && lightbox.yoloFrontPlateTelemetry) {
+                    const ft = lightbox.yoloFrontPlateTelemetry;
+                    label = `front_plate_refined (shrinkX=${((ft.shrink_x || 0) * 100).toFixed(1)}% shrinkY=${((ft.shrink_y || 0) * 100).toFixed(1)}% AR=${ft.ar || '?'})`;
+                  } else if (src === 'opencv_promoted' && lightbox.yoloQuadSource) {
                     label = `opencv_promoted (${lightbox.yoloQuadSource.split(':')[0]})`;
                   } else if (src === 'bbox_stable') {
                     const reason  = (lightbox.yoloRejectionReason || '').split(':').slice(0, 2).join(':');
@@ -7054,10 +7101,11 @@ export default function AutoCache() {
                       ? `bbox_stable — ${reason} [nm:${nmTag}]`
                       : `bbox_stable — ${reason || 'no_reason'}`;
                   }
-                  const color = src === 'keypoints'        ? '#22c55e'
-                    : src === 'opencv_promoted' ? '#84cc16'
-                    : src === 'bbox_stable'     ? '#3b82f6'
-                    : src === 'tightened_bbox'  ? '#ef4444'
+                  const color = src === 'keypoints'             ? '#22c55e'
+                    : src === 'opencv_promoted'        ? '#84cc16'
+                    : src === 'front_plate_refined'    ? '#e879f9'
+                    : src === 'bbox_stable'            ? '#3b82f6'
+                    : src === 'tightened_bbox'         ? '#ef4444'
                     : '#f97316';
                   return (
                     <text x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.078}
@@ -7068,6 +7116,82 @@ export default function AutoCache() {
                     </text>
                   );
                 })()}
+              </svg>
+            )}
+
+            {/* ── Debug front plate refinement (only with ?debugPlate=front in URL) ── */}
+            {!cropMode && !adjustMode && !lightbox.showroomDataURL && window.location.search.includes('debugPlate=front') && lightbox.yoloBbox && lightbox.imgW && (
+              <svg
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                viewBox={`0 0 ${lightbox.imgW} ${lightbox.imgH}`}
+                preserveAspectRatio="xMidYMid meet"
+              >
+                {/* YOLO bbox — vert pointillé */}
+                <rect
+                  x={lightbox.yoloBbox.x1 * lightbox.imgW} y={lightbox.yoloBbox.y1 * lightbox.imgH}
+                  width={(lightbox.yoloBbox.x2 - lightbox.yoloBbox.x1) * lightbox.imgW}
+                  height={(lightbox.yoloBbox.y2 - lightbox.yoloBbox.y1) * lightbox.imgH}
+                  fill="none" stroke="#22c55e" strokeWidth={Math.max(2, lightbox.imgW * 0.002)}
+                  strokeDasharray={`${lightbox.imgW * 0.01} ${lightbox.imgW * 0.005}`}
+                />
+                <text
+                  x={lightbox.yoloBbox.x1 * lightbox.imgW + lightbox.imgW * 0.003}
+                  y={lightbox.yoloBbox.y1 * lightbox.imgH - lightbox.imgH * 0.006}
+                  fill="#22c55e" fontSize={lightbox.imgH * 0.016} fontFamily="monospace" fontWeight="bold">
+                  YOLO bbox
+                </text>
+                {/* bbox_stable — bleu pointillé */}
+                {lightbox.yoloBboxStable && lightbox.yoloBboxStable.length === 4 && (
+                  <g opacity={0.5}>
+                    <polygon
+                      points={lightbox.yoloBboxStable.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
+                      fill="none" stroke="#3b82f6"
+                      strokeWidth={Math.max(1, lightbox.imgW * 0.0015)}
+                      strokeDasharray={`${lightbox.imgW * 0.005} ${lightbox.imgW * 0.004}`}
+                    />
+                    <text
+                      x={lightbox.yoloBboxStable[0].x * lightbox.imgW + lightbox.imgW * 0.003}
+                      y={lightbox.yoloBboxStable[0].y * lightbox.imgH - lightbox.imgH * 0.005}
+                      fill="#3b82f6" fontSize={lightbox.imgH * 0.016} fontFamily="monospace" fontWeight="bold">
+                      bbox_stable
+                    </text>
+                  </g>
+                )}
+                {/* Refined quad — magenta solide */}
+                {lightbox.yoloRenderSource === 'front_plate_refined' && lightbox.yoloCorners && lightbox.yoloCorners.length === 4 && (
+                  <g>
+                    <polygon
+                      points={lightbox.yoloCorners.map(p => `${p.x * lightbox.imgW},${p.y * lightbox.imgH}`).join(' ')}
+                      fill="none" stroke="#e879f9"
+                      strokeWidth={Math.max(2, lightbox.imgW * 0.003)}
+                    />
+                    {lightbox.yoloCorners.map((p, i) => (
+                      <circle key={`fp-${i}`} cx={p.x * lightbox.imgW} cy={p.y * lightbox.imgH}
+                        r={Math.max(4, lightbox.imgW * 0.005)} fill="#e879f9" />
+                    ))}
+                    {(() => {
+                      const ft = lightbox.yoloFrontPlateTelemetry;
+                      if (!ft) return null;
+                      const y0 = lightbox.yoloCorners[3].y * lightbox.imgH + lightbox.imgH * 0.012;
+                      const x0 = lightbox.yoloCorners[3].x * lightbox.imgW;
+                      return (
+                        <text x={x0} y={y0}
+                          fill="#e879f9" fontSize={lightbox.imgH * 0.015} fontFamily="monospace" fontWeight="bold">
+                          front_plate_refined (shrinkX={((ft.shrink_x || 0) * 100).toFixed(1)}% shrinkY={((ft.shrink_y || 0) * 100).toFixed(1)}% AR={ft.ar || '?'})
+                        </text>
+                      );
+                    })()}
+                  </g>
+                )}
+                {/* Front plate detected but failed */}
+                {lightbox.yoloFrontPlateDetected && lightbox.yoloRenderSource !== 'front_plate_refined' && (
+                  <text
+                    x={lightbox.yoloBbox.x1 * lightbox.imgW}
+                    y={lightbox.yoloBbox.y2 * lightbox.imgH + lightbox.imgH * 0.025}
+                    fill="#f97316" fontSize={lightbox.imgH * 0.015} fontFamily="monospace" fontWeight="bold">
+                    front_plate detected but refinement failed: {lightbox.yoloFrontPlateTelemetry?.failed_on || '?'}
+                  </text>
+                )}
               </svg>
             )}
 
