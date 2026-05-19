@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, Fragment } from "react";
 import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 // @imgly background removal — chargé dynamiquement
@@ -6265,42 +6265,42 @@ export default function AutoCache() {
                     locked: !canUseBodyPolish,
                   },
                 ].map(({ active, toggle, icon, label, sub, locked, credit }) => (
-                  <div key={label}
-                    onClick={toggle}
-                    style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active && !locked ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${active && !locked ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none", opacity: locked ? 0.55 : 1 }}
-                  >
-                    <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${locked ? "#555" : active ? "#f26522" : "#444"}`, background: active && !locked ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      {locked ? <span style={{ color: "#555", fontSize: 10 }}>🔒</span> : active && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: locked ? "#555" : active ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>
-                        {icon} {label}{locked && <span style={{ fontSize: 8, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>PRO</span>}
+                  <Fragment key={label}>
+                    <div
+                      onClick={toggle}
+                      style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active && !locked ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${active && !locked ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none", opacity: locked ? 0.55 : 1 }}
+                    >
+                      <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${locked ? "#555" : active ? "#f26522" : "#444"}`, background: active && !locked ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        {locked ? <span style={{ color: "#555", fontSize: 10 }}>🔒</span> : active && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                       </div>
-                      <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: locked ? "#555" : active ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>
+                          {icon} {label}{locked && <span style={{ fontSize: 8, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>PRO</span>}
+                        </div>
+                        <div style={{ fontSize: 9, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
+                      </div>
+                      {credit && <div style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, fontWeight: 700, flexShrink: 0 }}>{credit}</div>}
                     </div>
-                    {credit && <div style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, fontWeight: 700, flexShrink: 0 }}>{credit}</div>}
-                  </div>
+                    {label === "Amélioration automatique" && enhancePro && (
+                      <div style={{ marginBottom: 8, background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "12px 14px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                          <span style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "#999", fontFamily: "'JetBrains Mono',monospace" }}>
+                            Régler l'intensité
+                          </span>
+                          <span style={{ fontSize: 11, color: enhanceProIntensity > 0 ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
+                            {enhanceProIntensity === 0 ? "Off" : enhanceProIntensity}
+                          </span>
+                        </div>
+                        <input
+                          type="range" min="0" max="5" step="1"
+                          value={enhanceProIntensity}
+                          onChange={e => setEnhanceProIntensity(parseInt(e.target.value))}
+                          style={{ width: "100%", accentColor: "#f26522", cursor: "pointer", height: 3 }}
+                        />
+                      </div>
+                    )}
+                  </Fragment>
                 ))}
-
-                {/* ── Intensité de l'amélioration automatique (réduction du jaune) ── */}
-                {enhancePro && (
-                  <div style={{ marginBottom: 14, background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "12px 14px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <span style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "#999", fontFamily: "'JetBrains Mono',monospace" }}>
-                        Intensité — moins de jaune
-                      </span>
-                      <span style={{ fontSize: 11, color: enhanceProIntensity > 0 ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
-                        {enhanceProIntensity === 0 ? "Off" : enhanceProIntensity}
-                      </span>
-                    </div>
-                    <input
-                      type="range" min="0" max="5" step="1"
-                      value={enhanceProIntensity}
-                      onChange={e => setEnhanceProIntensity(parseInt(e.target.value))}
-                      style={{ width: "100%", accentColor: "#f26522", cursor: "pointer", height: 3 }}
-                    />
-                  </div>
-                )}
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                   <div style={{ fontSize: 12, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#444", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
