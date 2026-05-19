@@ -465,7 +465,10 @@ function applyFloorBlur(ctx, canvasEl, W, H) {
 //   1. Refroidissement WB marqué (supprime la dominante jaune/chaude LED)
 //   2. Courbe S (ombres plus profondes, hautes lumières préservées)
 //   3. Boost de saturation (bleus plus vifs, couleurs carrosserie plus engageantes)
-function autoEnhance(ctx, W, H) {
+function autoEnhance(ctx, W, H, intensity = 5) {
+  const k = Math.max(0, Math.min(5, Number(intensity))) / 5; // 0 = aucun effet, 1 = pleine intensité
+  if (k === 0) return;
+
   const id = ctx.getImageData(0, 0, W, H);
   const d  = id.data;
 
@@ -473,17 +476,21 @@ function autoEnhance(ctx, W, H) {
     ? 0.5 * Math.pow(v * 2, 1.17)
     : 1 - 0.5 * Math.pow((1 - v) * 2, 0.87);
 
+  const rFactor = 1 + (0.90 - 1) * k;
+  const gFactor = 1 + (0.97 - 1) * k;
+  const bFactor = 1 + (1.11 - 1) * k;
+
   const rLUT = new Uint8Array(256);
   const gLUT = new Uint8Array(256);
   const bLUT = new Uint8Array(256);
   for (let v = 0; v < 256; v++) {
     const t = v / 255;
-    rLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * 0.90) * 255)));
-    gLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * 0.97) * 255)));
-    bLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(Math.min(1, t * 1.11)) * 255)));
+    rLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * rFactor) * 255)));
+    gLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * gFactor) * 255)));
+    bLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(Math.min(1, t * bFactor)) * 255)));
   }
 
-  const SAT = 1.17;
+  const SAT = 1 + (1.17 - 1) * k;
   for (let i = 0; i < d.length; i += 4) {
     let r = rLUT[d[i]];
     let g = gLUT[d[i + 1]];
@@ -4419,7 +4426,7 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
   return c.toDataURL('image/png');
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 5) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
   const photoURL = URL.createObjectURL(photoFile);
@@ -4432,8 +4439,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = `brightness(${adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation})`;
   ctx.drawImage(photoImg, 0, 0);
   ctx.filter = "none";
-  // Amélioration couleurs (canvas)
-  if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height);
+  // Amélioration couleurs (canvas) — intensité réglable pour enhancePro
+  if (enhance || enhancePro) autoEnhance(ctx, c.width, c.height, enhancePro ? enhanceProIntensity : 5);
   // Lustrage des optiques (canvas)
   if (headlightPolish) await aiPolishHeadlights(ctx, c.width, c.height, b64);
   // Lustrage carrosserie (canvas)
@@ -4781,6 +4788,7 @@ export default function AutoCache() {
   const [bodyPolish, setBodyPolish] = useState(false);
   const [floorClean, setFloorClean] = useState(false);
   const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
+  const [enhanceProIntensity, setEnhanceProIntensity] = useState(5); // 0–5 : force de la réduction du jaune
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
@@ -5046,7 +5054,7 @@ export default function AutoCache() {
       : null;
 
     for (let i = 0; i < photosToProcess.length; i++) {
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, headlightPolish, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish, enhanceProIntensity);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
@@ -6273,6 +6281,26 @@ export default function AutoCache() {
                     {credit && <div style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, fontWeight: 700, flexShrink: 0 }}>{credit}</div>}
                   </div>
                 ))}
+
+                {/* ── Intensité de l'amélioration automatique (réduction du jaune) ── */}
+                {enhancePro && (
+                  <div style={{ marginBottom: 14, background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "12px 14px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "#999", fontFamily: "'JetBrains Mono',monospace" }}>
+                        Intensité — moins de jaune
+                      </span>
+                      <span style={{ fontSize: 11, color: enhanceProIntensity > 0 ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
+                        {enhanceProIntensity === 0 ? "Off" : enhanceProIntensity}
+                      </span>
+                    </div>
+                    <input
+                      type="range" min="0" max="5" step="1"
+                      value={enhanceProIntensity}
+                      onChange={e => setEnhanceProIntensity(parseInt(e.target.value))}
+                      style={{ width: "100%", accentColor: "#f26522", cursor: "pointer", height: 3 }}
+                    />
+                  </div>
+                )}
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                   <div style={{ fontSize: 12, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#444", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
