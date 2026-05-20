@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import SlideFrame from "./SlideFrame.jsx";
 
 const TUTORIAL_BASE = "/tutorial";
 
@@ -7,10 +8,11 @@ const TUTORIAL_BASE = "/tutorial";
  *
  *   mode: "card"      → centred dialog, no spotlight (intro / outro)
  *   mode: "spotlight" → cuts a hole in the dark overlay over `target` and points a tooltip at it
- *   mode: "slide"     → full-screen image walkthrough with optional pulse halo on a sub-region
+ *   mode: "slide"     → full-screen image walkthrough rendered inside a SlideFrame
  *
- * `highlight` for slide mode is expressed as percentages of the source image
- * (xPct/yPct/wPct/hPct) so it tracks the natural geometry, not the displayed size.
+ * Slide steps may carry a `frame` config that mocks the real lightbox chrome
+ * (title bar + sliders) so the pulse halo can target actual React refs rather
+ * than guessed pixel percentages.
  */
 const STEPS = [
   // ── Welcome ─────────────────────────────────────────────────────────────
@@ -72,6 +74,7 @@ const STEPS = [
     title: "Étape 1 — Photo brute",
     body: "Voici une photo telle qu'importée : véhicule, plaque réelle visible, environnement non préparé. C'est le point de départ.",
     icon: "▢",
+    // pas de frame : on affiche la photo brute, plein cadre
   },
   {
     mode: "slide",
@@ -79,6 +82,7 @@ const STEPS = [
     title: "Étape 2 — Cache plaque posé",
     body: "L'IA détecte la plaque et applique automatiquement votre cache plaque. La plupart du temps, le résultat est immédiatement parfait.",
     icon: "⬡",
+    // pas de frame : zoom face avant, photo seule
   },
   {
     mode: "slide",
@@ -86,7 +90,17 @@ const STEPS = [
     title: "Étape 3 — Ajuster les coins",
     body: "Si le placement n'est pas parfait, cliquez sur AJUSTER : vous pouvez alors glisser les 4 coins orange pour repositionner le cache au pixel près. Le résultat s'applique en temps réel.",
     icon: "⊞",
-    highlight: { xPct: 72.3, yPct: 8.5, wPct: 7.7, hPct: 3.6, label: "AJUSTER" },
+    frame: {
+      filename: "renault-scenic.jpg",
+      buttons: [
+        { id: "rogner",  label: "✂ Rogner",  variant: "inactive" },
+        { id: "ajuster", label: "⊹ Ajuster", variant: "yellow-active" },
+        { id: "termine", label: "✓ Terminé", variant: "yellow-active" },
+      ],
+      closeButton: true,
+      footer: "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel",
+      highlight: "ajuster",
+    },
   },
   {
     mode: "slide",
@@ -94,6 +108,15 @@ const STEPS = [
     title: "Étape 4 — Cache plaque validé",
     body: "Voilà le rendu après ajustement, propre et précis. À ce stade, vous pouvez télécharger la photo telle quelle, ou passer en mode showroom pour aller plus loin.",
     icon: "✓",
+    frame: {
+      filename: "renault-scenic.jpg",
+      buttons: [
+        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
+        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
+        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
+      ],
+      closeButton: true,
+    },
   },
   {
     mode: "slide",
@@ -101,6 +124,21 @@ const STEPS = [
     title: "Étape 5 — Décor Showroom",
     body: "Activez un décor showroom pour mettre la voiture en valeur : Garage, Luxury, Classique... plusieurs ambiances disponibles, choisissez celle qui correspond à votre identité.",
     icon: "◇",
+    frame: {
+      filename: "renault-scenic.jpg",
+      buttons: [
+        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
+        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
+        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
+      ],
+      closeButton: true,
+      centerButton: { icon: "▼" },
+      sliders: [
+        { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
+        { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 3,  value: "3%"   },
+      ],
+      footer: "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto",
+    },
   },
   {
     mode: "slide",
@@ -108,7 +146,22 @@ const STEPS = [
     title: "Étape 6 — Fondu showroom",
     body: "Glissez le slider FONDU pour intégrer parfaitement la voiture au décor : l'éclairage du sol se reflète sur la carrosserie, les couleurs se marient. Téléchargez votre visuel showroom final.",
     icon: "✦",
-    highlight: { xPct: 32.6, yPct: 84.9, wPct: 35.5, hPct: 4.0, label: "FONDU" },
+    frame: {
+      filename: "renault-scenic.jpg",
+      buttons: [
+        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
+        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
+        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
+      ],
+      closeButton: true,
+      centerButton: { icon: "▼" },
+      sliders: [
+        { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
+        { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 75, value: "75%"  },
+      ],
+      footer: "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto",
+      highlight: "fondu",
+    },
   },
 
   // ── Final ──────────────────────────────────────────────────────────────
@@ -158,32 +211,13 @@ function computeTooltipPlacement(sr, tooltipW, isMobile) {
   return { position: "fixed", top, left, width: tooltipW };
 }
 
-/* ── Compute the actual rendered rect of an <img> using object-fit: contain ── */
-function getContainedImageRect(imgEl) {
-  const cr = imgEl.getBoundingClientRect();
-  const iw = imgEl.naturalWidth, ih = imgEl.naturalHeight;
-  if (!iw || !ih) return { left: cr.left, top: cr.top, width: cr.width, height: cr.height };
-  const containerRatio = cr.width / cr.height;
-  const imgRatio = iw / ih;
-  let dw, dh;
-  if (imgRatio > containerRatio) { dw = cr.width; dh = cr.width / imgRatio; }
-  else                           { dh = cr.height; dw = cr.height * imgRatio; }
-  return {
-    left: cr.left + (cr.width - dw) / 2,
-    top:  cr.top  + (cr.height - dh) / 2,
-    width: dw, height: dh,
-  };
-}
-
 export default function Tutorial({ onClose, isMobile }) {
   const [step, setStep] = useState(0);
   const [spotlightRect, setSpotlightRect] = useState(null);
   const [tooltipStyle, setTooltipStyle] = useState({});
   const [animating, setAnimating] = useState(true);
   const [vpSize, setVpSize] = useState({ w: window.innerWidth, h: window.innerHeight });
-  const [haloRect, setHaloRect] = useState(null);
   const tooltipRef = useRef(null);
-  const slideImgRefs = useRef({});
 
   const current = STEPS[step];
   const isFirst = step === 0;
@@ -230,37 +264,9 @@ export default function Tutorial({ onClose, isMobile }) {
     setTooltipStyle(computeTooltipPlacement(sr, tooltipW, isMobile));
   }, [current.target, hasTarget, isMobile]);
 
-  /* ── Measure the halo position over the displayed slide image ── */
-  const measureHalo = useCallback(() => {
-    setVpSize({ w: window.innerWidth, h: window.innerHeight });
-    if (!isSlide || !current.highlight) {
-      setHaloRect(null);
-      return;
-    }
-    const img = slideImgRefs.current[step];
-    if (!img || !img.naturalWidth) {
-      // image not yet loaded — try again shortly
-      setHaloRect(null);
-      return;
-    }
-    const r = getContainedImageRect(img);
-    const { xPct, yPct, wPct, hPct } = current.highlight;
-    setHaloRect({
-      left:   r.left   + (xPct / 100) * r.width,
-      top:    r.top    + (yPct / 100) * r.height,
-      width:  (wPct / 100) * r.width,
-      height: (hPct / 100) * r.height,
-    });
-  }, [isSlide, current.highlight, step]);
-
-  /* ── Scroll target into view + measure (spotlight) / measure halo (slide) ── */
+  /* ── Scroll target into view + measure (spotlight) ─────────────────── */
   useEffect(() => {
-    if (isSlide) {
-      // give the image a moment to render after step change
-      const t1 = setTimeout(measureHalo, 60);
-      const t2 = setTimeout(measureHalo, 350);
-      return () => { clearTimeout(t1); clearTimeout(t2); };
-    }
+    if (isSlide) return;            // slide measurements handled in SlideFrame
     if (!hasTarget) {
       measureTarget();
       return;
@@ -274,18 +280,18 @@ export default function Tutorial({ onClose, isMobile }) {
     } else {
       measureTarget();
     }
-  }, [step, current.target, hasTarget, isSlide, measureTarget, measureHalo]);
+  }, [step, current.target, hasTarget, isSlide, measureTarget]);
 
   /* ── Resize / scroll listeners ── */
   useEffect(() => {
-    const h = () => { measureTarget(); measureHalo(); };
+    const h = () => { measureTarget(); };
     window.addEventListener("resize", h);
     window.addEventListener("scroll", h, true);
     return () => {
       window.removeEventListener("resize", h);
       window.removeEventListener("scroll", h, true);
     };
-  }, [measureTarget, measureHalo]);
+  }, [measureTarget]);
 
   /* ── Entry fade ── */
   useEffect(() => {
@@ -316,8 +322,8 @@ export default function Tutorial({ onClose, isMobile }) {
   const skip = () => onClose();
 
   /* ── Tooltip placement for slide mode ── */
-  // When the highlight sits in the lower half, place the tooltip at the top; otherwise bottom.
-  const slideTooltipAtTop = isSlide && current.highlight && current.highlight.yPct > 50;
+  // When the highlight is a slider at the bottom of the frame, push the tooltip to the top.
+  const slideTooltipAtTop = isSlide && current.frame?.highlight === "fondu";
   const slideTooltipStyle = isSlide
     ? (() => {
         const w = isMobile ? Math.min(380, window.innerWidth - 24) : 440;
@@ -360,33 +366,17 @@ export default function Tutorial({ onClose, isMobile }) {
         />
       </svg>
 
-      {/* ── Slide image stack (cross-faded, drawn ABOVE the dark backdrop) ── */}
-      {STEPS.map((s, i) => {
-        if (s.mode !== "slide") return null;
-        const visible = i === step;
-        return (
-          <img
-            key={i}
-            ref={(el) => { if (el) slideImgRefs.current[i] = el; }}
-            src={s.image}
-            alt=""
-            onLoad={visible ? measureHalo : undefined}
-            style={{
-              position: "fixed",
-              inset: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              padding: isMobile ? 12 : "60px 32px 140px",
-              boxSizing: "border-box",
-              opacity: visible ? 1 : 0,
-              transition: "opacity 0.45s ease-in-out",
-              pointerEvents: "none",
-              zIndex: 2,
-            }}
+      {/* ── Slide frame (mock lightbox UI + photo + pulse halo on real refs) ── */}
+      {isSlide && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 2 }}>
+          <SlideFrame
+            key={step} /* remount on step change so refs and halo re-measure */
+            frame={current.frame}
+            image={current.image}
+            isMobile={isMobile}
           />
-        );
-      })}
+        </div>
+      )}
 
       {/* ── Spotlight glow border (spotlight mode only) ── */}
       {hasTarget && spotlightRect && (
@@ -401,35 +391,6 @@ export default function Tutorial({ onClose, isMobile }) {
           transition: "all 0.35s cubic-bezier(0.4,0,0.2,1)",
           zIndex: 3,
         }} />
-      )}
-
-      {/* ── Pulse halo on slide highlight (above the image) ── */}
-      {isSlide && haloRect && (
-        <>
-          <div className="ac-tut-pulse" style={{
-            position: "fixed",
-            left: haloRect.left - 6,
-            top:  haloRect.top - 6,
-            width:  haloRect.width + 12,
-            height: haloRect.height + 12,
-            borderRadius: 8,
-            border: "2px solid rgba(242,101,34,0.85)",
-            pointerEvents: "none",
-            zIndex: 4,
-          }} />
-          <div className="ac-tut-pulse-bg" style={{
-            position: "fixed",
-            left: haloRect.left - 6,
-            top:  haloRect.top - 6,
-            width:  haloRect.width + 12,
-            height: haloRect.height + 12,
-            borderRadius: 8,
-            background: "rgba(242,101,34,0.0)",
-            boxShadow: "0 0 0 0 rgba(242,101,34,0.45)",
-            pointerEvents: "none",
-            zIndex: 4,
-          }} />
-        </>
       )}
 
       {/* ── Clickable backdrop (advance on click) ── */}
