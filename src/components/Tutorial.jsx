@@ -106,7 +106,7 @@ const STEPS = [
     mode: "slide",
     image: `${TUTORIAL_BASE}/4-cache-ok.jpg`,
     title: "Étape 4 — Cache plaque validé",
-    body: "Voilà le rendu après ajustement, propre et précis. À ce stade, vous pouvez télécharger la photo telle quelle, ou passer en mode showroom pour aller plus loin.",
+    body: "Voilà le rendu après ajustement, propre et précis. À ce stade, vous pouvez télécharger la photo telle quelle si vous n'aviez pas sélectionné le mode showroom.",
     icon: "✓",
     frame: {
       filename: "renault-scenic.jpg",
