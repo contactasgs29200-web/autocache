@@ -538,7 +538,7 @@ export default function Tutorial({ onClose, isMobile }) {
                 color: "#888", padding: "6px 14px", cursor: "pointer",
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 10, letterSpacing: 1, textTransform: "uppercase", borderRadius: 3,
-              }}>Retour</button>
+              }}>Précédent</button>
             )}
             {isFirst && (
               <button onClick={skip} style={{
