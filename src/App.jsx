@@ -7784,6 +7784,9 @@ export default function AutoCache() {
               title="Fond la voiture dans le décor en abaissant luminosité, contraste et saturation"
             >
               <span style={{ fontSize: 16, userSelect: "none" }}>🎨</span>
+              <span style={{ fontSize: 10, color: "#888", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", userSelect: "none", whiteSpace: "nowrap" }}>
+                Fondre le véhicule au décor
+              </span>
               <input
                 type="range"
                 min="0" max="100" step="1"
