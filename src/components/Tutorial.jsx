@@ -335,7 +335,32 @@ export default function Tutorial({ onClose, isMobile }) {
       onClick={(e) => e.stopPropagation()}
       style={{ position: "fixed", inset: 0, zIndex: 10000, pointerEvents: "auto" }}
     >
-      {/* ── Slide image stack (cross-faded) ── */}
+      {/* ── Dark backdrop (spotlight mask for spotlight steps, solid for the rest) ── */}
+      <svg
+        style={{ position: "fixed", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 1 }}
+        viewBox={`0 0 ${vpSize.w} ${vpSize.h}`}
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <mask id="tutorial-mask">
+            <rect x="0" y="0" width={vpSize.w} height={vpSize.h} fill="white" />
+            {hasTarget && spotlightRect && (
+              <rect
+                x={spotlightRect.x} y={spotlightRect.y}
+                width={spotlightRect.w} height={spotlightRect.h}
+                rx="6" ry="6" fill="black"
+              />
+            )}
+          </mask>
+        </defs>
+        <rect
+          x="0" y="0" width={vpSize.w} height={vpSize.h}
+          fill={isSlide ? "rgba(8,8,8,0.97)" : "rgba(0,0,0,0.82)"}
+          mask={hasTarget ? "url(#tutorial-mask)" : undefined}
+        />
+      </svg>
+
+      {/* ── Slide image stack (cross-faded, drawn ABOVE the dark backdrop) ── */}
       {STEPS.map((s, i) => {
         if (s.mode !== "slide") return null;
         const visible = i === step;
@@ -357,36 +382,11 @@ export default function Tutorial({ onClose, isMobile }) {
               opacity: visible ? 1 : 0,
               transition: "opacity 0.45s ease-in-out",
               pointerEvents: "none",
-              zIndex: 1,
+              zIndex: 2,
             }}
           />
         );
       })}
-
-      {/* ── Dark backdrop (spotlight mask for spotlight steps, solid for the rest) ── */}
-      <svg
-        style={{ position: "fixed", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 2 }}
-        viewBox={`0 0 ${vpSize.w} ${vpSize.h}`}
-        preserveAspectRatio="none"
-      >
-        <defs>
-          <mask id="tutorial-mask">
-            <rect x="0" y="0" width={vpSize.w} height={vpSize.h} fill="white" />
-            {hasTarget && spotlightRect && (
-              <rect
-                x={spotlightRect.x} y={spotlightRect.y}
-                width={spotlightRect.w} height={spotlightRect.h}
-                rx="6" ry="6" fill="black"
-              />
-            )}
-          </mask>
-        </defs>
-        <rect
-          x="0" y="0" width={vpSize.w} height={vpSize.h}
-          fill={isSlide ? "rgba(8,8,8,0.96)" : "rgba(0,0,0,0.82)"}
-          mask={hasTarget ? "url(#tutorial-mask)" : undefined}
-        />
-      </svg>
 
       {/* ── Spotlight glow border (spotlight mode only) ── */}
       {hasTarget && spotlightRect && (
@@ -403,7 +403,7 @@ export default function Tutorial({ onClose, isMobile }) {
         }} />
       )}
 
-      {/* ── Pulse halo on slide highlight ── */}
+      {/* ── Pulse halo on slide highlight (above the image) ── */}
       {isSlide && haloRect && (
         <>
           <div className="ac-tut-pulse" style={{
