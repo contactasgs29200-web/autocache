@@ -7552,6 +7552,9 @@ export default function AutoCache() {
               style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 52, width: "min(500px, 90vw)" }}
             >
               <span style={{ fontSize: 16, userSelect: "none" }}>🔍</span>
+              <span style={{ fontSize: 10, color: "#888", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", userSelect: "none", whiteSpace: "nowrap" }}>
+                Agrandir la taille
+              </span>
               <input
                 type="range"
                 min="0.5" max="2.5" step="0.05"
