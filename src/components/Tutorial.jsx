@@ -86,7 +86,7 @@ const STEPS = [
     title: "Étape 3 — Ajuster les coins",
     body: "Si le placement n'est pas parfait, cliquez sur AJUSTER : vous pouvez alors glisser les 4 coins orange pour repositionner le cache au pixel près. Le résultat s'applique en temps réel.",
     icon: "⊞",
-    highlight: { xPct: 73.7, yPct: 6.9, wPct: 9.7, hPct: 5.7, label: "AJUSTER" },
+    highlight: { xPct: 72.3, yPct: 8.5, wPct: 7.7, hPct: 3.6, label: "AJUSTER" },
   },
   {
     mode: "slide",
@@ -108,7 +108,7 @@ const STEPS = [
     title: "Étape 6 — Fondu showroom",
     body: "Glissez le slider FONDU pour intégrer parfaitement la voiture au décor : l'éclairage du sol se reflète sur la carrosserie, les couleurs se marient. Téléchargez votre visuel showroom final.",
     icon: "✦",
-    highlight: { xPct: 31, yPct: 84.5, wPct: 36, hPct: 4, label: "FONDU" },
+    highlight: { xPct: 32.6, yPct: 84.9, wPct: 35.5, hPct: 4.0, label: "FONDU" },
   },
 
   // ── Final ──────────────────────────────────────────────────────────────
