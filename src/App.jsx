@@ -3896,7 +3896,7 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   return dataUrl;
 }
 
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null) {
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null, blend = 0) {
   const [bgImg, carImg, wallImg, shadowImg] = await Promise.all([
     loadImg(bgDataUrl),
     loadImg(cutoutDataUrl),
@@ -4047,6 +4047,13 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+  if (blend > 0) {
+    const t = Math.max(0, Math.min(100, blend)) / 100;
+    const bVal = (1 - 0.08 * t).toFixed(3); // brightness 1.0 → 0.92
+    const cVal = (1 - 0.12 * t).toFixed(3); // contrast   1.0 → 0.88
+    const sVal = (1 - 0.12 * t).toFixed(3); // saturation 1.0 → 0.88
+    ctx.filter = `brightness(${bVal}) contrast(${cVal}) saturate(${sVal})`;
+  }
   ctx.drawImage(carImg, carX, carY, cw, ch);
   ctx.restore();
   // Snapshot avant plaque (pour Ajuster en mode showroom)
@@ -4961,8 +4968,10 @@ export default function AutoCache() {
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
   const [showroomZoom,    setShowroomZoom]    = useState(1.0);
+  const [showroomBlend,   setShowroomBlend]   = useState(0); // 0-100, intensité de fondu voiture/décor
   const [showroomNudging, setShowroomNudging] = useState(false);
   const zoomTimerRef = useRef(null);
+  const blendTimerRef = useRef(null);
   const [shadowOpacity, setShadowOpacity] = useState(SHADOW_STRENGTH);
   const [shadowBlur, setShadowBlur] = useState(0);
   const [shadowYOffset, setShadowYOffset] = useState(0);
@@ -5550,6 +5559,7 @@ export default function AutoCache() {
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
     setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
     setShowroomZoom(r.showroomZoom ?? 1.0);
+    setShowroomBlend(r.showroomBlend ?? 0);
     setShadowOpacity(SHADOW_STRENGTH);
     setShadowBlur(0);
     setShadowYOffset(0);
@@ -5558,8 +5568,8 @@ export default function AutoCache() {
 
   const NUDGE_STEP = 75; // pas de déplacement en px sur canvas 2400×1350
 
-  // Recomposite central — utilisé par flèches ET slider zoom
-  const recompositeShowroom = (nudge, zoom) => {
+  // Recomposite central — utilisé par flèches, slider zoom ET slider fondu
+  const recompositeShowroom = (nudge, zoom, blend) => {
     setLightbox(prev => {
       if (!prev?.cutoutDataURL || showroomNudging) return prev;
       setShowroomNudging(true);
@@ -5570,9 +5580,9 @@ export default function AutoCache() {
           const sr = await compositeCarOnBg(
             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
             logoImgEl, prev.corners, prev.bgColor,
-            nudge.x, nudge.y, zoom, true, wOpts, prev.shadowMatteDataURL
+            nudge.x, nudge.y, zoom, true, wOpts, prev.shadowMatteDataURL, blend
           );
-          const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
+          const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend: blend };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
         } catch(e) { console.error('recomposite error', e); }
@@ -5585,13 +5595,19 @@ export default function AutoCache() {
   const nudgeShowroom = (dx, dy) => {
     const newNudge = { x: showroomNudge.x + dx, y: showroomNudge.y + dy };
     setShowroomNudge(newNudge);
-    recompositeShowroom(newNudge, showroomZoom);
+    recompositeShowroom(newNudge, showroomZoom, showroomBlend);
   };
 
   const onZoomChange = (z) => {
     setShowroomZoom(z);
     clearTimeout(zoomTimerRef.current);
-    zoomTimerRef.current = setTimeout(() => recompositeShowroom(showroomNudge, z), 250);
+    zoomTimerRef.current = setTimeout(() => recompositeShowroom(showroomNudge, z, showroomBlend), 250);
+  };
+
+  const onBlendChange = (b) => {
+    setShowroomBlend(b);
+    clearTimeout(blendTimerRef.current);
+    blendTimerRef.current = setTimeout(() => recompositeShowroom(showroomNudge, showroomZoom, b), 250);
   };
 
   const onShadowParamChange = (param, value) => {
@@ -5628,7 +5644,7 @@ export default function AutoCache() {
         const sr = await compositeCarOnBg(
           lightbox.cutoutDataURL, lightbox.showroomBgUrl, 2400, 1350,
           logoImgEl, lightbox.corners, lightbox.bgColor,
-          showroomNudge.x, showroomNudge.y, showroomZoom, true, wOpts, newMatte
+          showroomNudge.x, showroomNudge.y, showroomZoom, true, wOpts, newMatte, showroomBlend
         );
         const updated = { ...lightbox, shadowMatteDataURL: newMatte, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, carBoundsCache: carBounds };
         setLightbox(updated);
@@ -7046,9 +7062,9 @@ export default function AutoCache() {
                     const wOpts2 = snap.wallLogoSrc ? { src: snap.wallLogoSrc, scale: snap.wallLogoScale, opacity: snap.wallLogoOpacity, x: snap.wallLogoPos?.x ?? 0.5, y: snap.wallLogoPos?.y ?? 0.25 } : null;
                     loadImg(snap.logoPreview).then(logoImgEl =>
                       compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
-                        logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, wOpts2, snap.shadowMatteDataURL)
+                        logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, wOpts2, snap.shadowMatteDataURL, showroomBlend)
                     ).then(sr => {
-                      const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
+                      const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
                       setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
                       setLightbox(prev => prev?.name === snap.name ? withSR : prev);
                     }).catch(e => console.error('showroom regen (adjust):', e));
@@ -7506,7 +7522,7 @@ export default function AutoCache() {
                           const sr = await compositeCarOnBg(
                             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
                             logoImgEl, prev.corners, prev.bgColor,
-                            nudge.x, nudge.y, zm, true, wOpts, prev.shadowMatteDataURL
+                            nudge.x, nudge.y, zm, true, wOpts, prev.shadowMatteDataURL, showroomBlend
                           );
                           const upd = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform };
                           setLightbox(upd);
@@ -7757,6 +7773,28 @@ export default function AutoCache() {
             </div>
           )}
 
+          {/* ── Slider fondu voiture/décor (masqué après rognage) ── */}
+          {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && (
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, width: "min(500px, 90vw)" }}
+              title="Fond la voiture dans le décor en abaissant luminosité, contraste et saturation"
+            >
+              <span style={{ fontSize: 16, userSelect: "none" }}>🎨</span>
+              <input
+                type="range"
+                min="0" max="100" step="1"
+                value={showroomBlend}
+                onChange={e => onBlendChange(parseInt(e.target.value, 10))}
+                disabled={showroomNudging}
+                style={{ flex: 1, accentColor: "#f26522", cursor: showroomNudging ? "not-allowed" : "pointer", height: 4 }}
+              />
+              <span style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", minWidth: 34, textAlign: "right" }}>
+                {showroomBlend}%
+              </span>
+            </div>
+          )}
+
           {/* ── Corriger le détourage (mask editor) ── */}
           {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && !showMaskEditor && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, display: 'flex', justifyContent: 'center' }}>
@@ -7812,7 +7850,7 @@ export default function AutoCache() {
                   const sr = await compositeCarOnBg(
                     correctedDataURL, lightbox.showroomBgUrl, 2400, 1350,
                     null, null, lightbox.bgColor || '#ffffff',
-                    0, 0, 1.0, true, wOpts, newShadow
+                    0, 0, 1.0, true, wOpts, newShadow, showroomBlend
                   );
                   // Update lightbox state
                   setLightbox(prev => ({
