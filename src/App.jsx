@@ -4528,7 +4528,7 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
   return c.toDataURL('image/png');
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 5) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
   const photoURL = URL.createObjectURL(photoFile);
@@ -4898,7 +4898,7 @@ export default function AutoCache() {
   const [bodyPolish, setBodyPolish] = useState(false);
   const [floorClean, setFloorClean] = useState(false);
   const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
-  const [enhanceProIntensity, setEnhanceProIntensity] = useState(5); // 0–5 : force de la réduction du jaune
+  const [enhanceProIntensity, setEnhanceProIntensity] = useState(2); // 0–5 : force de la réduction du jaune (2 par défaut, modifiable)
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
