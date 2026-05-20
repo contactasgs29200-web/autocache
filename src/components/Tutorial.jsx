@@ -122,7 +122,7 @@ const STEPS = [
     mode: "slide",
     image: `${TUTORIAL_BASE}/5-showroom-base.jpg`,
     title: "Étape 5 — Décor Showroom",
-    body: "Activez un décor showroom pour mettre la voiture en valeur : Garage, Luxury, Classique... plusieurs ambiances disponibles, choisissez celle qui correspond à votre identité.",
+    body: "Si vous avez sélectionné l'option showroom, le véhicule apparaîtra comme ceci. Quatre flèches oranges apparaîtront autour de la photo pour déplacer la voiture afin de donner à la photo un aspect naturel.",
     icon: "◇",
     frame: {
       filename: "renault-scenic.jpg",
@@ -133,6 +133,7 @@ const STEPS = [
       ],
       closeButton: true,
       centerButton: { icon: "▼" },
+      nudgeArrows: true,
       sliders: [
         { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
         { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 3,  value: "3%"   },

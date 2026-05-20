@@ -164,6 +164,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
           flex: 1, width: "100%",
           minHeight: 0,
           display: "flex", alignItems: "center", justifyContent: "center",
+          position: "relative",
         }}>
           <img
             src={image}
@@ -176,6 +177,32 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
               borderRadius: 2,
             }}
           />
+
+          {/* ── Mock nudge arrows (showroom mode) ───────────────────── */}
+          {frame.nudgeArrows && [
+            { dir: "up",    label: "▲", style: { top:    isMobile ? 8 : 18,  left:  "50%", transform: "translateX(-50%)" } },
+            { dir: "down",  label: "▼", style: { bottom: isMobile ? 8 : 18,  left:  "50%", transform: "translateX(-50%)" } },
+            { dir: "left",  label: "◀", style: { left:   isMobile ? 8 : 18,  top:   "50%", transform: "translateY(-50%)" } },
+            { dir: "right", label: "▶", style: { right:  isMobile ? 8 : 18,  top:   "50%", transform: "translateY(-50%)" } },
+          ].map(({ dir, label, style }) => (
+            <div
+              key={dir}
+              style={{
+                position: "absolute",
+                ...style,
+                width:  isMobile ? 42 : 48,
+                height: isMobile ? 42 : 48,
+                borderRadius: "50%",
+                background: "rgba(242,101,34,0.82)",
+                border: "2px solid rgba(255,255,255,0.18)",
+                color: "#fff",
+                fontSize: isMobile ? 16 : 18,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                boxShadow: "0 2px 12px rgba(0,0,0,0.7)",
+                lineHeight: 1,
+              }}
+            >{label}</div>
+          ))}
         </div>
 
         {/* ── Mock sliders (optional) ────────────────────────────────── */}
