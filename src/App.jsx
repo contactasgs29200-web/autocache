@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, Fragment } from "react";
 import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
+import HelpWidget from "./components/HelpWidget.jsx";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -8460,6 +8461,14 @@ export default function AutoCache() {
       {showTutorial && (
         <Tutorial onClose={closeTutorial} isMobile={isMobile} />
       )}
+
+      {/* ── Bouton d'aide flottant (bas-gauche) ── */}
+      <HelpWidget
+        isMobile={isMobile}
+        hidden={showTutorial}
+        onOpenTutorial={() => setShowTutorial(true)}
+        onOpenContact={() => setShowContactModal(true)}
+      />
     </div>
   );
 }
