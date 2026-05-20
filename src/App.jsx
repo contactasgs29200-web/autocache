@@ -263,49 +263,115 @@ function cornersFromShowroom(sc, t) {
 
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
+// Quality pipeline: multi-step halving → axis-aligned fast path or
+// supersampled perspective rendering → high-quality composite.
 function drawPerspective(ctx, img, tl, tr, br, bl) {
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
-  // Nombre de bandes adaptatif : au moins 1 bande par pixel de hauteur (min 120, max 400)
+  if (iw < 1 || ih < 1) return;
+
+  // Bounding box of the output quad
+  const bboxL = Math.floor(Math.min(tl.x, tr.x, br.x, bl.x));
+  const bboxR = Math.ceil(Math.max(tl.x, tr.x, br.x, bl.x));
+  const bboxT = Math.floor(Math.min(tl.y, tr.y, br.y, bl.y));
+  const bboxB = Math.ceil(Math.max(tl.y, tr.y, br.y, bl.y));
+  const plateW = bboxR - bboxL;
+  const plateH = bboxB - bboxT;
+  if (plateW < 1 || plateH < 1) return;
+
+  // ── Step 1: multi-step halving ──
+  // Canvas drawImage handles 2× downscale well but degrades at 4×+.
+  // Halve the source progressively until it's close to the output size.
+  const targetW = Math.max(plateW * 3, 600);
+  let src = img, sw = iw, sh = ih;
+  while (sw > targetW * 2 && sw > 2) {
+    const half = document.createElement('canvas');
+    half.width = Math.round(sw / 2);
+    half.height = Math.round(sh / 2);
+    const hCtx = half.getContext('2d');
+    hCtx.imageSmoothingEnabled = true;
+    hCtx.imageSmoothingQuality = 'high';
+    hCtx.drawImage(src, 0, 0, half.width, half.height);
+    src = half; sw = half.width; sh = half.height;
+  }
+
+  // ── Step 2: axis-aligned fast path ──
+  // Near-rectangular plates bypass the band decomposition entirely
+  // for a single, clean drawImage call.
+  const eps = 1.5;
+  if (Math.abs(tl.y - tr.y) < eps && Math.abs(bl.y - br.y) < eps &&
+      Math.abs(tl.x - bl.x) < eps && Math.abs(tr.x - br.x) < eps) {
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, tl.x, tl.y, tr.x - tl.x, bl.y - tl.y);
+    ctx.restore();
+    return;
+  }
+
+  // ── Step 3: supersampled perspective ──
+  const ssScale = Math.max(1, Math.min(sw / plateW, 4));
+  const useOffscreen = ssScale > 1.5;
+
+  let tCtx, sTl, sTr, sBr, sBl, offCanvas;
+  if (useOffscreen) {
+    offCanvas = document.createElement('canvas');
+    offCanvas.width = Math.ceil(plateW * ssScale);
+    offCanvas.height = Math.ceil(plateH * ssScale);
+    tCtx = offCanvas.getContext('2d');
+    const m = p => ({ x: (p.x - bboxL) * ssScale, y: (p.y - bboxT) * ssScale });
+    sTl = m(tl); sTr = m(tr); sBr = m(br); sBl = m(bl);
+  } else {
+    tCtx = ctx;
+    sTl = tl; sTr = tr; sBr = br; sBl = bl;
+  }
+
   const outH = Math.max(
-    Math.abs(bl.y - tl.y), Math.abs(br.y - tr.y),
-    Math.hypot(bl.x - tl.x, bl.y - tl.y), Math.hypot(br.x - tr.x, br.y - tr.y)
+    Math.abs(sBl.y - sTl.y), Math.abs(sBr.y - sTr.y),
+    Math.hypot(sBl.x - sTl.x, sBl.y - sTl.y), Math.hypot(sBr.x - sTr.x, sBr.y - sTr.y)
   );
-  const STEPS = Math.max(120, Math.min(400, Math.ceil(outH)));
-  ctx.save();
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
+  const STEPS = Math.max(120, Math.min(800, Math.ceil(outH)));
+  tCtx.save();
+  tCtx.imageSmoothingEnabled = true;
+  tCtx.imageSmoothingQuality = 'high';
   for (let i = 0; i < STEPS; i++) {
-    // Chevauchement de 1.5px entre bandes pour éliminer tout gap visible
     const overlap = 1.5 / outH;
     const t1 = Math.max(0, i / STEPS - overlap), t2 = Math.min(1, (i + 1) / STEPS + overlap), tm = (i + 0.5) / STEPS;
-    const x00 = lerp(tl.x, bl.x, t1), y00 = lerp(tl.y, bl.y, t1);
-    const x10 = lerp(tr.x, br.x, t1), y10 = lerp(tr.y, br.y, t1);
-    const x01 = lerp(tl.x, bl.x, t2), y01 = lerp(tl.y, bl.y, t2);
-    const x11 = lerp(tr.x, br.x, t2), y11 = lerp(tr.y, br.y, t2);
-    const mlx = lerp(tl.x, bl.x, tm), mly = lerp(tl.y, bl.y, tm);
-    const mrx = lerp(tr.x, br.x, tm), mry = lerp(tr.y, br.y, tm);
-    const sym = ih * tm;
-    const srcStripH = ih / STEPS;
+    const x00 = lerp(sTl.x, sBl.x, t1), y00 = lerp(sTl.y, sBl.y, t1);
+    const x10 = lerp(sTr.x, sBr.x, t1), y10 = lerp(sTr.y, sBr.y, t1);
+    const x01 = lerp(sTl.x, sBl.x, t2), y01 = lerp(sTl.y, sBl.y, t2);
+    const x11 = lerp(sTr.x, sBr.x, t2), y11 = lerp(sTr.y, sBr.y, t2);
+    const mlx = lerp(sTl.x, sBl.x, tm), mly = lerp(sTl.y, sBl.y, tm);
+    const mrx = lerp(sTr.x, sBr.x, tm), mry = lerp(sTr.y, sBr.y, tm);
+    const sym = sh * tm;
+    const srcStripH = sh / STEPS;
     const avgDx = ((x01 - x00) + (x11 - x10)) / 2;
     const avgDy = ((y01 - y00) + (y11 - y10)) / 2;
-    const a = (mrx - mlx) / iw;
-    const b = (mry - mly) / iw;
+    const a = (mrx - mlx) / sw;
+    const b = (mry - mly) / sw;
     const c = avgDx / srcStripH;
     const d = avgDy / srcStripH;
     const e = mlx - c * sym;
     const f = mly - d * sym;
+    tCtx.save();
+    tCtx.beginPath();
+    tCtx.moveTo(x00, y00); tCtx.lineTo(x10, y10);
+    tCtx.lineTo(x11, y11); tCtx.lineTo(x01, y01);
+    tCtx.closePath();
+    tCtx.clip();
+    tCtx.transform(a, b, c, d, e, f);
+    tCtx.drawImage(src, 0, 0, sw, sh);
+    tCtx.restore();
+  }
+  tCtx.restore();
+
+  if (useOffscreen) {
     ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(x00, y00); ctx.lineTo(x10, y10);
-    ctx.lineTo(x11, y11); ctx.lineTo(x01, y01);
-    ctx.closePath();
-    ctx.clip();
-    ctx.transform(a, b, c, d, e, f);
-    ctx.drawImage(img, 0, 0, iw, ih);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(offCanvas, bboxL, bboxT, plateW, plateH);
     ctx.restore();
   }
-  ctx.restore();
 }
 
 // Unified plate overlay renderer — fill bg, perspective draw, feather + boost.
@@ -3830,7 +3896,7 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   return dataUrl;
 }
 
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null) {
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null, blend = 0) {
   const [bgImg, carImg, wallImg, shadowImg] = await Promise.all([
     loadImg(bgDataUrl),
     loadImg(cutoutDataUrl),
@@ -3981,6 +4047,13 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+  if (blend > 0) {
+    const t = Math.max(0, Math.min(100, blend)) / 100;
+    const bVal = (1 - 0.08 * t).toFixed(3); // brightness 1.0 → 0.92
+    const cVal = (1 - 0.12 * t).toFixed(3); // contrast   1.0 → 0.88
+    const sVal = (1 - 0.12 * t).toFixed(3); // saturation 1.0 → 0.88
+    ctx.filter = `brightness(${bVal}) contrast(${cVal}) saturate(${sVal})`;
+  }
   ctx.drawImage(carImg, carX, carY, cw, ch);
   ctx.restore();
   // Snapshot avant plaque (pour Ajuster en mode showroom)
@@ -4837,6 +4910,10 @@ export default function AutoCache() {
   const [genBorderColor, setGenBorderColor] = useState("#ffffff");
   const [genBorderWidth, setGenBorderWidth] = useState(0); // 0–10 : épaisseur du liseret
   const [logoRadius, setLogoRadius] = useState(1); // 0–10 : arrondi des coins, commun import+génération
+  const [logoCropActive, setLogoCropActive] = useState(false);
+  const [logoCropBox, setLogoCropBox] = useState({ x: 0, y: 0, w: 1, h: 1 });
+  const [logoCropDrag, setLogoCropDrag] = useState(null);
+  const [logoOriginal, setLogoOriginal] = useState(null);
   const [lightbox, setLightbox] = useState(null);
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
@@ -4853,6 +4930,7 @@ export default function AutoCache() {
   const [settingsOpen, setSettingsOpen] = useState(false); // menu settings en haut à droite
   const settingsRef = useRef(null); // ref pour fermer au clic extérieur
   const logoRef        = useRef();
+  const logoCropContainerRef = useRef(null);
   const photosRef      = useRef();
   const cropImgRef       = useRef(null); // ref sur l'<img> de la lightbox (hors crop)
   const cropCanvasRef    = useRef(null); // canvas live-preview en mode Rogner
@@ -4890,8 +4968,10 @@ export default function AutoCache() {
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
   const [showroomZoom,    setShowroomZoom]    = useState(1.0);
+  const [showroomBlend,   setShowroomBlend]   = useState(0); // 0-100, intensité de fondu voiture/décor
   const [showroomNudging, setShowroomNudging] = useState(false);
   const zoomTimerRef = useRef(null);
+  const blendTimerRef = useRef(null);
   const [shadowOpacity, setShadowOpacity] = useState(SHADOW_STRENGTH);
   const [shadowBlur, setShadowBlur] = useState(0);
   const [shadowYOffset, setShadowYOffset] = useState(0);
@@ -4914,6 +4994,8 @@ export default function AutoCache() {
         setLogo({ file: null, preview: savedPreview, generated: wasGenerated, bgColor: savedBg });
         setLogoMode('import');
       }
+      const savedOriginal = localStorage.getItem('ac_logo_original');
+      if (savedOriginal) setLogoOriginal(savedOriginal);
       const savedWallMode = localStorage.getItem('ac_wall_logo_mode');
       const savedWallLogo = localStorage.getItem('ac_wall_logo');
       if (savedWallMode === 'image' && savedWallLogo) {
@@ -4932,6 +5014,21 @@ export default function AutoCache() {
       if (logo.bgColor) localStorage.setItem('ac_logo_bgcolor', logo.bgColor);
     } catch(e) {}
   }, [logo]);
+
+  useEffect(() => {
+    try {
+      if (logoOriginal) localStorage.setItem('ac_logo_original', logoOriginal);
+      else localStorage.removeItem('ac_logo_original');
+    } catch(e) {}
+  }, [logoOriginal]);
+
+  useEffect(() => {
+    if (!logoCropDrag) return;
+    const up = () => setLogoCropDrag(null);
+    document.addEventListener('mouseup', up);
+    document.addEventListener('touchend', up);
+    return () => { document.removeEventListener('mouseup', up); document.removeEventListener('touchend', up); };
+  }, [logoCropDrag]);
 
   // Sauvegarder logo mural → localStorage
   useEffect(() => {
@@ -5025,9 +5122,60 @@ export default function AutoCache() {
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
     setLogoMode("import");
+    setLogoOriginal(null);
+    setLogoCropActive(false);
+    setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 });
     const reader = new FileReader();
     reader.onload = (e) => setLogo({ file: f, preview: e.target.result, generated: false, bgColor: '#ffffff' });
     reader.readAsDataURL(f);
+  };
+
+  const startLogoCropDrag = (e, type) => {
+    e.preventDefault(); e.stopPropagation();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    setLogoCropDrag({ type, startMx: cx, startMy: cy, startBox: { ...logoCropBox } });
+  };
+
+  const onLogoCropMove = (e) => {
+    if (!logoCropDrag || !logoCropContainerRef.current) return;
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = logoCropContainerRef.current.getBoundingClientRect();
+    const dx = (cx - logoCropDrag.startMx) / rect.width;
+    const dy = (cy - logoCropDrag.startMy) / rect.height;
+    let { x, y, w, h } = logoCropDrag.startBox;
+    const t = logoCropDrag.type;
+    if (t === 'move')              { x += dx; y += dy; }
+    if (t === 'tl' || t === 'bl') { const nw = w - dx; if (nw > 0.05) { x += dx; w = nw; } }
+    if (t === 'tr' || t === 'br') { w = Math.max(0.05, w + dx); }
+    if (t === 'tl' || t === 'tr') { const nh = h - dy; if (nh > 0.05) { y += dy; h = nh; } }
+    if (t === 'bl' || t === 'br') { h = Math.max(0.05, h + dy); }
+    x = Math.max(0, Math.min(1 - w, x));
+    y = Math.max(0, Math.min(1 - h, y));
+    w = Math.min(1 - x, w); h = Math.min(1 - y, h);
+    setLogoCropBox({ x, y, w, h });
+  };
+
+  const applyLogoCrop = () => {
+    if (!logo?.preview) return;
+    const srcDataURL = logoOriginal || logo.preview;
+    const img = new Image();
+    img.onload = () => {
+      const { x, y, w, h } = logoCropBox;
+      const sx = Math.round(x * img.naturalWidth);
+      const sy = Math.round(y * img.naturalHeight);
+      const sw = Math.max(1, Math.round(w * img.naturalWidth));
+      const sh = Math.max(1, Math.round(h * img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = sw; c.height = sh;
+      c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      if (!logoOriginal) setLogoOriginal(logo.preview);
+      setLogo({ ...logo, preview: c.toDataURL('image/png') });
+      setLogoCropActive(false);
+      setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 });
+    };
+    img.src = srcDataURL;
   };
 
   const handlePhotoFiles = files => {
@@ -5411,6 +5559,7 @@ export default function AutoCache() {
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
     setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
     setShowroomZoom(r.showroomZoom ?? 1.0);
+    setShowroomBlend(r.showroomBlend ?? 0);
     setShadowOpacity(SHADOW_STRENGTH);
     setShadowBlur(0);
     setShadowYOffset(0);
@@ -5419,8 +5568,8 @@ export default function AutoCache() {
 
   const NUDGE_STEP = 75; // pas de déplacement en px sur canvas 2400×1350
 
-  // Recomposite central — utilisé par flèches ET slider zoom
-  const recompositeShowroom = (nudge, zoom) => {
+  // Recomposite central — utilisé par flèches, slider zoom ET slider fondu
+  const recompositeShowroom = (nudge, zoom, blend) => {
     setLightbox(prev => {
       if (!prev?.cutoutDataURL || showroomNudging) return prev;
       setShowroomNudging(true);
@@ -5431,9 +5580,9 @@ export default function AutoCache() {
           const sr = await compositeCarOnBg(
             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
             logoImgEl, prev.corners, prev.bgColor,
-            nudge.x, nudge.y, zoom, true, wOpts, prev.shadowMatteDataURL
+            nudge.x, nudge.y, zoom, true, wOpts, prev.shadowMatteDataURL, blend
           );
-          const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
+          const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend: blend };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
         } catch(e) { console.error('recomposite error', e); }
@@ -5446,13 +5595,19 @@ export default function AutoCache() {
   const nudgeShowroom = (dx, dy) => {
     const newNudge = { x: showroomNudge.x + dx, y: showroomNudge.y + dy };
     setShowroomNudge(newNudge);
-    recompositeShowroom(newNudge, showroomZoom);
+    recompositeShowroom(newNudge, showroomZoom, showroomBlend);
   };
 
   const onZoomChange = (z) => {
     setShowroomZoom(z);
     clearTimeout(zoomTimerRef.current);
-    zoomTimerRef.current = setTimeout(() => recompositeShowroom(showroomNudge, z), 250);
+    zoomTimerRef.current = setTimeout(() => recompositeShowroom(showroomNudge, z, showroomBlend), 250);
+  };
+
+  const onBlendChange = (b) => {
+    setShowroomBlend(b);
+    clearTimeout(blendTimerRef.current);
+    blendTimerRef.current = setTimeout(() => recompositeShowroom(showroomNudge, showroomZoom, b), 250);
   };
 
   const onShadowParamChange = (param, value) => {
@@ -5489,7 +5644,7 @@ export default function AutoCache() {
         const sr = await compositeCarOnBg(
           lightbox.cutoutDataURL, lightbox.showroomBgUrl, 2400, 1350,
           logoImgEl, lightbox.corners, lightbox.bgColor,
-          showroomNudge.x, showroomNudge.y, showroomZoom, true, wOpts, newMatte
+          showroomNudge.x, showroomNudge.y, showroomZoom, true, wOpts, newMatte, showroomBlend
         );
         const updated = { ...lightbox, shadowMatteDataURL: newMatte, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, carBoundsCache: carBounds };
         setLightbox(updated);
@@ -6137,7 +6292,7 @@ export default function AutoCache() {
                 <div style={{ display: "flex", marginBottom: 14, background: "#121212", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                   {[["import","Mon logo"],["generate","Générer"]].map(([m, label]) => (
                     <button key={m} onClick={() => {
-                      if (m === "import") setLogo(null);
+                      if (m === "import") { setLogo(null); setLogoOriginal(null); setLogoCropActive(false); }
                       setLogoMode(m);
                     }} style={{ flex: 1, background: logoMode === m ? "#f26522" : "transparent", color: logoMode === m ? "#090909" : "#555", border: "none", padding: "8px 0", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>
                       {label}
@@ -6150,22 +6305,73 @@ export default function AutoCache() {
                   <div style={{ fontSize: 10, color: "#666", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>
                     {logo ? "✓ Logo chargé · cliquer pour changer" : "PNG avec transparence recommandé"}
                   </div>
-                  <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
-                    onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
-                    onClick={() => logoRef.current?.click()}
-                    style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#161616" }}>
-                    {logo ? (
-                      <div style={{ textAlign: "center" }}>
-                        <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain", borderRadius: logoRadius > 0 ? `${Math.round(logoRadius * 4)}px` : 0 }} />
-                        <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
+                  {!logoCropActive && (
+                    <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
+                      onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
+                      onClick={() => logoRef.current?.click()}
+                      style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#161616" }}>
+                      {logo ? (
+                        <div style={{ textAlign: "center" }}>
+                          <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain", borderRadius: logoRadius > 0 ? `${Math.round(logoRadius * 4)}px` : 0 }} />
+                          <div style={{ fontSize: 10, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
+                        </div>
+                      ) : (
+                        <div style={{ textAlign: "center", color: "#555" }}>
+                          <div style={{ fontSize: 32, marginBottom: 8 }}>⬡</div>
+                          <div style={{ fontSize: 12, color: "#666" }}>Glisser votre logo ici</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {logo && !logo.generated && !logoCropActive && (
+                    <div style={{ marginTop: 8, textAlign: "center" }}>
+                      <button onClick={() => { setLogoCropActive(true); setLogoCropBox({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 }); }}
+                        style={{ background: "#181818", color: "#f26522", border: "1px solid #3a1400", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                        ✂ Recadrer
+                      </button>
+                    </div>
+                  )}
+                  {logo && logoCropActive && (
+                    <div style={{ background: "#0a0a0a", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
+                      <div ref={logoCropContainerRef}
+                        onMouseMove={onLogoCropMove} onTouchMove={onLogoCropMove}
+                        style={{ position: "relative", userSelect: "none", touchAction: "none" }}>
+                        <img src={logoOriginal || logo.preview} style={{ width: "100%", display: "block" }} draggable={false} />
+                        {/* Dark overlays */}
+                        <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: `${logoCropBox.y * 100}%`, background: "rgba(0,0,0,0.6)" }} />
+                        <div style={{ position: "absolute", bottom: 0, left: 0, width: "100%", height: `${(1 - logoCropBox.y - logoCropBox.h) * 100}%`, background: "rgba(0,0,0,0.6)" }} />
+                        <div style={{ position: "absolute", top: `${logoCropBox.y * 100}%`, left: 0, width: `${logoCropBox.x * 100}%`, height: `${logoCropBox.h * 100}%`, background: "rgba(0,0,0,0.6)" }} />
+                        <div style={{ position: "absolute", top: `${logoCropBox.y * 100}%`, right: 0, width: `${(1 - logoCropBox.x - logoCropBox.w) * 100}%`, height: `${logoCropBox.h * 100}%`, background: "rgba(0,0,0,0.6)" }} />
+                        {/* Crop rectangle */}
+                        <div onMouseDown={e => startLogoCropDrag(e, 'move')} onTouchStart={e => startLogoCropDrag(e, 'move')}
+                          style={{ position: "absolute", left: `${logoCropBox.x * 100}%`, top: `${logoCropBox.y * 100}%`, width: `${logoCropBox.w * 100}%`, height: `${logoCropBox.h * 100}%`, border: "2px solid #f26522", boxSizing: "border-box", cursor: "move" }} />
+                        {/* Corner handles */}
+                        {['tl','tr','bl','br'].map(corner => {
+                          const isLeft = corner.includes('l'), isTop = corner.includes('t');
+                          return (
+                            <div key={corner}
+                              onMouseDown={e => startLogoCropDrag(e, corner)} onTouchStart={e => startLogoCropDrag(e, corner)}
+                              style={{ position: "absolute",
+                                left: `calc(${(isLeft ? logoCropBox.x : logoCropBox.x + logoCropBox.w) * 100}% - 7px)`,
+                                top: `calc(${(isTop ? logoCropBox.y : logoCropBox.y + logoCropBox.h) * 100}% - 7px)`,
+                                width: 14, height: 14, background: "#f26522", borderRadius: 2,
+                                cursor: corner === 'tl' || corner === 'br' ? 'nwse-resize' : 'nesw-resize',
+                                zIndex: 2 }} />
+                          );
+                        })}
                       </div>
-                    ) : (
-                      <div style={{ textAlign: "center", color: "#555" }}>
-                        <div style={{ fontSize: 32, marginBottom: 8 }}>⬡</div>
-                        <div style={{ fontSize: 12, color: "#666" }}>Glisser votre logo ici</div>
+                      <div style={{ display: "flex", gap: 8, padding: "10px 12px", justifyContent: "center" }}>
+                        <button onClick={applyLogoCrop}
+                          style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                          Appliquer
+                        </button>
+                        <button onClick={() => { setLogoCropActive(false); setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 }); }}
+                          style={{ background: "#181818", color: "#888", border: "1px solid #2a2a2a", fontFamily: "'Rajdhani',sans-serif", fontSize: 10, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                          Annuler
+                        </button>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </>)}
 
                 {/* ── Mode : générer texte + couleur ── */}
@@ -6856,9 +7062,9 @@ export default function AutoCache() {
                     const wOpts2 = snap.wallLogoSrc ? { src: snap.wallLogoSrc, scale: snap.wallLogoScale, opacity: snap.wallLogoOpacity, x: snap.wallLogoPos?.x ?? 0.5, y: snap.wallLogoPos?.y ?? 0.25 } : null;
                     loadImg(snap.logoPreview).then(logoImgEl =>
                       compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
-                        logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, wOpts2, snap.shadowMatteDataURL)
+                        logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, wOpts2, snap.shadowMatteDataURL, showroomBlend)
                     ).then(sr => {
-                      const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom };
+                      const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
                       setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
                       setLightbox(prev => prev?.name === snap.name ? withSR : prev);
                     }).catch(e => console.error('showroom regen (adjust):', e));
@@ -7316,7 +7522,7 @@ export default function AutoCache() {
                           const sr = await compositeCarOnBg(
                             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
                             logoImgEl, prev.corners, prev.bgColor,
-                            nudge.x, nudge.y, zm, true, wOpts, prev.shadowMatteDataURL
+                            nudge.x, nudge.y, zm, true, wOpts, prev.shadowMatteDataURL, showroomBlend
                           );
                           const upd = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform };
                           setLightbox(upd);
@@ -7570,6 +7776,28 @@ export default function AutoCache() {
             </div>
           )}
 
+          {/* ── Slider fondu voiture/décor (masqué après rognage) ── */}
+          {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && (
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, width: "min(500px, 90vw)" }}
+              title="Fond la voiture dans le décor en abaissant luminosité, contraste et saturation"
+            >
+              <span style={{ fontSize: 16, userSelect: "none" }}>🎨</span>
+              <input
+                type="range"
+                min="0" max="100" step="1"
+                value={showroomBlend}
+                onChange={e => onBlendChange(parseInt(e.target.value, 10))}
+                disabled={showroomNudging}
+                style={{ flex: 1, accentColor: "#f26522", cursor: showroomNudging ? "not-allowed" : "pointer", height: 4 }}
+              />
+              <span style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", minWidth: 34, textAlign: "right" }}>
+                {showroomBlend}%
+              </span>
+            </div>
+          )}
+
           {/* ── Corriger le détourage (mask editor) ── */}
           {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && !showMaskEditor && (
             <div onClick={e => e.stopPropagation()} style={{ marginTop: 6, display: 'flex', justifyContent: 'center' }}>
@@ -7625,7 +7853,7 @@ export default function AutoCache() {
                   const sr = await compositeCarOnBg(
                     correctedDataURL, lightbox.showroomBgUrl, 2400, 1350,
                     null, null, lightbox.bgColor || '#ffffff',
-                    0, 0, 1.0, true, wOpts, newShadow
+                    0, 0, 1.0, true, wOpts, newShadow, showroomBlend
                   );
                   // Update lightbox state
                   setLightbox(prev => ({
