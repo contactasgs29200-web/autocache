@@ -132,7 +132,6 @@ const STEPS = [
         { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
       ],
       closeButton: true,
-      centerButton: { icon: "▼" },
       nudgeArrows: true,
       sliders: [
         { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
@@ -155,7 +154,6 @@ const STEPS = [
         { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
       ],
       closeButton: true,
-      centerButton: { icon: "▼" },
       sliders: [
         { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
         { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 75, value: "75%"  },
