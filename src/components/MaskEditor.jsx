@@ -260,7 +260,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     borderRadius: 6,
     cursor: 'pointer',
     fontWeight: active ? 700 : 500,
-    fontSize: 13,
+    fontSize: 14,
     background: active ? '#3b82f6' : '#374151',
     color: '#fff',
     opacity: active === false ? 0.4 : 1,
@@ -295,8 +295,8 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         <button style={btnStyle(mode === 'restore')} onClick={() => setMode('restore')}>
           Restaurer
         </button>
-        <span style={{ color: '#9ca3af', fontSize: 12, margin: '0 4px' }}>|</span>
-        <label style={{ color: '#d1d5db', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ color: '#9ca3af', fontSize: 13, margin: '0 4px' }}>|</span>
+        <label style={{ color: '#d1d5db', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
           Taille
           <input type="range" min={5} max={120} value={brushSize}
             onChange={e => setBrushSize(Number(e.target.value))}
@@ -304,18 +304,18 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
             style={{ width: 80 }} />
           <span style={{ minWidth: 24, textAlign: 'right' }}>{brushSize}</span>
         </label>
-        <span style={{ color: '#9ca3af', fontSize: 12, margin: '0 4px' }}>|</span>
+        <span style={{ color: '#9ca3af', fontSize: 13, margin: '0 4px' }}>|</span>
         <button style={btnStyle(canUndo)} onClick={undo} disabled={!canUndo}>Annuler</button>
         <button style={btnStyle(canRedo)} onClick={redo} disabled={!canRedo}>Refaire</button>
-        <span style={{ color: '#9ca3af', fontSize: 12, margin: '0 4px' }}>|</span>
+        <span style={{ color: '#9ca3af', fontSize: 13, margin: '0 4px' }}>|</span>
         <select value={bgMode} onChange={e => setBgMode(e.target.value)}
           onMouseDown={e => e.stopPropagation()}
-          style={{ background: '#374151', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 12 }}>
+          style={{ background: '#374151', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 13 }}>
           <option value="checker">Damier</option>
           <option value="white">Blanc</option>
           <option value="black">Noir</option>
         </select>
-        <span style={{ color: '#9ca3af', fontSize: 12, margin: '0 4px' }}>|</span>
+        <span style={{ color: '#9ca3af', fontSize: 13, margin: '0 4px' }}>|</span>
         <button style={btnStyle(true)} onClick={resetZoom}>
           {Math.round(zoom * 100)}%
         </button>
@@ -358,7 +358,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       </div>
 
       {/* Help text */}
-      <div style={{ color: '#6b7280', fontSize: 11, marginTop: 6, textAlign: 'center' }}>
+      <div style={{ color: '#6b7280', fontSize: 12, marginTop: 6, textAlign: 'center' }}>
         Molette = zoom &nbsp;|&nbsp; Clic droit + glisser = deplacer &nbsp;|&nbsp; Clic gauche = peindre
       </div>
 
@@ -369,7 +369,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
           onMouseDown={e => e.stopPropagation()}
           style={{
             padding: '10px 24px', background: '#4b5563', color: '#fff',
-            border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14,
+            border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 15,
           }}
         >
           Annuler
@@ -379,7 +379,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
           onMouseDown={e => e.stopPropagation()}
           style={{
             padding: '10px 24px', background: '#10b981', color: '#fff',
-            border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600,
+            border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 15, fontWeight: 600,
           }}
         >
           Appliquer

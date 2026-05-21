@@ -105,7 +105,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
           {/* Filename on the left */}
           {!isMobile && (
             <div style={{
-              fontSize: 10, color: "#888",
+              fontSize: 11, color: "#888",
               fontFamily: "'JetBrains Mono', monospace",
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               maxWidth: "30%",
@@ -119,7 +119,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
               width: 36, height: 36, borderRadius: "50%",
               background: "#f26522",
               display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#fff", fontSize: 14,
+              color: "#fff", fontSize: 15,
               boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
             }}>
               {centerButton.icon ?? "▼"}
@@ -138,7 +138,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
                     background: v.bg, color: v.color, border: v.border,
                     padding: isMobile ? "6px 10px" : "7px 14px",
                     fontFamily: "'Rajdhani', sans-serif",
-                    fontSize: isMobile ? 10 : 11,
+                    fontSize: isMobile ? 11 : 12,
                     fontWeight: 700, letterSpacing: 1, textTransform: "uppercase",
                     borderRadius: 2, lineHeight: 1,
                     whiteSpace: "nowrap",
@@ -151,7 +151,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
               <div style={{
                 width: 28, height: 28, borderRadius: 2,
                 background: "rgba(20,20,20,0.92)", border: "1px solid #3a3a3a",
-                color: "#ccc", fontSize: 14,
+                color: "#ccc", fontSize: 15,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 lineHeight: 1,
               }}>✕</div>
@@ -196,7 +196,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
                 background: "rgba(242,101,34,0.82)",
                 border: "2px solid rgba(255,255,255,0.18)",
                 color: "#fff",
-                fontSize: isMobile ? 16 : 18,
+                fontSize: isMobile ? 17 : 19,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 boxShadow: "0 2px 12px rgba(0,0,0,0.7)",
                 lineHeight: 1,
@@ -216,9 +216,9 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
               padding: "4px 0",
             }}
           >
-            <span style={{ fontSize: 16, userSelect: "none" }}>{icon}</span>
+            <span style={{ fontSize: 17, userSelect: "none" }}>{icon}</span>
             <span style={{
-              fontSize: 10, color: "#888",
+              fontSize: 11, color: "#888",
               letterSpacing: 1.5, textTransform: "uppercase",
               fontFamily: "'JetBrains Mono', monospace",
               userSelect: "none", whiteSpace: "nowrap",
@@ -235,7 +235,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
               }} />
             </div>
             <span style={{
-              fontSize: 10, color: "#f26522",
+              fontSize: 11, color: "#f26522",
               fontFamily: "'JetBrains Mono', monospace",
               minWidth: 34, textAlign: "right",
             }}>{value}</span>
@@ -246,7 +246,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
         {footer && (
           <div style={{
             marginTop: 4,
-            fontSize: 9, color: "#666",
+            fontSize: 10, color: "#666",
             fontFamily: "'JetBrains Mono', monospace",
             textAlign: "center",
             maxWidth: "min(900px, 95%)",

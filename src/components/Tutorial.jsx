@@ -491,17 +491,17 @@ export default function Tutorial({ onClose, isMobile }) {
               width: 32, height: 32, borderRadius: 6,
               background: "rgba(242,101,34,0.12)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 16, color: "#f26522",
+              fontSize: 17, color: "#f26522",
             }}>
               {current.icon}
             </div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#ddd5c8", letterSpacing: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#ddd5c8", letterSpacing: 1 }}>
               {current.title}
             </div>
           </div>
           <button onClick={skip} style={{
             background: "transparent", border: "none", color: "#555",
-            cursor: "pointer", fontSize: 16, padding: "2px 6px", lineHeight: 1,
+            cursor: "pointer", fontSize: 17, padding: "2px 6px", lineHeight: 1,
           }} title="Fermer">
             ✕
           </button>
@@ -510,7 +510,7 @@ export default function Tutorial({ onClose, isMobile }) {
         {/* Body */}
         <div style={{ padding: "14px 20px 16px" }}>
           <p style={{
-            fontSize: 13, color: "#999", lineHeight: 1.7,
+            fontSize: 14, color: "#999", lineHeight: 1.7,
             margin: 0, fontFamily: "'Rajdhani', sans-serif",
           }}>
             {current.body}
@@ -540,7 +540,7 @@ export default function Tutorial({ onClose, isMobile }) {
                 background: "transparent", border: "1px solid #2a2a2a",
                 color: "#888", padding: "6px 14px", cursor: "pointer",
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 10, letterSpacing: 1, textTransform: "uppercase", borderRadius: 3,
+                fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 3,
               }}>Précédent</button>
             )}
             {isFirst && (
@@ -548,14 +548,14 @@ export default function Tutorial({ onClose, isMobile }) {
                 background: "transparent", border: "none", color: "#555",
                 padding: "6px 10px", cursor: "pointer",
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 10, letterSpacing: 1, textTransform: "uppercase",
+                fontSize: 11, letterSpacing: 1, textTransform: "uppercase",
               }}>Passer</button>
             )}
             <button onClick={next} style={{
               background: "#f26522", border: "none", color: "#090909",
               padding: "7px 18px", cursor: "pointer",
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 10, fontWeight: 700, letterSpacing: 1,
+              fontSize: 11, fontWeight: 700, letterSpacing: 1,
               textTransform: "uppercase", borderRadius: 3,
             }}>
               {isLast ? "Commencer" : "Suivant"}
@@ -566,7 +566,7 @@ export default function Tutorial({ onClose, isMobile }) {
         {/* Step counter */}
         <div style={{
           position: "absolute", top: 18, right: 44,
-          fontSize: 9, color: "#444",
+          fontSize: 10, color: "#444",
           fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1,
         }}>
           {step + 1}/{STEPS.length}

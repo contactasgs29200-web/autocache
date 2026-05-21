@@ -114,14 +114,14 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                   display: "flex", alignItems: "center", gap: 10, width: "100%",
                   padding: "11px 16px", background: "transparent", border: "none",
                   color: "#bbb", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
-                  fontSize: 12, fontWeight: 600, letterSpacing: 1, textAlign: "left",
+                  fontSize: 13, fontWeight: 600, letterSpacing: 1, textAlign: "left",
                   borderBottom: i < items.length - 1 ? "1px solid #1a1a1a" : "none",
                   transition: "background 0.12s",
                 }}
                 onMouseEnter={e => e.currentTarget.style.background = "#1a1a1a"}
                 onMouseLeave={e => e.currentTarget.style.background = "transparent"}
               >
-                <span style={{ fontSize: 14, width: 20, textAlign: "center" }}>{item.icon}</span>
+                <span style={{ fontSize: 15, width: 20, textAlign: "center" }}>{item.icon}</span>
                 {item.label}
               </button>
             ))}
@@ -140,7 +140,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
             background: "#f26522",
             border: menuOpen ? "2px solid #fff" : "2px solid rgba(255,255,255,0.15)",
             color: "#fff",
-            fontSize: isMobile ? 20 : 22,
+            fontSize: isMobile ? 21 : 23,
             fontWeight: 700,
             cursor: "pointer",
             display: "flex", alignItems: "center", justifyContent: "center",
@@ -189,14 +189,14 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
               }}
             >
               <div>
-                <div style={{ fontSize: 11, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
+                <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
                   FAQ
                 </div>
-                <div style={{ fontSize: 13, color: "#555" }}>Questions fréquentes</div>
+                <div style={{ fontSize: 14, color: "#555" }}>Questions fréquentes</div>
               </div>
               <button
                 onClick={() => setFaqOpen(false)}
-                style={{ background: "none", border: "none", color: "#555", fontSize: 20, cursor: "pointer", lineHeight: 1 }}
+                style={{ background: "none", border: "none", color: "#555", fontSize: 21, cursor: "pointer", lineHeight: 1 }}
                 title="Fermer"
               >
                 ✕
@@ -223,11 +223,11 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                       onMouseEnter={e => e.currentTarget.style.background = "#161616"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                     >
-                      <span style={{ fontSize: 14, fontWeight: 600, color: open ? "#f26522" : "#ddd5c8", letterSpacing: 0.3 }}>
+                      <span style={{ fontSize: 15, fontWeight: 600, color: open ? "#f26522" : "#ddd5c8", letterSpacing: 0.3 }}>
                         {item.q}
                       </span>
                       <span style={{
-                        fontSize: 14, color: open ? "#f26522" : "#666",
+                        fontSize: 15, color: open ? "#f26522" : "#666",
                         flexShrink: 0,
                         transform: open ? "rotate(45deg)" : "rotate(0)",
                         transition: "transform 0.2s ease",
@@ -239,7 +239,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                     {open && (
                       <div style={{
                         padding: "0 24px 18px",
-                        fontSize: 13,
+                        fontSize: 14,
                         color: "#999",
                         lineHeight: 1.7,
                       }}>
