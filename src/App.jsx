@@ -6547,7 +6547,7 @@ export default function AutoCache() {
                         {locked ? <span style={{ color: "#ddd", fontSize: 11 }}>🔒</span> : active && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                       </div>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: locked ? "#555" : active ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: locked ? "#888" : active ? "#f26522" : "#ddd5c8", fontFamily: "'Rajdhani',sans-serif" }}>
                           {icon} {label}{locked && <span style={{ fontSize: 9, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>PRO</span>}
                         </div>
                         <div style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
@@ -6599,7 +6599,7 @@ export default function AutoCache() {
                   <div style={{ textAlign: "center", color: "#ddd" }}>
                     <div style={{ fontSize: 31, marginBottom: 8 }}>◈</div>
                     <div style={{ fontSize: 13, color: "#ddd" }}>{isMobile ? "Appuyer pour sélectionner" : "Glisser les photos ici"}</div>
-                    <div style={{ fontSize: 11, marginTop: 3, color: "#4a4a4a" }}>JPG, PNG — plusieurs fichiers acceptés</div>
+                    <div style={{ fontSize: 11, marginTop: 3, color: "#ddd5c8" }}>JPG, PNG — plusieurs fichiers acceptés</div>
                   </div>
                 </div>
                 <input ref={photosRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => handlePhotoFiles(e.target.files)} />
