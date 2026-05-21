@@ -4921,6 +4921,7 @@ export default function AutoCache() {
   const [showPlansModal, setShowPlansModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
+  const [showMiniGame,     setShowMiniGame]     = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCreditPopup, setShowCreditPopup] = useState(false);
   const [subInfo, setSubInfo] = useState(null); // { periodStart, periodEnd, plan, daysLeft }
@@ -6300,6 +6301,7 @@ export default function AutoCache() {
                     { icon: "🎟", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
                     { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); setShowContactModal(true); } },
                     { icon: "📖", label: "Revoir le didacticiel", action: () => { setSettingsOpen(false); setShowTutorial(true); } },
+                    { icon: "🎮", label: "Mini-jeu", action: () => { setSettingsOpen(false); setShowMiniGame(true); } },
                   ].map((item, i) => (
                     <button key={i} onClick={item.action}
                       style={{
@@ -8114,6 +8116,23 @@ export default function AutoCache() {
                 </a>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Mini-jeu (hors chargement) ── */}
+      {showMiniGame && (
+        <div onClick={() => setShowMiniGame(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#111", border: "1px solid #222", borderRadius: 6, padding: "20px 24px 24px", fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>
+                Mini-jeu
+              </div>
+              <button onClick={() => setShowMiniGame(false)} style={{ background: "none", border: "none", color: "#ddd", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
+            </div>
+            <LoadingGame />
           </div>
         </div>
       )}
