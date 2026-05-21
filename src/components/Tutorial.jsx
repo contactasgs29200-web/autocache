@@ -142,9 +142,52 @@ const STEPS = [
   },
   {
     mode: "slide",
+    image: `${TUTORIAL_BASE}/5-showroom-base.jpg`,
+    title: "Étape 6 — Deux options d'ajustement",
+    body: "Une fois la photo importée sur le showroom, deux options s'offrent à vous :",
+    icon: "◇",
+    frame: {
+      filename: "renault-scenic.jpg",
+      buttons: [
+        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
+        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
+        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
+      ],
+      closeButton: true,
+      sliders: [
+        { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
+        { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 3,  value: "3%"   },
+      ],
+      footer: "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto",
+    },
+  },
+  {
+    mode: "slide",
+    image: `${TUTORIAL_BASE}/5-showroom-base.jpg`,
+    title: "Étape 7 — Agrandir la taille",
+    body: "Cette jauge vous permettra d'ajuster la taille de votre véhicule pour qu'il colle au décor.",
+    icon: "⊕",
+    frame: {
+      filename: "renault-scenic.jpg",
+      buttons: [
+        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
+        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
+        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
+      ],
+      closeButton: true,
+      sliders: [
+        { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
+        { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 3,  value: "3%"   },
+      ],
+      footer: "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto",
+      highlight: "zoom",
+    },
+  },
+  {
+    mode: "slide",
     image: `${TUTORIAL_BASE}/6-showroom-ajust-ok.jpg`,
-    title: "Étape 6 — Fondu showroom",
-    body: "Glissez le slider FONDU pour intégrer parfaitement la voiture au décor : l'éclairage du sol se reflète sur la carrosserie, les couleurs se marient. Téléchargez votre visuel showroom final.",
+    title: "Étape 8 — Fondre dans le décor",
+    body: "Et voici l'option qui vous permettra de fondre automatiquement votre véhicule dans le décor en adaptant couleurs, brillance et contrastes.",
     icon: "✦",
     frame: {
       filename: "renault-scenic.jpg",
@@ -322,7 +365,7 @@ export default function Tutorial({ onClose, isMobile }) {
 
   /* ── Tooltip placement for slide mode ── */
   // When the highlight is a slider at the bottom of the frame, push the tooltip to the top.
-  const slideTooltipAtTop = isSlide && current.frame?.highlight === "fondu";
+  const slideTooltipAtTop = isSlide && ["fondu", "zoom"].includes(current.frame?.highlight);
   const slideTooltipStyle = isSlide
     ? (() => {
         const w = isMobile ? Math.min(380, window.innerWidth - 24) : 440;
