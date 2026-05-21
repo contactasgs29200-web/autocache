@@ -6631,7 +6631,7 @@ export default function AutoCache() {
                     {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "#ddd", fontSize: 11 }}>🔒</span>}
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled && canUseShowroom ? "#f26522" : "#666", fontFamily: "'Rajdhani',sans-serif" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled && canUseShowroom ? "#f26522" : "#ddd5c8", fontFamily: "'Rajdhani',sans-serif" }}>
                       ⬡ Showroom Virtuel {!canUseShowroom && <span style={{ fontSize: 9, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>ABONNEMENT PRO</span>}
                     </div>
                     <div style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>
