@@ -3954,12 +3954,14 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const scale = Math.min((W * 0.92) / carImg.width, (H * 0.78) / carImg.height) * zoom;
   const cw = carImg.width * scale;
   const ch = carImg.height * scale;
-  const carX = (W - cw) / 2 + offsetX;
-  const carY = H * 0.82 - ch + offsetY; // bas de la voiture ancré à 82 % de la hauteur
 
-  // Trouver le bas réel de la voiture (dernier pixel non-transparent du cutout)
-  // pour éviter un écart entre l'ombre et les pneus
+  // Trouver le bbox réel de la voiture dans le cutout (pixels non-transparents).
+  // → permet de centrer sur le centre VISUEL du véhicule plutôt que sur le
+  //   centre du cutout (qui peut avoir des marges asymétriques), et de placer
+  //   les pneus contre le sol même si le cutout a une bande transparente en bas.
   let actualBottomFrac = 1.0;
+  let actualLeftFrac   = 0.0;
+  let actualRightFrac  = 1.0;
   try {
     const scanC = document.createElement('canvas');
     scanC.width = carImg.width; scanC.height = carImg.height;
@@ -3967,16 +3969,30 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     scanCtx.drawImage(carImg, 0, 0);
     const imgData = scanCtx.getImageData(0, 0, carImg.width, carImg.height);
     const data = imgData.data;
-    let lastRow = carImg.height - 1;
-    for (let y = carImg.height - 1; y >= 0; y--) {
-      let hasPixel = false;
+    let minX = carImg.width, maxX = -1, maxY = -1;
+    for (let y = 0; y < carImg.height; y++) {
       for (let x = 0; x < carImg.width; x++) {
-        if (data[(y * carImg.width + x) * 4 + 3] > 20) { hasPixel = true; break; }
+        if (data[(y * carImg.width + x) * 4 + 3] > 20) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
       }
-      if (hasPixel) { lastRow = y; break; }
     }
-    actualBottomFrac = (lastRow + 1) / carImg.height;
-  } catch (_) { /* fallback to 1.0 */ }
+    if (maxX >= 0) {
+      actualLeftFrac   = minX / carImg.width;
+      actualRightFrac  = (maxX + 1) / carImg.width;
+      actualBottomFrac = (maxY + 1) / carImg.height;
+    }
+  } catch (_) { /* garder les valeurs par défaut */ }
+
+  // Centre visuel horizontal de la voiture (relatif au cutout, 0..1).
+  const carCenterFrac = (actualLeftFrac + actualRightFrac) / 2;
+  // carX décale le cutout pour que le centre visuel du véhicule tombe sur W/2,
+  // puis l'utilisateur peut ajuster avec offsetX (flèches).
+  const carX = W / 2 - carCenterFrac * cw + offsetX;
+  // Le bas du véhicule reste ancré à 82 % de la hauteur du décor (= sol).
+  const carY = H * 0.82 - actualBottomFrac * ch + offsetY;
 
   const carBottom = carY + actualBottomFrac * ch;
   const debugMode = getShowroomDebugMode();
