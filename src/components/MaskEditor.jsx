@@ -33,8 +33,10 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
 
   // Image dimensions
   const dimRef = useRef({ w: 0, h: 0, scale: 1 });
-  // Original alpha for restore mode
+  // Original alpha for "restore" (undo erasures within the current edit)
   const origAlphaRef = useRef(null);
+  // Original full-image RGBA for "recover" (paint back parts the cutout dropped)
+  const origPixelsRef = useRef(null);
 
   // Initialize canvas from cutoutDataURL
   useEffect(() => {
@@ -76,6 +78,39 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     };
     img.src = cutoutDataURL;
   }, [cutoutDataURL]);
+
+  // Load the original full-image (pre-cutout) and resample it to the cutout's
+  // dimensions so "Récupérer" can paint RGB pixels straight from the source.
+  useEffect(() => {
+    if (!originalDataURL) { origPixelsRef.current = null; return; }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      const { w, h } = dimRef.current;
+      if (!w || !h) {
+        // The cutout hasn't finished loading yet — retry once it has.
+        const retry = setInterval(() => {
+          const { w: w2, h: h2 } = dimRef.current;
+          if (!w2 || !h2) return;
+          clearInterval(retry);
+          if (cancelled) return;
+          const c = document.createElement('canvas');
+          c.width = w2; c.height = h2;
+          c.getContext('2d').drawImage(img, 0, 0, w2, h2);
+          origPixelsRef.current = c.getContext('2d').getImageData(0, 0, w2, h2).data;
+        }, 50);
+        setTimeout(() => clearInterval(retry), 5000);
+        return;
+      }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      origPixelsRef.current = c.getContext('2d').getImageData(0, 0, w, h).data;
+    };
+    img.src = originalDataURL;
+    return () => { cancelled = true; };
+  }, [originalDataURL, cutoutDataURL]);
 
   // Draw checker/white/black background on overlay canvas
   useEffect(() => {
@@ -171,6 +206,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     const data = imgData.data;
     const rSq = r * r;
 
+    const orig = origPixelsRef.current;
     for (let py = y0; py <= y1; py++) {
       for (let px = x0; px <= x1; px++) {
         const dx = px - x, dy = py - y;
@@ -178,8 +214,17 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         const li = ((py - y0) * (x1 - x0 + 1) + (px - x0)) * 4;
         if (mode === 'erase') {
           data[li + 3] = 0;
+        } else if (mode === 'recover' && orig) {
+          // Paint pixels back from the original full-image (rescues bits the
+          // AI cutout dropped — antennas, optics, etc.) — full alpha.
+          const oi = (py * w + px) * 4;
+          data[li + 0] = orig[oi + 0];
+          data[li + 1] = orig[oi + 1];
+          data[li + 2] = orig[oi + 2];
+          data[li + 3] = 255;
         } else {
-          // Restore from original alpha
+          // Restore from the cutout's initial alpha (undoes erasures done in
+          // this session, won't bring back content the AI never kept).
           const oi = py * w + px;
           data[li + 3] = origAlphaRef.current ? origAlphaRef.current[oi] : 255;
         }
@@ -291,6 +336,9 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       >
         <button style={btnStyle(mode === 'erase')} onClick={() => setMode('erase')}>
           Gomme
+        </button>
+        <button style={btnStyle(mode === 'recover')} onClick={() => setMode('recover')}>
+          Récupérer
         </button>
         <button style={btnStyle(mode === 'restore')} onClick={() => setMode('restore')}>
           Restaurer

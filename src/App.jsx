@@ -5419,7 +5419,10 @@ export default function AutoCache() {
           }
 
           const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts, shadowMatteUrl);
+          // Default blend = 75 so the vehicle integrates with the décor as soon as
+          // the photo is generated. User can still drag the slider down to 0 in the
+          // lightbox to disable the effect entirely.
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts, shadowMatteUrl, 75);
 
           // For debug modes that show source-based overlays, override the showroom result
           if (debugDataURL) {
@@ -5436,6 +5439,7 @@ export default function AutoCache() {
             entry.showroomTransform = sr.transform;
           }
           entry.showroomBgUrl     = showroomBgDataUrl;
+          entry.showroomBlend     = 75; // default blend so the lightbox slider opens at 75 %
           entry.wallLogoSrc       = resolvedWallLogo;
           entry.wallLogoPos       = { x: 0.5, y: 0.25 };
           entry.wallLogoScale     = wallLogoScale;
