@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, Fragment } from "react";
 import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
+import LoadingGame from "./components/LoadingGame.jsx";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -8542,7 +8543,7 @@ export default function AutoCache() {
 
       {/* ── Overlay chargement ── */}
       {processing && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.88)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20 }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.92)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, overflowY: "auto", padding: "32px 16px" }}>
           <span className="ac-spinner" style={{ width: 52, height: 52, borderTop: "5px solid #f26522", borderRight: "5px solid #f26522", borderBottom: "5px solid #f26522", borderLeft: "5px solid transparent", borderRadius: "50%", display: "inline-block" }} />
           <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
             Traitement {progress.n} / {progress.total}
@@ -8550,6 +8551,8 @@ export default function AutoCache() {
           <div style={{ width: 200, height: 2, background: "#1e1e1e", borderRadius: 1, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
           </div>
+          {/* Mini-jeu d'esquive pour patienter pendant le traitement */}
+          <LoadingGame />
         </div>
       )}
 
