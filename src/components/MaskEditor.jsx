@@ -349,7 +349,12 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         <button style={btnStyle(mode === 'recover')} onClick={() => setMode('recover')}>
           Récupérer
         </button>
-        <button style={btnStyle(mode === 'glass')} onClick={() => setMode('glass')}>
+        <button style={btnStyle(mode === 'glass')} onClick={() => {
+          setMode('glass');
+          // Switch to a finer brush by default in glass mode — windshield/window
+          // outlines need a much tighter stroke than erase / recover.
+          if (brushSize > 18) setBrushSize(10);
+        }}>
           Vitrages
         </button>
         <button style={btnStyle(mode === 'restore')} onClick={() => setMode('restore')}>
@@ -358,7 +363,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         <span style={{ color: '#b3bac4', fontSize: 13, margin: '0 4px' }}>|</span>
         <label style={{ color: '#dde0e5', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
           Taille
-          <input type="range" min={5} max={120} value={brushSize}
+          <input type="range" min={1} max={120} value={brushSize}
             onChange={e => setBrushSize(Number(e.target.value))}
             onMouseDown={e => e.stopPropagation()}
             style={{ width: 80 }} />
