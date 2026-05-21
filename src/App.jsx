@@ -4980,6 +4980,7 @@ export default function AutoCache() {
   const [showroomEnabled,      setShowroomEnabled]      = useState(false);
   const [showroomSetupBg,      setShowroomSetupBg]      = useState(0);
   const [showroomSetupCustomBg, setShowroomSetupCustomBg] = useState(null);
+  const [showroomFloorShadow,  setShowroomFloorShadow]  = useState(true); // case "Ombres au sol" — décochée = pas de calcul d'ombre (plus rapide)
   const showroomSetupUploadRef = useRef(null);
   // ── Logo mural (affiché sur le mur du showroom) ──────────────────────────
   const [wallLogoMode, setWallLogoMode]     = useState("none"); // "none" | "image" | "text"
@@ -5291,28 +5292,32 @@ export default function AutoCache() {
           const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
           const cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
           let shadowMatteUrl = null;
-          if (USE_SOURCE_SHADOW_TRANSFER) {
-            const shadow = await extractSourceShadow(r.baseDataURL, cutout);
-            shadowMatteUrl = shadow.matteDataUrl;
+          if (showroomFloorShadow) {
+            if (USE_SOURCE_SHADOW_TRANSFER) {
+              const shadow = await extractSourceShadow(r.baseDataURL, cutout);
+              shadowMatteUrl = shadow.matteDataUrl;
+            } else {
+              const cutImg = await loadImg(cutout);
+              const cW = cutImg.naturalWidth || cutImg.width, cH = cutImg.naturalHeight || cutImg.height;
+              const scanC = document.createElement('canvas');
+              scanC.width = cW; scanC.height = cH;
+              const scanCtx = scanC.getContext('2d');
+              scanCtx.drawImage(cutImg, 0, 0);
+              const px = scanCtx.getImageData(0, 0, cW, cH).data;
+              let carL = cW, carR = 0, carT = cH, carB = 0;
+              for (let y = 0; y < cH; y++)
+                for (let x = 0; x < cW; x++)
+                  if (px[(y * cW + x) * 4 + 3] > 128) {
+                    if (x < carL) carL = x; if (x > carR) carR = x;
+                    if (y < carT) carT = y; if (y > carB) carB = y;
+                  }
+              const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
+              const plateBox = r.yoloBbox ?? null;
+              shadowMatteUrl = await generateShadowFromCarAlpha(cutout, carBounds, plateBox);
+              entry.carBoundsCache = carBounds;
+            }
           } else {
-            const cutImg = await loadImg(cutout);
-            const cW = cutImg.naturalWidth || cutImg.width, cH = cutImg.naturalHeight || cutImg.height;
-            const scanC = document.createElement('canvas');
-            scanC.width = cW; scanC.height = cH;
-            const scanCtx = scanC.getContext('2d');
-            scanCtx.drawImage(cutImg, 0, 0);
-            const px = scanCtx.getImageData(0, 0, cW, cH).data;
-            let carL = cW, carR = 0, carT = cH, carB = 0;
-            for (let y = 0; y < cH; y++)
-              for (let x = 0; x < cW; x++)
-                if (px[(y * cW + x) * 4 + 3] > 128) {
-                  if (x < carL) carL = x; if (x > carR) carR = x;
-                  if (y < carT) carT = y; if (y > carB) carB = y;
-                }
-            const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
-            const plateBox = r.yoloBbox ?? null;
-            shadowMatteUrl = await generateShadowFromCarAlpha(cutout, carBounds, plateBox);
-            entry.carBoundsCache = carBounds;
+            console.log('[Showroom] floor shadow skipped (case décochée)');
           }
           // Generate debug images if needed
           const showroomDebug = getShowroomDebugMode();
@@ -6681,6 +6686,48 @@ export default function AutoCache() {
                           reader.readAsDataURL(f);
                           e.target.value = '';
                         }} />
+                    </div>
+
+                    {/* Ombres au sol — case à cocher (le calcul d'ombre est coûteux, on le rend optionnel) */}
+                    <div
+                      onClick={() => setShowroomFloorShadow(p => !p)}
+                      style={{
+                        marginTop: 14,
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "9px 11px",
+                        background: showroomFloorShadow ? "rgba(242,101,34,0.08)" : "#0a0a0a",
+                        border: `1px solid ${showroomFloorShadow ? "#f26522" : "#252525"}`,
+                        borderRadius: 3,
+                        cursor: "pointer",
+                        userSelect: "none",
+                      }}
+                    >
+                      <div style={{
+                        width: 14, height: 14, borderRadius: 2,
+                        border: `2px solid ${showroomFloorShadow ? "#f26522" : "#555"}`,
+                        background: showroomFloorShadow ? "#f26522" : "transparent",
+                        flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        {showroomFloorShadow && <span style={{ color: "#090909", fontSize: 11, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{
+                          fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase",
+                          color: showroomFloorShadow ? "#f26522" : "#aaa",
+                          fontFamily: "'Rajdhani',sans-serif",
+                        }}>
+                          ☼ Ombres au sol
+                        </div>
+                        <div style={{
+                          fontSize: 10, color: "#aaa",
+                          fontFamily: "'JetBrains Mono',monospace",
+                          marginTop: 2,
+                        }}>
+                          {showroomFloorShadow
+                            ? "Activé · Rendu plus naturel mais traitement plus long"
+                            : "Désactivé · Traitement plus rapide, voiture sans ombre"}
+                        </div>
+                      </div>
                     </div>
 
                     {/* Logo / Texte mural */}
