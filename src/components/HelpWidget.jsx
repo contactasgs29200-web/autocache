@@ -86,7 +86,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
         style={{
           position: "fixed",
           bottom: isMobile ? 16 : 22,
-          left:   isMobile ? 16 : 22,
+          right:  isMobile ? 16 : 22,
           zIndex: 1500,
           fontFamily: "'Rajdhani', sans-serif",
         }}
@@ -97,7 +97,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
             style={{
               position: "absolute",
               bottom: 52,
-              left: 0,
+              right: 0,
               background: "#141414",
               border: "1px solid #2a2a2a",
               borderRadius: 4,
