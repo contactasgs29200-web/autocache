@@ -14,8 +14,9 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   const overlayRef = useRef(null);
   const containerRef = useRef(null);
 
-  const [mode, setMode] = useState('erase'); // 'erase' | 'restore'
+  const [mode, setMode] = useState('erase'); // 'erase' | 'recover' | 'restore' | 'glass'
   const [brushSize, setBrushSize] = useState(30);
+  const [glassOpacity, setGlassOpacity] = useState(110); // 0..255, alpha appliqué en mode "Vitrages"
   const [bgMode, setBgMode] = useState('checker'); // 'checker' | 'white' | 'black'
   const [isDrawing, setIsDrawing] = useState(false);
 
@@ -222,6 +223,14 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
           data[li + 1] = orig[oi + 1];
           data[li + 2] = orig[oi + 2];
           data[li + 3] = 255;
+        } else if (mode === 'glass' && orig) {
+          // Vitrages — on garde le RGB d'origine (reflets, teinte) mais on
+          // baisse l'alpha pour que le décor showroom transparaisse à travers.
+          const oi = (py * w + px) * 4;
+          data[li + 0] = orig[oi + 0];
+          data[li + 1] = orig[oi + 1];
+          data[li + 2] = orig[oi + 2];
+          data[li + 3] = glassOpacity;
         } else {
           // Restore from the cutout's initial alpha (undoes erasures done in
           // this session, won't bring back content the AI never kept).
@@ -231,7 +240,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       }
     }
     ctx.putImageData(imgData, x0, y0);
-  }, [brushSize, mode]);
+  }, [brushSize, mode, glassOpacity]);
 
   const handlePointerDown = useCallback((e) => {
     e.preventDefault();
@@ -340,6 +349,9 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         <button style={btnStyle(mode === 'recover')} onClick={() => setMode('recover')}>
           Récupérer
         </button>
+        <button style={btnStyle(mode === 'glass')} onClick={() => setMode('glass')}>
+          Vitrages
+        </button>
         <button style={btnStyle(mode === 'restore')} onClick={() => setMode('restore')}>
           Restaurer
         </button>
@@ -352,6 +364,16 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
             style={{ width: 80 }} />
           <span style={{ minWidth: 24, textAlign: 'right' }}>{brushSize}</span>
         </label>
+        {mode === 'glass' && (
+          <label style={{ color: '#dde0e5', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            Opacité
+            <input type="range" min={40} max={220} value={glassOpacity}
+              onChange={e => setGlassOpacity(Number(e.target.value))}
+              onMouseDown={e => e.stopPropagation()}
+              style={{ width: 80 }} />
+            <span style={{ minWidth: 34, textAlign: 'right' }}>{Math.round(glassOpacity / 255 * 100)}%</span>
+          </label>
+        )}
         <span style={{ color: '#b3bac4', fontSize: 13, margin: '0 4px' }}>|</span>
         <button style={btnStyle(canUndo)} onClick={undo} disabled={!canUndo}>Annuler</button>
         <button style={btnStyle(canRedo)} onClick={redo} disabled={!canRedo}>Refaire</button>
