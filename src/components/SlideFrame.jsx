@@ -24,7 +24,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
  *   - "orange"       : filled orange (primary action like Télécharger)
  */
 const BTN_VARIANTS = {
-  "inactive":      { bg: "#181818", color: "#aaa",     border: "1px solid #2a2a2a" },
+  "inactive":      { bg: "#181818", color: "#ddd",     border: "1px solid #2a2a2a" },
   "yellow-active": { bg: "#e8a020", color: "#090909", border: "1px solid #e8a020" },
   "yellow-idle":   { bg: "#181818", color: "#e8a020", border: "1px solid #3a2800" },
   "orange":        { bg: "#f26522", color: "#090909", border: "none" },
@@ -105,7 +105,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
           {/* Filename on the left */}
           {!isMobile && (
             <div style={{
-              fontSize: 11, color: "#888",
+              fontSize: 11, color: "#ddd",
               fontFamily: "'JetBrains Mono', monospace",
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               maxWidth: "30%",
@@ -151,7 +151,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
               <div style={{
                 width: 28, height: 28, borderRadius: 2,
                 background: "rgba(20,20,20,0.92)", border: "1px solid #3a3a3a",
-                color: "#ccc", fontSize: 15,
+                color: "#ddd", fontSize: 15,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 lineHeight: 1,
               }}>✕</div>
@@ -218,7 +218,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
           >
             <span style={{ fontSize: 17, userSelect: "none" }}>{icon}</span>
             <span style={{
-              fontSize: 11, color: "#888",
+              fontSize: 11, color: "#ddd",
               letterSpacing: 1.5, textTransform: "uppercase",
               fontFamily: "'JetBrains Mono', monospace",
               userSelect: "none", whiteSpace: "nowrap",
@@ -246,7 +246,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
         {footer && (
           <div style={{
             marginTop: 4,
-            fontSize: 10, color: "#666",
+            fontSize: 10, color: "#ddd",
             fontFamily: "'JetBrains Mono', monospace",
             textAlign: "center",
             maxWidth: "min(900px, 95%)",

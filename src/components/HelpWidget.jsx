@@ -113,7 +113,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                 style={{
                   display: "flex", alignItems: "center", gap: 10, width: "100%",
                   padding: "11px 16px", background: "transparent", border: "none",
-                  color: "#bbb", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
+                  color: "#ddd", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
                   fontSize: 13, fontWeight: 600, letterSpacing: 1, textAlign: "left",
                   borderBottom: i < items.length - 1 ? "1px solid #1a1a1a" : "none",
                   transition: "background 0.12s",
@@ -192,11 +192,11 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
                   FAQ
                 </div>
-                <div style={{ fontSize: 14, color: "#555" }}>Questions fréquentes</div>
+                <div style={{ fontSize: 14, color: "#ddd" }}>Questions fréquentes</div>
               </div>
               <button
                 onClick={() => setFaqOpen(false)}
-                style={{ background: "none", border: "none", color: "#555", fontSize: 21, cursor: "pointer", lineHeight: 1 }}
+                style={{ background: "none", border: "none", color: "#ddd", fontSize: 21, cursor: "pointer", lineHeight: 1 }}
                 title="Fermer"
               >
                 ✕
@@ -240,7 +240,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                       <div style={{
                         padding: "0 24px 18px",
                         fontSize: 14,
-                        color: "#999",
+                        color: "#ddd",
                         lineHeight: 1.7,
                       }}>
                         {item.a}
