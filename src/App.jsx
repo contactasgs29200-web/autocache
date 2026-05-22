@@ -5765,6 +5765,19 @@ export default function AutoCache() {
     setCropDrag({ type, startMx: e.clientX, startMy: e.clientY, startBox: { ...cropBox } });
   };
 
+  // Variante tactile : démarre un drag de rognage avec les coords du premier doigt.
+  const startCropDragAt = (clientX, clientY, type) => {
+    setCropDrag({ type, startMx: clientX, startMy: clientY, startBox: { ...cropBox } });
+  };
+
+  const onCropTouchMove = (e) => {
+    if (!cropDrag || !cropCanvasRef.current) return;
+    e.preventDefault();
+    if (e.touches.length > 0) {
+      onCropMouseMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
+    }
+  };
+
   const onCropMouseMove = (e) => {
     if (!cropDrag || !cropCanvasRef.current) return;
     const rect = cropCanvasRef.current.getBoundingClientRect();
@@ -7176,8 +7189,20 @@ export default function AutoCache() {
         <div
           onClick={cropMode || adjustMode || showMaskEditor ? undefined : closeLightbox}
           onMouseMove={e => { onCropMouseMove(e); onAdjustMouseMove(e); onLbPanMove(e); }}
-          onTouchMove={e => { if (adjustMode) onAdjustTouchMove(e); else onLbTouchMove(e); }}
-          onTouchEnd={() => { adjustDragRef.current = null; setAdjustDrag(null); setLbPanDrag(null); pinchRef.current = null; }}
+          onTouchMove={e => {
+            // 2 doigts = pinch-zoom dans tous les modes (sauf rogner où le cadre gère)
+            if (e.touches.length === 2) { onLbTouchMove(e); return; }
+            // 1 doigt : route vers le bon mode
+            if (adjustMode) onAdjustTouchMove(e);
+            else if (cropMode) onCropTouchMove(e);
+            else onLbTouchMove(e);
+          }}
+          onTouchEnd={() => {
+            adjustDragRef.current = null; setAdjustDrag(null);
+            setCropDrag(null);
+            setLbPanDrag(null);
+            pinchRef.current = null;
+          }}
           onMouseUp={() => {
             setCropDrag(null);
             // Auto-sauvegarde dès qu'un coin est relâché
@@ -7343,12 +7368,12 @@ export default function AutoCache() {
             {adjustMode ? (
               <canvas
                 ref={adjustCanvasRef}
-                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh" }}
+                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh", touchAction: "none" }}
               />
             ) : cropMode ? (
               <canvas
                 ref={cropCanvasRef}
-                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh" }}
+                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh", touchAction: "none" }}
               />
             ) : (
               <img
@@ -7724,7 +7749,7 @@ export default function AutoCache() {
 
             {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
             {adjustMode && adjustCorners && (
-              <div style={{ position: "absolute", inset: 0, cursor: adjustDrag ? "grabbing" : "crosshair" }}>
+              <div style={{ position: "absolute", inset: 0, cursor: adjustDrag ? "grabbing" : "crosshair", touchAction: "none" }}>
                 {manualPlateMode && !adjustDrag && (
                   <div style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.75)", color: "#f26522", fontSize: 11, fontFamily: "'JetBrains Mono',monospace", padding: "5px 12px", borderRadius: 3, letterSpacing: 1, whiteSpace: "nowrap", pointerEvents: "none" }}>
                     Glisser ✥ pour positionner · coins oranges pour ajuster · ✓ Terminé pour valider
@@ -7808,7 +7833,7 @@ export default function AutoCache() {
             )}
 
             {cropMode && (
-              <div style={{ position: "absolute", inset: 0, cursor: cropDrag?.type === "move" ? "grabbing" : "default" }}>
+              <div style={{ position: "absolute", inset: 0, cursor: cropDrag?.type === "move" ? "grabbing" : "default", touchAction: "none" }}>
                 {/* Zones sombres hors sélection */}
                 <div style={{ position: "absolute", inset: 0, pointerEvents: "none", background: `linear-gradient(to bottom, rgba(0,0,0,0.6) ${cropBox.y*100}%, transparent ${cropBox.y*100}%, transparent ${(cropBox.y+cropBox.h)*100}%, rgba(0,0,0,0.6) ${(cropBox.y+cropBox.h)*100}%)` }} />
                 <div style={{ position: "absolute", top: `${cropBox.y*100}%`, height: `${cropBox.h*100}%`, left: 0, width: `${cropBox.x*100}%`, background: "rgba(0,0,0,0.6)", pointerEvents: "none" }} />
@@ -7817,7 +7842,8 @@ export default function AutoCache() {
                 {/* Rectangle de rognage (déplacer) */}
                 <div
                   onMouseDown={e => startCropDrag(e, "move")}
-                  style={{ position: "absolute", left: `${cropBox.x*100}%`, top: `${cropBox.y*100}%`, width: `${cropBox.w*100}%`, height: `${cropBox.h*100}%`, border: "2px solid #f26522", cursor: "move", boxSizing: "border-box" }}
+                  onTouchStart={e => { e.preventDefault(); e.stopPropagation(); if (e.touches.length === 1 && e.touches[0]) startCropDragAt(e.touches[0].clientX, e.touches[0].clientY, "move"); }}
+                  style={{ position: "absolute", left: `${cropBox.x*100}%`, top: `${cropBox.y*100}%`, width: `${cropBox.w*100}%`, height: `${cropBox.h*100}%`, border: "2px solid #f26522", cursor: "move", boxSizing: "border-box", touchAction: "none" }}
                 >
                   {/* Grille tiers */}
                   {[33.33, 66.66].map(p => (
@@ -7829,7 +7855,11 @@ export default function AutoCache() {
 
                   {/* Poignées de coin */}
                   {[["tl",0,0,"nwse-resize"],["tr","100%",0,"nesw-resize"],["br","100%","100%","nwse-resize"],["bl",0,"100%","nesw-resize"]].map(([type,left,top,cur]) => (
-                    <div key={type} onMouseDown={e => startCropDrag(e, type)} style={{ position: "absolute", left, top, width: 14, height: 14, background: "#f26522", transform: "translate(-50%,-50%)", cursor: cur, borderRadius: 2, zIndex: 2 }} />
+                    <div
+                      key={type}
+                      onMouseDown={e => startCropDrag(e, type)}
+                      onTouchStart={e => { e.preventDefault(); e.stopPropagation(); if (e.touches.length === 1 && e.touches[0]) startCropDragAt(e.touches[0].clientX, e.touches[0].clientY, type); }}
+                      style={{ position: "absolute", left, top, width: isMobile ? 22 : 14, height: isMobile ? 22 : 14, background: "#f26522", transform: "translate(-50%,-50%)", cursor: cur, borderRadius: 2, zIndex: 2, touchAction: "none" }} />
                   ))}
                 </div>
               </div>
