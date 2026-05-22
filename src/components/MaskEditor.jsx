@@ -82,12 +82,18 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
 
   // Load the original full-image (pre-cutout) and resample it to the cutout's
   // dimensions so "Récupérer" can paint RGB pixels straight from the source.
+  // We also keep the resampled Image element around so the "Source" background
+  // mode can use the exact same buffer that Récupérer reads from.
+  const origImageElRef = useRef(null);
+  const [origReady, setOrigReady] = useState(false);
   useEffect(() => {
-    if (!originalDataURL) { origPixelsRef.current = null; return; }
+    if (!originalDataURL) { origPixelsRef.current = null; origImageElRef.current = null; setOrigReady(false); return; }
     let cancelled = false;
+    setOrigReady(false);
     const img = new Image();
     img.onload = () => {
       if (cancelled) return;
+      origImageElRef.current = img;
       const { w, h } = dimRef.current;
       if (!w || !h) {
         // The cutout hasn't finished loading yet — retry once it has.
@@ -100,6 +106,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
           c.width = w2; c.height = h2;
           c.getContext('2d').drawImage(img, 0, 0, w2, h2);
           origPixelsRef.current = c.getContext('2d').getImageData(0, 0, w2, h2).data;
+          setOrigReady(true);
         }, 50);
         setTimeout(() => clearInterval(retry), 5000);
         return;
@@ -108,12 +115,13 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       c.width = w; c.height = h;
       c.getContext('2d').drawImage(img, 0, 0, w, h);
       origPixelsRef.current = c.getContext('2d').getImageData(0, 0, w, h).data;
+      setOrigReady(true);
     };
     img.src = originalDataURL;
     return () => { cancelled = true; };
   }, [originalDataURL, cutoutDataURL]);
 
-  // Draw checker/white/black background on overlay canvas
+  // Draw checker / white / black / source background on overlay canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     const overlay = overlayRef.current;
@@ -125,14 +133,22 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     overlay.style.width = Math.round(w * scale) + 'px';
     overlay.style.height = Math.round(h * scale) + 'px';
     const ctx = overlay.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
     if (bgMode === 'white') {
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, w, h);
     } else if (bgMode === 'black') {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, w, h);
+    } else if (bgMode === 'source' && origImageElRef.current) {
+      // Affiche la photo originale derrière le cutout transparent — pratique
+      // pour voir EXACTEMENT ce que "Récupérer" va peindre par-dessus.
+      ctx.drawImage(origImageElRef.current, 0, 0, w, h);
+      // Légère atténuation pour qu'on distingue le cutout opaque par-dessus.
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillRect(0, 0, w, h);
     } else {
-      // Checker pattern
+      // Checker pattern (default)
       const sz = 16;
       for (let y = 0; y < h; y += sz) {
         for (let x = 0; x < w; x += sz) {
@@ -141,7 +157,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         }
       }
     }
-  }, [bgMode, cutoutDataURL]);
+  }, [bgMode, cutoutDataURL, origReady]);
 
   const pushHistory = useCallback(() => {
     const canvas = canvasRef.current;
@@ -346,7 +362,12 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         <button style={btnStyle(mode === 'erase')} onClick={() => setMode('erase')}>
           Gomme
         </button>
-        <button style={btnStyle(mode === 'recover')} onClick={() => setMode('recover')}>
+        <button style={btnStyle(mode === 'recover')} onClick={() => {
+          setMode('recover');
+          // Affiche la photo originale en fond pour que l'utilisateur voie
+          // exactement d'où viennent les pixels qu'il s'apprête à récupérer.
+          if (origReady && bgMode !== 'source') setBgMode('source');
+        }}>
           Récupérer
         </button>
         <button style={btnStyle(mode === 'glass')} onClick={() => {
@@ -389,6 +410,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
           <option value="checker">Damier</option>
           <option value="white">Blanc</option>
           <option value="black">Noir</option>
+          <option value="source" disabled={!origReady}>Source{origReady ? '' : ' (…)'}</option>
         </select>
         <span style={{ color: '#b3bac4', fontSize: 13, margin: '0 4px' }}>|</span>
         <button style={btnStyle(true)} onClick={resetZoom}>
