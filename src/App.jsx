@@ -2986,6 +2986,22 @@ function gaussianBlurMask(mask, W, H, sigma) {
   return out;
 }
 
+/**
+ * Pre-load the @imgly background-removal module so its ONNX session is
+ * ready before the user clicks Lancer le traitement. Safe to call multiple
+ * times — only the first call actually does work.
+ */
+async function preloadBackgroundRemoval() {
+  if (!removeBgImgly) {
+    try {
+      const mod = await import("@imgly/background-removal");
+      removeBgImgly = mod.removeBackground;
+    } catch (e) {
+      console.warn('[BgRemoval] preload failed:', e?.message);
+    }
+  }
+}
+
 async function imglyRemoveBackground(dataUrl) {
   if (!removeBgImgly) {
     const mod = await import("@imgly/background-removal");
@@ -3927,7 +3943,7 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   return dataUrl;
 }
 
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null, blend = 0) {
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null, blend = 0, carBoundsHint = null) {
   const [bgImg, carImg, wallImg, shadowImg] = await Promise.all([
     loadImg(bgDataUrl),
     loadImg(cutoutDataUrl),
@@ -3956,36 +3972,45 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   const cw = carImg.width * scale;
   const ch = carImg.height * scale;
 
-  // Trouver le bbox réel de la voiture dans le cutout (pixels non-transparents).
+  // Bbox réel du véhicule dans le cutout (pixels non-transparents).
   // → permet de centrer sur le centre VISUEL du véhicule plutôt que sur le
   //   centre du cutout (qui peut avoir des marges asymétriques), et de placer
   //   les pneus contre le sol même si le cutout a une bande transparente en bas.
+  //
+  // Si l'appelant nous fournit un `carBoundsHint` (en pixels du cutout) on
+  // l'utilise — économie d'un scan plein-résolution. Sinon on scanne ici.
   let actualBottomFrac = 1.0;
   let actualLeftFrac   = 0.0;
   let actualRightFrac  = 1.0;
-  try {
-    const scanC = document.createElement('canvas');
-    scanC.width = carImg.width; scanC.height = carImg.height;
-    const scanCtx = scanC.getContext('2d');
-    scanCtx.drawImage(carImg, 0, 0);
-    const imgData = scanCtx.getImageData(0, 0, carImg.width, carImg.height);
-    const data = imgData.data;
-    let minX = carImg.width, maxX = -1, maxY = -1;
-    for (let y = 0; y < carImg.height; y++) {
-      for (let x = 0; x < carImg.width; x++) {
-        if (data[(y * carImg.width + x) * 4 + 3] > 20) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
+  if (carBoundsHint && Number.isFinite(carBoundsHint.x) && Number.isFinite(carBoundsHint.w) && carBoundsHint.w > 0 && carBoundsHint.h > 0) {
+    actualLeftFrac   = carBoundsHint.x / carImg.width;
+    actualRightFrac  = (carBoundsHint.x + carBoundsHint.w) / carImg.width;
+    actualBottomFrac = (carBoundsHint.y + carBoundsHint.h) / carImg.height;
+  } else {
+    try {
+      const scanC = document.createElement('canvas');
+      scanC.width = carImg.width; scanC.height = carImg.height;
+      const scanCtx = scanC.getContext('2d');
+      scanCtx.drawImage(carImg, 0, 0);
+      const imgData = scanCtx.getImageData(0, 0, carImg.width, carImg.height);
+      const data = imgData.data;
+      let minX = carImg.width, maxX = -1, maxY = -1;
+      for (let y = 0; y < carImg.height; y++) {
+        for (let x = 0; x < carImg.width; x++) {
+          if (data[(y * carImg.width + x) * 4 + 3] > 20) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
         }
       }
-    }
-    if (maxX >= 0) {
-      actualLeftFrac   = minX / carImg.width;
-      actualRightFrac  = (maxX + 1) / carImg.width;
-      actualBottomFrac = (maxY + 1) / carImg.height;
-    }
-  } catch (_) { /* garder les valeurs par défaut */ }
+      if (maxX >= 0) {
+        actualLeftFrac   = minX / carImg.width;
+        actualRightFrac  = (maxX + 1) / carImg.width;
+        actualBottomFrac = (maxY + 1) / carImg.height;
+      }
+    } catch (_) { /* garder les valeurs par défaut */ }
+  }
 
   // Centre visuel horizontal de la voiture (relatif au cutout, 0..1).
   const carCenterFrac = (actualLeftFrac + actualRightFrac) / 2;
@@ -5123,6 +5148,17 @@ export default function AutoCache() {
     }
   }, [user, authLoading]);
 
+  // ── Préchauffe le module @imgly/background-removal dès que l'utilisateur
+  // est authentifié, pour ne plus payer le coût d'init au premier traitement.
+  useEffect(() => {
+    if (!user || authLoading) return;
+    const idleCb = window.requestIdleCallback ?? ((cb) => setTimeout(cb, 1500));
+    const handle = idleCb(() => preloadBackgroundRemoval());
+    return () => {
+      if (window.cancelIdleCallback && typeof handle === 'number') window.cancelIdleCallback(handle);
+    };
+  }, [user, authLoading]);
+
   const closeTutorial = useCallback(async () => {
     setShowTutorial(false);
     if (user && !user.user_metadata?.tutorial_seen) {
@@ -5309,30 +5345,35 @@ export default function AutoCache() {
           const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
           const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
           const cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
+
+          // Scan tight bbox du véhicule UNE seule fois — réutilisé par
+          // generateShadowFromCarAlpha (si shadow synthétique) ET par
+          // compositeCarOnBg (via le hint), évitant un re-scan plein-résolution.
+          const cutImg = await loadImg(cutout);
+          const cW = cutImg.naturalWidth || cutImg.width, cH = cutImg.naturalHeight || cutImg.height;
+          const scanC = document.createElement('canvas');
+          scanC.width = cW; scanC.height = cH;
+          const scanCtx = scanC.getContext('2d');
+          scanCtx.drawImage(cutImg, 0, 0);
+          const px = scanCtx.getImageData(0, 0, cW, cH).data;
+          let carL = cW, carR = 0, carT = cH, carB = 0;
+          for (let y = 0; y < cH; y++)
+            for (let x = 0; x < cW; x++)
+              if (px[(y * cW + x) * 4 + 3] > 128) {
+                if (x < carL) carL = x; if (x > carR) carR = x;
+                if (y < carT) carT = y; if (y > carB) carB = y;
+              }
+          const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
+          entry.carBoundsCache = carBounds;
+
           let shadowMatteUrl = null;
           if (showroomFloorShadow) {
             if (USE_SOURCE_SHADOW_TRANSFER) {
               const shadow = await extractSourceShadow(r.baseDataURL, cutout);
               shadowMatteUrl = shadow.matteDataUrl;
             } else {
-              const cutImg = await loadImg(cutout);
-              const cW = cutImg.naturalWidth || cutImg.width, cH = cutImg.naturalHeight || cutImg.height;
-              const scanC = document.createElement('canvas');
-              scanC.width = cW; scanC.height = cH;
-              const scanCtx = scanC.getContext('2d');
-              scanCtx.drawImage(cutImg, 0, 0);
-              const px = scanCtx.getImageData(0, 0, cW, cH).data;
-              let carL = cW, carR = 0, carT = cH, carB = 0;
-              for (let y = 0; y < cH; y++)
-                for (let x = 0; x < cW; x++)
-                  if (px[(y * cW + x) * 4 + 3] > 128) {
-                    if (x < carL) carL = x; if (x > carR) carR = x;
-                    if (y < carT) carT = y; if (y > carB) carB = y;
-                  }
-              const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
               const plateBox = r.yoloBbox ?? null;
               shadowMatteUrl = await generateShadowFromCarAlpha(cutout, carBounds, plateBox);
-              entry.carBoundsCache = carBounds;
             }
           } else {
             console.log('[Showroom] floor shadow skipped (case décochée)');
@@ -5445,7 +5486,7 @@ export default function AutoCache() {
           // Default blend = 75 so the vehicle integrates with the décor as soon as
           // the photo is generated. User can still drag the slider down to 0 in the
           // lightbox to disable the effect entirely.
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts, shadowMatteUrl, 75);
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts, shadowMatteUrl, 75, carBounds);
 
           // For debug modes that show source-based overlays, override the showroom result
           if (debugDataURL) {
@@ -5637,7 +5678,8 @@ export default function AutoCache() {
           const sr = await compositeCarOnBg(
             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
             logoImgEl, prev.corners, prev.bgColor,
-            nudge.x, nudge.y, zoom, true, wOpts, prev.shadowMatteDataURL, blend
+            nudge.x, nudge.y, zoom, true, wOpts, prev.shadowMatteDataURL, blend,
+            prev.carBoundsCache
           );
           const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend: blend };
           setLightbox(updated);
