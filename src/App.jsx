@@ -4988,6 +4988,10 @@ export default function AutoCache() {
   const [logoCropDrag, setLogoCropDrag] = useState(null);
   const [logoOriginal, setLogoOriginal] = useState(null);
   const [lightbox, setLightbox] = useState(null);
+  // Sync ref of the lightbox state, so async loops can read the latest value
+  // without re-entering setState.
+  const lightboxRef = useRef(null);
+  useEffect(() => { lightboxRef.current = lightbox; }, [lightbox]);
   const [cropMode, setCropMode] = useState(false);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
   const [cropDrag, setCropDrag] = useState(null); // { type, startMx, startMy, startBox }
@@ -5666,29 +5670,43 @@ export default function AutoCache() {
 
   const NUDGE_STEP = 75; // pas de déplacement en px sur canvas 2400×1350
 
-  // Recomposite central — utilisé par flèches, slider zoom ET slider fondu
+  // Recomposite central — utilisé par flèches, slider zoom ET slider fondu.
+  // Important : les sliders peuvent émettre des changements en continu (surtout
+  // sur mobile). Plutôt que de bloquer les requêtes pendant qu'une compose est
+  // en cours (et laisser tomber la dernière), on garde la dernière demande
+  // dans pendingRecomposeRef et on la rejoue dès que le worker actuel finit.
+  const pendingRecomposeRef = useRef(null);
+  const recomposingRef      = useRef(false);
   const recompositeShowroom = (nudge, zoom, blend) => {
-    setLightbox(prev => {
-      if (!prev?.cutoutDataURL || showroomNudging) return prev;
-      setShowroomNudging(true);
-      (async () => {
-        try {
+    pendingRecomposeRef.current = { nudge, zoom, blend };
+    if (recomposingRef.current) return; // un worker tourne déjà, il prendra la dernière demande
+    recomposingRef.current = true;
+    setShowroomNudging(true);
+    (async () => {
+      try {
+        while (pendingRecomposeRef.current) {
+          const { nudge: nd, zoom: zm, blend: bl } = pendingRecomposeRef.current;
+          pendingRecomposeRef.current = null;
+          const prev = lightboxRef.current;
+          if (!prev?.cutoutDataURL) break;
           const logoImgEl = await loadImg(prev.logoPreview);
           const wOpts = prev.wallLogoSrc ? { src: prev.wallLogoSrc, scale: prev.wallLogoScale, opacity: prev.wallLogoOpacity, x: prev.wallLogoPos?.x ?? 0.5, y: prev.wallLogoPos?.y ?? 0.25 } : null;
           const sr = await compositeCarOnBg(
             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
             logoImgEl, prev.corners, prev.bgColor,
-            nudge.x, nudge.y, zoom, true, wOpts, prev.shadowMatteDataURL, blend,
+            nd.x, nd.y, zm, true, wOpts, prev.shadowMatteDataURL, bl,
             prev.carBoundsCache
           );
-          const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend: blend };
+          const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
-        } catch(e) { console.error('recomposite error', e); }
+        }
+      } catch(e) { console.error('recomposite error', e); }
+      finally {
+        recomposingRef.current = false;
         setShowroomNudging(false);
-      })();
-      return prev;
-    });
+      }
+    })();
   };
 
   const nudgeShowroom = (dx, dy) => {
@@ -7941,8 +7959,7 @@ export default function AutoCache() {
                 min="0.5" max="2.5" step="0.05"
                 value={showroomZoom}
                 onChange={e => onZoomChange(parseFloat(e.target.value))}
-                disabled={showroomNudging}
-                style={{ flex: 1, accentColor: "#f26522", cursor: showroomNudging ? "not-allowed" : "pointer", height: 4 }}
+                style={{ flex: 1, accentColor: "#f26522", cursor: "pointer", height: 4, touchAction: "pan-x" }}
               />
               <span style={{ fontSize: 11, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", minWidth: 34, textAlign: "right" }}>
                 ×{showroomZoom.toFixed(2)}
@@ -7967,8 +7984,7 @@ export default function AutoCache() {
                 min="0" max="100" step="1"
                 value={showroomBlend}
                 onChange={e => onBlendChange(parseInt(e.target.value, 10))}
-                disabled={showroomNudging}
-                style={{ flex: 1, accentColor: "#f26522", cursor: showroomNudging ? "not-allowed" : "pointer", height: 4 }}
+                style={{ flex: 1, accentColor: "#f26522", cursor: "pointer", height: 4, touchAction: "pan-x" }}
               />
               <span style={{ fontSize: 11, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", minWidth: 34, textAlign: "right" }}>
                 {showroomBlend}%
@@ -8079,8 +8095,7 @@ export default function AutoCache() {
                   <span style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", minWidth: 64 }}>{label}</span>
                   <input type="range" min={min} max={max} step={step} value={value}
                     onChange={e => onShadowParamChange(param, parseFloat(e.target.value))}
-                    disabled={showroomNudging}
-                    style={{ flex: 1, accentColor: "#f26522", height: 3, cursor: showroomNudging ? "not-allowed" : "pointer" }}
+                    style={{ flex: 1, accentColor: "#f26522", height: 3, cursor: "pointer", touchAction: "pan-x" }}
                   />
                   <span style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", minWidth: 30, textAlign: "right" }}>
                     {param === "blur" || param === "yOffset" ? value.toFixed(0) : value.toFixed(2)}
