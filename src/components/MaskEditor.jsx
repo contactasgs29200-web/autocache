@@ -143,10 +143,12 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     } else if (bgMode === 'source' && origImageElRef.current) {
       // Affiche la photo originale derrière le cutout transparent — pratique
       // pour voir EXACTEMENT ce que "Récupérer" va peindre par-dessus.
+      // On la convertit en noir & blanc assombri pour qu'elle reste un calque
+      // de référence : le cutout en couleurs (au-dessus) reste clairement
+      // l'image principale, la source ne crée pas d'effet "double véhicule".
+      ctx.filter = 'grayscale(100%) brightness(0.42) contrast(1.05)';
       ctx.drawImage(origImageElRef.current, 0, 0, w, h);
-      // Légère atténuation pour qu'on distingue le cutout opaque par-dessus.
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.fillRect(0, 0, w, h);
+      ctx.filter = 'none';
     } else {
       // Checker pattern (default)
       const sz = 16;
