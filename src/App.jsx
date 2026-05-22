@@ -6016,9 +6016,12 @@ export default function AutoCache() {
     }
   };
 
-  // ── Touch : pinch-to-zoom + pan sur l'image (hors modes adjust/crop) ──────
+  // ── Touch : pinch-to-zoom + pan sur l'image ───────────────────────────
+  // Le pinch-zoom 2 doigts est autorisé partout (y compris mode Ajuster pour
+  // affiner les coins). Le pan 1 doigt reste réservé au mode visu (les
+  // poignées des coins ont leur propre gestionnaire en mode Ajuster).
   const onLbTouchStart = (e) => {
-    if (adjustMode || cropMode) return;
+    if (cropMode) return;
     if (e.touches.length === 2) {
       e.preventDefault();
       const t0 = e.touches[0], t1 = e.touches[1];
@@ -6030,15 +6033,15 @@ export default function AutoCache() {
         startZoom: lbZoom,
         startPan: { ...lbPan },
       };
-    } else if (e.touches.length === 1 && lbZoom > 1) {
+    } else if (e.touches.length === 1 && lbZoom > 1 && !adjustMode) {
       onLbPanDown({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY, preventDefault: () => e.preventDefault() });
     }
   };
 
   const onLbTouchMove = (e) => {
-    if (adjustMode || cropMode) return;
-    e.preventDefault();
+    if (cropMode) return;
     if (e.touches.length === 2 && pinchRef.current) {
+      e.preventDefault();
       const t0 = e.touches[0], t1 = e.touches[1];
       const dx = t0.clientX - t1.clientX, dy = t0.clientY - t1.clientY;
       const newDist = Math.sqrt(dx * dx + dy * dy);
@@ -6056,7 +6059,7 @@ export default function AutoCache() {
         x: Math.max(rect.width  * (1 - newZoom), Math.min(0, newX)),
         y: Math.max(rect.height * (1 - newZoom), Math.min(0, newY)),
       });
-    } else if (e.touches.length === 1) {
+    } else if (e.touches.length === 1 && !adjustMode) {
       onLbPanMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
     }
   };
@@ -7311,7 +7314,7 @@ export default function AutoCache() {
             onClick={e => e.stopPropagation()}
             onWheel={onLbWheel}
             onMouseDown={onLbPanDown}
-            onTouchStart={e => { if (adjustMode) { /* corner handles handle their own touch */ } else onLbTouchStart(e); }}
+            onTouchStart={onLbTouchStart}
             onDoubleClick={e => { e.stopPropagation(); setLbZoom(1); setLbPan({ x: 0, y: 0 }); }}
             style={{
               position: "relative", display: "inline-block", maxWidth: "100%",
