@@ -4795,6 +4795,7 @@ function AuthScreen({ onAuth }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [cgvAccepted, setCgvAccepted] = useState(false);
@@ -4867,14 +4868,38 @@ function AuthScreen({ onAuth }) {
             ["Téléphone", phone, setPhone, "tel", true],
           ] : []),
           ...(mode !== "reset" ? [["Mot de passe", password, setPassword, "password", true]] : []),
-        ].map(([label, val, set, type]) => (
-          <div key={label} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 10, letterSpacing: 2, color: "#ddd", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
-            <input type={type} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()}
-              placeholder={type === "tel" ? "06 12 34 56 78" : ""}
-              style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
-          </div>
-        ))}
+        ].map(([label, val, set, type]) => {
+          const isPassword = type === "password";
+          const effectiveType = isPassword && showPassword ? "text" : type;
+          return (
+            <div key={label} style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 10, letterSpacing: 2, color: "#ddd", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
+              <div style={{ position: "relative" }}>
+                <input type={effectiveType} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()}
+                  placeholder={type === "tel" ? "06 12 34 56 78" : ""}
+                  autoComplete={isPassword ? (mode === "signup" ? "new-password" : "current-password") : undefined}
+                  style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: isPassword ? "10px 44px 10px 12px" : "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                {isPassword && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(p => !p)}
+                    aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                    title={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                    style={{
+                      position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                      background: "transparent", border: "none", padding: "6px 8px",
+                      cursor: "pointer", color: showPassword ? "#f26522" : "#ddd",
+                      fontSize: 17, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                      minHeight: "unset",
+                    }}
+                  >
+                    {showPassword ? "🙈" : "👁"}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
         {mode === "signup" && (
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 18, marginTop: 4 }}>
             <div
@@ -5061,6 +5086,7 @@ export default function AutoCache() {
   const [recoveryMsg, setRecoveryMsg] = useState("");
   const [recoveryErr, setRecoveryErr] = useState("");
   const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [showRecoveryPassword, setShowRecoveryPassword] = useState(false);
 
   // Restaurer logos depuis localStorage au démarrage (persistent même après déconnexion)
   useEffect(() => {
@@ -6191,8 +6217,26 @@ export default function AutoCache() {
           {[["Nouveau mot de passe", newPassword, setNewPassword], ["Confirmer le mot de passe", newPasswordConfirm, setNewPasswordConfirm]].map(([label, val, set]) => (
             <div key={label} style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 10, letterSpacing: 2, color: "#ddd", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
-              <input type="password" value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submitNewPassword()}
-                style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, outline: "none" }} />
+              <div style={{ position: "relative" }}>
+                <input type={showRecoveryPassword ? "text" : "password"} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submitNewPassword()}
+                  autoComplete="new-password"
+                  style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 44px 10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                <button
+                  type="button"
+                  onClick={() => setShowRecoveryPassword(p => !p)}
+                  aria-label={showRecoveryPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                  title={showRecoveryPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                  style={{
+                    position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                    background: "transparent", border: "none", padding: "6px 8px",
+                    cursor: "pointer", color: showRecoveryPassword ? "#f26522" : "#ddd",
+                    fontSize: 17, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                    minHeight: "unset",
+                  }}
+                >
+                  {showRecoveryPassword ? "🙈" : "👁"}
+                </button>
+              </div>
             </div>
           ))}
           {recoveryErr && <div style={{ fontSize: 11, color: "#e55", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>⚠ {recoveryErr}</div>}
