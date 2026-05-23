@@ -5,24 +5,36 @@ const STORAGE_KEY = "autocache_game_hiscore";
 /* ── Game dimensions ──────────────────────────────────────────────────── */
 const ROAD_W = 360;
 const ROAD_H = 480;
-const CAR_W  = 36;
-const CAR_H  = 56;
+const CAR_W  = 38;
+const CAR_H  = 58;
 const LANE_PAD = 18;
 const CAR_BOTTOM_MARGIN = 16;
+
+/* ── Lane system — 3 voies équidistantes ─────────────────────────────── */
+const LANE_COUNT = 3;
+const LANE_W = (ROAD_W - 2 * LANE_PAD) / LANE_COUNT;
+const LANE_X = Array.from({ length: LANE_COUNT }, (_, i) =>
+  LANE_PAD + LANE_W * (i + 0.5)
+);
 
 /* ── Difficulty curves ────────────────────────────────────────────────── */
 const BASE_SPEED        = 130;   // px/s at t=0
 const SPEED_RAMP        = 9;     // +px/s per elapsed second
-const MAX_SPEED         = 520;   // hard cap
-const BASE_SPAWN_DELAY  = 1.30;  // seconds between obstacle spawns at t=0
-const MIN_SPAWN_DELAY   = 0.35;
-const SPAWN_RAMP        = 0.018; // delay subtracted per elapsed second
-const CAR_HORIZ_SPEED   = 280;   // px/s
+const MAX_SPEED         = 520;
+const BASE_SPAWN_DELAY  = 1.30;
+const MIN_SPAWN_DELAY   = 0.40;
+const SPAWN_RAMP        = 0.018;
+
+/* Snap-to-lane animation speed (lerp factor 0..1 per frame) */
+const LANE_SNAP_RATE    = 0.22;
+/* Swipe threshold in pixels before a lane change fires */
+const SWIPE_THRESHOLD   = 30;
 
 /**
  * LoadingGame — small endless-runner shown under the processing spinner.
- *  • Space starts (and restarts after a game over).
- *  • ← / → move the orange car.
+ *  • Press Space OR tap the canvas to start.
+ *  • Desktop: ← / → arrow keys move one lane.
+ *  • Mobile: swipe left / right to move one lane.
  */
 export default function LoadingGame() {
   const canvasRef = useRef(null);
@@ -35,19 +47,24 @@ export default function LoadingGame() {
 
   /* Game state kept out of React to avoid re-render thrash inside the loop. */
   const stateRef = useRef({
-    car:       { x: ROAD_W / 2 },
-    obstacles: [],
+    lane:      1,                                  // current lane index (target)
+    carX:      LANE_X[1],                          // smooth-interpolated x
+    obstacles: [],                                 // [{ lane, x, y, w, h, hue }]
     speed:     BASE_SPEED,
     elapsed:   0,
     lastSpawn: 0,
-    keys:      { left: false, right: false },
     rafId:     0,
     lastT:     0,
   });
 
+  /* Refs for swipe detection */
+  const touchStartXRef = useRef(0);
+  const touchSwipedRef = useRef(false);
+
   /* ── Reset for a new round ────────────────────────────────────────────── */
   const resetState = useCallback(() => {
-    stateRef.current.car       = { x: ROAD_W / 2 };
+    stateRef.current.lane      = 1;
+    stateRef.current.carX      = LANE_X[1];
     stateRef.current.obstacles = [];
     stateRef.current.speed     = BASE_SPEED;
     stateRef.current.elapsed   = 0;
@@ -61,6 +78,12 @@ export default function LoadingGame() {
     setPhase("playing");
   }, [resetState]);
 
+  /* ── Lane move ────────────────────────────────────────────────────────── */
+  const moveLane = useCallback((dir) => {
+    const s = stateRef.current;
+    s.lane = Math.max(0, Math.min(LANE_COUNT - 1, s.lane + dir));
+  }, []);
+
   /* ── Keyboard ────────────────────────────────────────────────────────── */
   useEffect(() => {
     const handleDown = (e) => {
@@ -69,20 +92,39 @@ export default function LoadingGame() {
         if (phase === "idle" || phase === "gameover") startGame();
         return;
       }
-      if (e.key === "ArrowLeft")  { e.preventDefault(); stateRef.current.keys.left  = true;  }
-      if (e.key === "ArrowRight") { e.preventDefault(); stateRef.current.keys.right = true;  }
-    };
-    const handleUp = (e) => {
-      if (e.key === "ArrowLeft")  stateRef.current.keys.left  = false;
-      if (e.key === "ArrowRight") stateRef.current.keys.right = false;
+      if (phase === "playing") {
+        if (e.key === "ArrowLeft")  { e.preventDefault(); moveLane(-1); }
+        if (e.key === "ArrowRight") { e.preventDefault(); moveLane(+1); }
+      }
     };
     window.addEventListener("keydown", handleDown);
-    window.addEventListener("keyup",   handleUp);
-    return () => {
-      window.removeEventListener("keydown", handleDown);
-      window.removeEventListener("keyup",   handleUp);
-    };
+    return () => window.removeEventListener("keydown", handleDown);
+  }, [phase, startGame, moveLane]);
+
+  /* ── Touch / swipe ────────────────────────────────────────────────────── */
+  const onTouchStart = useCallback((e) => {
+    if (phase !== "playing") {
+      e.preventDefault();
+      startGame();
+      return;
+    }
+    if (e.touches.length === 0) return;
+    touchStartXRef.current = e.touches[0].clientX;
+    touchSwipedRef.current = false;
   }, [phase, startGame]);
+
+  const onTouchMove = useCallback((e) => {
+    if (phase !== "playing" || touchSwipedRef.current) return;
+    if (e.touches.length === 0) return;
+    e.preventDefault();
+    const dx = e.touches[0].clientX - touchStartXRef.current;
+    if (dx >  SWIPE_THRESHOLD) { moveLane(+1); touchSwipedRef.current = true; }
+    if (dx < -SWIPE_THRESHOLD) { moveLane(-1); touchSwipedRef.current = true; }
+  }, [phase, moveLane]);
+
+  const onTouchEnd = useCallback(() => {
+    touchSwipedRef.current = false;
+  }, []);
 
   /* ── Main loop (only runs while playing) ──────────────────────────────── */
   useEffect(() => {
@@ -93,25 +135,26 @@ export default function LoadingGame() {
     const s = stateRef.current;
 
     const step = (t) => {
-      const dt = Math.min(0.05, (t - s.lastT) / 1000); // clamp dt to handle tab-blur jumps
+      const dt = Math.min(0.05, (t - s.lastT) / 1000);
       s.lastT = t;
       s.elapsed += dt;
       s.speed = Math.min(MAX_SPEED, BASE_SPEED + SPEED_RAMP * s.elapsed);
 
-      /* Car movement */
-      const dir = (s.keys.right ? 1 : 0) - (s.keys.left ? 1 : 0);
-      s.car.x += dir * CAR_HORIZ_SPEED * dt;
-      s.car.x = Math.max(
-        LANE_PAD + CAR_W / 2,
-        Math.min(ROAD_W - LANE_PAD - CAR_W / 2, s.car.x)
-      );
+      /* Animate car toward its target lane */
+      const targetX = LANE_X[s.lane];
+      s.carX += (targetX - s.carX) * LANE_SNAP_RATE;
 
-      /* Spawn obstacles */
+      /* Spawn opposing white cars */
       const spawnDelay = Math.max(MIN_SPAWN_DELAY, BASE_SPAWN_DELAY - SPAWN_RAMP * s.elapsed);
       if (s.elapsed - s.lastSpawn >= spawnDelay) {
-        const w = 32 + Math.random() * 60;
-        const x = LANE_PAD + Math.random() * (ROAD_W - 2 * LANE_PAD - w);
-        s.obstacles.push({ x, y: -40, w, h: 26 + Math.random() * 12 });
+        const lane = Math.floor(Math.random() * LANE_COUNT);
+        s.obstacles.push({
+          lane,
+          x: LANE_X[lane],
+          y: -CAR_H,
+          w: CAR_W,
+          h: CAR_H,
+        });
         s.lastSpawn = s.elapsed;
       }
 
@@ -119,14 +162,16 @@ export default function LoadingGame() {
       for (const o of s.obstacles) o.y += s.speed * dt;
       s.obstacles = s.obstacles.filter(o => o.y < ROAD_H + 60);
 
-      /* Collision check */
-      const carL = s.car.x - CAR_W / 2;
-      const carR = s.car.x + CAR_W / 2;
+      /* Collision (AABB) */
+      const carL = s.carX - CAR_W / 2;
+      const carR = s.carX + CAR_W / 2;
       const carT = ROAD_H - CAR_BOTTOM_MARGIN - CAR_H;
       const carB = ROAD_H - CAR_BOTTOM_MARGIN;
       let hit = false;
       for (const o of s.obstacles) {
-        if (carL < o.x + o.w && carR > o.x && carT < o.y + o.h && carB > o.y) {
+        const oL = o.x - o.w / 2, oR = o.x + o.w / 2;
+        const oT = o.y,          oB = o.y + o.h;
+        if (carL < oR && carR > oL && carT < oB && carB > oT) {
           hit = true; break;
         }
       }
@@ -139,44 +184,32 @@ export default function LoadingGame() {
       ctx.fillStyle = "#0e0e0e";
       ctx.fillRect(0, 0, ROAD_W, ROAD_H);
 
-      // Side rails (warm grey for AutoCache feel)
+      // Side rails
       ctx.fillStyle = "#181818";
       ctx.fillRect(0, 0, LANE_PAD - 4, ROAD_H);
       ctx.fillRect(ROAD_W - LANE_PAD + 4, 0, 4, ROAD_H);
 
-      // Scrolling dashed centre line
+      // Scrolling dashed lane lines
       const dashH = 30, gap = 16;
       const cycle = dashH + gap;
-      const offset = ((s.elapsed * s.speed) % cycle);
+      const offset = (s.elapsed * s.speed) % cycle;
       ctx.fillStyle = "#2a2a2a";
-      for (let y = -cycle + offset; y < ROAD_H; y += cycle) {
-        ctx.fillRect(ROAD_W / 2 - 1, y, 2, dashH);
+      for (let i = 1; i < LANE_COUNT; i++) {
+        const lx = LANE_PAD + LANE_W * i;
+        for (let y = -cycle + offset; y < ROAD_H; y += cycle) {
+          ctx.fillRect(lx - 1, y, 2, dashH);
+        }
       }
 
-      // Obstacles
+      // Opposing white cars (drawn facing the player)
       for (const o of s.obstacles) {
-        ctx.fillStyle = "#cccccc";
-        ctx.fillRect(o.x, o.y, o.w, o.h);
-        ctx.fillStyle = "#666666";
-        ctx.fillRect(o.x, o.y, o.w, 3);
+        drawCar(ctx, o.x - o.w / 2, o.y, o.w, o.h, "#dddddd", true);
       }
 
-      // Car (orange, simple rectangle with two windows)
-      const cx = s.car.x - CAR_W / 2;
+      // Player car (orange)
+      const cx = s.carX - CAR_W / 2;
       const cy = ROAD_H - CAR_BOTTOM_MARGIN - CAR_H;
-      ctx.fillStyle = "#f26522";
-      ctx.fillRect(cx, cy, CAR_W, CAR_H);
-      // Roof shadow
-      ctx.fillStyle = "rgba(0,0,0,0.18)";
-      ctx.fillRect(cx, cy + CAR_H / 2 - 1, CAR_W, 2);
-      // Windshield + rear window
-      ctx.fillStyle = "#1a1a1a";
-      ctx.fillRect(cx + 5, cy + 8,  CAR_W - 10, 12);
-      ctx.fillRect(cx + 5, cy + 36, CAR_W - 10, 10);
-      // Headlights
-      ctx.fillStyle = "#ffe1a8";
-      ctx.fillRect(cx + 4,           cy + 2, 6, 3);
-      ctx.fillRect(cx + CAR_W - 10,  cy + 2, 6, 3);
+      drawCar(ctx, cx, cy, CAR_W, CAR_H, "#f26522", false);
 
       if (hit) {
         if (newScore > hiScore) {
@@ -208,20 +241,25 @@ export default function LoadingGame() {
         display: "flex", justifyContent: "space-between", alignItems: "baseline",
         padding: "0 4px", marginBottom: 6,
       }}>
-        <div style={{ fontSize: 10, color: "#777", letterSpacing: 2, textTransform: "uppercase" }}>
-          Record <span style={{ color: "#aaa" }}>{hiScore}</span>
+        <div style={{ fontSize: 11, color: "#888", letterSpacing: 2, textTransform: "uppercase" }}>
+          Record <span style={{ color: "#bbb" }}>{hiScore}</span>
         </div>
-        <div style={{ fontSize: 11, color: "#f26522", letterSpacing: 2, textTransform: "uppercase", fontWeight: 700 }}>
+        <div style={{ fontSize: 12, color: "#f26522", letterSpacing: 2, textTransform: "uppercase", fontWeight: 700 }}>
           Score {score}
         </div>
       </div>
 
       {/* Canvas + overlay states */}
-      <div style={{ position: "relative", border: "1px solid #222", borderRadius: 3, overflow: "hidden" }}>
+      <div
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        style={{ position: "relative", border: "1px solid #222", borderRadius: 3, overflow: "hidden", touchAction: "none" }}
+      >
         <canvas
           ref={canvasRef}
           width={ROAD_W} height={ROAD_H}
-          style={{ display: "block", background: "#0e0e0e", width: ROAD_W, height: ROAD_H }}
+          style={{ display: "block", background: "#0e0e0e", width: ROAD_W, height: ROAD_H, touchAction: "none" }}
         />
 
         {phase === "idle" && (
@@ -234,14 +272,15 @@ export default function LoadingGame() {
             color: "#ddd",
             textAlign: "center",
             padding: 16,
+            cursor: "pointer",
           }}>
-            <div style={{ fontSize: 12, color: "#f26522", letterSpacing: 3, textTransform: "uppercase", fontWeight: 700 }}>
+            <div style={{ fontSize: 13, color: "#f26522", letterSpacing: 3, textTransform: "uppercase", fontWeight: 700 }}>
               Mini-jeu d'esquive
             </div>
-            <div style={{ fontSize: 11, color: "#aaa", lineHeight: 1.6 }}>
-              Appuie sur <kbd style={kbdStyle}>Espace</kbd> pour démarrer
+            <div style={{ fontSize: 12, color: "#bbb", lineHeight: 1.7 }}>
+              <kbd style={kbdStyle}>Espace</kbd> ou <kbd style={kbdStyle}>tap</kbd> pour démarrer
               <br />
-              Utilise <kbd style={kbdStyle}>←</kbd> <kbd style={kbdStyle}>→</kbd> pour esquiver
+              <kbd style={kbdStyle}>←</kbd> <kbd style={kbdStyle}>→</kbd> ou <kbd style={kbdStyle}>swipe</kbd> pour changer de voie
             </div>
           </div>
         )}
@@ -256,20 +295,21 @@ export default function LoadingGame() {
             color: "#ddd",
             textAlign: "center",
             padding: 16,
+            cursor: "pointer",
           }}>
-            <div style={{ fontSize: 13, color: "#f26522", letterSpacing: 3, textTransform: "uppercase", fontWeight: 700 }}>
+            <div style={{ fontSize: 14, color: "#f26522", letterSpacing: 3, textTransform: "uppercase", fontWeight: 700 }}>
               Game Over
             </div>
-            <div style={{ fontSize: 22, color: "#ddd5c8", fontWeight: 700, letterSpacing: 1 }}>
+            <div style={{ fontSize: 23, color: "#ddd5c8", fontWeight: 700, letterSpacing: 1 }}>
               {score}
             </div>
             {score === hiScore && score > 0 && (
-              <div style={{ fontSize: 10, color: "#f26522", letterSpacing: 2, textTransform: "uppercase" }}>
+              <div style={{ fontSize: 11, color: "#f26522", letterSpacing: 2, textTransform: "uppercase" }}>
                 ★ Nouveau record !
               </div>
             )}
-            <div style={{ fontSize: 10, color: "#aaa", marginTop: 4 }}>
-              <kbd style={kbdStyle}>Espace</kbd> pour rejouer
+            <div style={{ fontSize: 11, color: "#bbb", marginTop: 4 }}>
+              <kbd style={kbdStyle}>Espace</kbd> ou <kbd style={kbdStyle}>tap</kbd> pour rejouer
             </div>
           </div>
         )}
@@ -278,13 +318,39 @@ export default function LoadingGame() {
   );
 }
 
+/* ── Draw a small car (body + windows + lights) ─────────────────────── */
+function drawCar(ctx, x, y, w, h, color, oncoming) {
+  // Body
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+  // Subtle roof shadow line in the middle
+  ctx.fillStyle = "rgba(0,0,0,0.18)";
+  ctx.fillRect(x, y + h / 2 - 1, w, 2);
+  // Windshield + rear window
+  ctx.fillStyle = "#1a1a1a";
+  if (oncoming) {
+    // Player-facing car: windshield near the bottom (toward the player)
+    ctx.fillRect(x + 5, y + h - 22, w - 10, 12);
+    ctx.fillRect(x + 5, y + 4,      w - 10, 10);
+  } else {
+    // Player car: windshield near the top
+    ctx.fillRect(x + 5, y + 8,      w - 10, 12);
+    ctx.fillRect(x + 5, y + h - 22, w - 10, 10);
+  }
+  // Lights at the leading edge
+  ctx.fillStyle = "#ffe1a8";
+  const ly = oncoming ? y + h - 4 : y + 2;
+  ctx.fillRect(x + 4,         ly, 6, 3);
+  ctx.fillRect(x + w - 10,    ly, 6, 3);
+}
+
 const kbdStyle = {
   display: "inline-block",
   background: "#1a1a1a",
   border: "1px solid #2a2a2a",
   borderRadius: 3,
   padding: "1px 6px",
-  fontSize: 10,
+  fontSize: 11,
   color: "#ddd5c8",
   fontFamily: "'JetBrains Mono', monospace",
   margin: "0 2px",
