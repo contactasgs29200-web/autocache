@@ -2818,6 +2818,10 @@ function polishBodywork(ctx, W, H) {
 // ── Feature flags (shadow system) ──
 const USE_SOURCE_SHADOW_TRANSFER = false;
 
+// Zoom appliqué par défaut à la voiture dans le décor showroom (la voiture
+// paraissait trop petite par rapport au décor à l'échelle 1.0).
+const DEFAULT_SHOWROOM_ZOOM = 1.25;
+
 // ── Shadow generation constants (tunable) ──
 const SHADOW_STRENGTH = 1.0;
 const CONTACT_SHADOW_OPACITY = 0.35;
@@ -3979,12 +3983,14 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   //
   // Si l'appelant nous fournit un `carBoundsHint` (en pixels du cutout) on
   // l'utilise — économie d'un scan plein-résolution. Sinon on scanne ici.
+  let actualTopFrac    = 0.0;
   let actualBottomFrac = 1.0;
   let actualLeftFrac   = 0.0;
   let actualRightFrac  = 1.0;
   if (carBoundsHint && Number.isFinite(carBoundsHint.x) && Number.isFinite(carBoundsHint.w) && carBoundsHint.w > 0 && carBoundsHint.h > 0) {
     actualLeftFrac   = carBoundsHint.x / carImg.width;
     actualRightFrac  = (carBoundsHint.x + carBoundsHint.w) / carImg.width;
+    actualTopFrac    = carBoundsHint.y / carImg.height;
     actualBottomFrac = (carBoundsHint.y + carBoundsHint.h) / carImg.height;
   } else {
     try {
@@ -3994,12 +4000,13 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       scanCtx.drawImage(carImg, 0, 0);
       const imgData = scanCtx.getImageData(0, 0, carImg.width, carImg.height);
       const data = imgData.data;
-      let minX = carImg.width, maxX = -1, maxY = -1;
+      let minX = carImg.width, maxX = -1, minY = carImg.height, maxY = -1;
       for (let y = 0; y < carImg.height; y++) {
         for (let x = 0; x < carImg.width; x++) {
           if (data[(y * carImg.width + x) * 4 + 3] > 20) {
             if (x < minX) minX = x;
             if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
             if (y > maxY) maxY = y;
           }
         }
@@ -4007,18 +4014,19 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       if (maxX >= 0) {
         actualLeftFrac   = minX / carImg.width;
         actualRightFrac  = (maxX + 1) / carImg.width;
+        actualTopFrac    = minY / carImg.height;
         actualBottomFrac = (maxY + 1) / carImg.height;
       }
     } catch (_) { /* garder les valeurs par défaut */ }
   }
 
-  // Centre visuel horizontal de la voiture (relatif au cutout, 0..1).
-  const carCenterFrac = (actualLeftFrac + actualRightFrac) / 2;
-  // carX décale le cutout pour que le centre visuel du véhicule tombe sur W/2,
-  // puis l'utilisateur peut ajuster avec offsetX (flèches).
+  // Centres visuels de la voiture (relatifs au cutout, 0..1).
+  const carCenterFrac  = (actualLeftFrac + actualRightFrac) / 2;
+  const carCenterFracY = (actualTopFrac + actualBottomFrac) / 2;
+  // On décale le cutout pour que le centre visuel du véhicule tombe au centre
+  // du décor (W/2, H/2), puis l'utilisateur peut ajuster avec offsetX/offsetY.
   const carX = W / 2 - carCenterFrac * cw + offsetX;
-  // Le bas du véhicule reste ancré à 82 % de la hauteur du décor (= sol).
-  const carY = H * 0.82 - actualBottomFrac * ch + offsetY;
+  const carY = H / 2 - carCenterFracY * ch + offsetY;
 
   const debugMode = getShowroomDebugMode();
 
@@ -5060,7 +5068,7 @@ export default function AutoCache() {
   const [wallTextUnderline, setWallTextUnderline]     = useState(false);
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
-  const [showroomZoom,    setShowroomZoom]    = useState(1.0);
+  const [showroomZoom,    setShowroomZoom]    = useState(DEFAULT_SHOWROOM_ZOOM);
   const [showroomBlend,   setShowroomBlend]   = useState(0); // 0-100, intensité de fondu voiture/décor
   const [showroomNudging, setShowroomNudging] = useState(false);
   const zoomTimerRef = useRef(null);
@@ -5506,7 +5514,7 @@ export default function AutoCache() {
           // Default blend = 75 so the vehicle integrates with the décor as soon as
           // the photo is generated. User can still drag the slider down to 0 in the
           // lightbox to disable the effect entirely.
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, 1.0, true, wOpts, shadowMatteUrl, 75, carBounds);
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, DEFAULT_SHOWROOM_ZOOM, true, wOpts, shadowMatteUrl, 75, carBounds);
 
           // For debug modes that show source-based overlays, override the showroom result
           if (debugDataURL) {
@@ -5523,6 +5531,7 @@ export default function AutoCache() {
             entry.showroomTransform = sr.transform;
           }
           entry.showroomBgUrl     = showroomBgDataUrl;
+          entry.showroomZoom      = DEFAULT_SHOWROOM_ZOOM; // taille par défaut de la voiture dans le décor
           entry.showroomBlend     = 75; // default blend so the lightbox slider opens at 75 %
           entry.wallLogoSrc       = resolvedWallLogo;
           entry.wallLogoPos       = { x: 0.5, y: 0.25 };
@@ -5676,7 +5685,7 @@ export default function AutoCache() {
     setShowMaskEditor(false);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
     setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
-    setShowroomZoom(r.showroomZoom ?? 1.0);
+    setShowroomZoom(r.showroomZoom ?? DEFAULT_SHOWROOM_ZOOM);
     setShowroomBlend(r.showroomBlend ?? 0);
     setShadowOpacity(SHADOW_STRENGTH);
     setShadowBlur(0);
@@ -8085,7 +8094,7 @@ export default function AutoCache() {
                   const sr = await compositeCarOnBg(
                     correctedDataURL, lightbox.showroomBgUrl, 2400, 1350,
                     null, null, lightbox.bgColor || '#ffffff',
-                    0, 0, 1.0, true, wOpts, newShadow, showroomBlend
+                    showroomNudge.x, showroomNudge.y, showroomZoom, true, wOpts, newShadow, showroomBlend
                   );
                   // Update lightbox state
                   setLightbox(prev => ({
