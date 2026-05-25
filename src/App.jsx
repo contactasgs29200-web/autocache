@@ -4955,6 +4955,34 @@ function AuthScreen({ onAuth }) {
   );
 }
 
+// Pictogrammes du menu Paramètres — style "line" sobre, couleur héritée du
+// texte (currentColor) pour rester neutre plutôt que des emoji colorés.
+function SettingsIcon({ name, size = 16 }) {
+  const common = {
+    width: size, height: size, viewBox: "0 0 24 24", fill: "none",
+    stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round",
+    strokeLinejoin: "round",
+  };
+  switch (name) {
+    case "profile": // Mes informations
+      return (<svg {...common}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>);
+    case "subscription": // Abonnement
+      return (<svg {...common}><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></svg>);
+    case "promo": // Code promo
+      return (<svg {...common}><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>);
+    case "contact": // Nous contacter
+      return (<svg {...common}><rect x="2" y="4" width="20" height="16" rx="2" /><polyline points="2,6 12,13 22,6" /></svg>);
+    case "tutorial": // Revoir le didacticiel
+      return (<svg {...common}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>);
+    case "game": // Mini-jeu
+      return (<svg {...common}><rect x="2" y="6" width="20" height="12" rx="3" /><line x1="6" y1="12" x2="10" y2="12" /><line x1="8" y1="10" x2="8" y2="14" /><line x1="16" y1="11" x2="16.01" y2="11" /><line x1="18.5" y1="13" x2="18.51" y2="13" /></svg>);
+    case "logout": // Déconnexion
+      return (<svg {...common}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16,17 21,12 16,7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>);
+    default:
+      return null;
+  }
+}
+
 export default function AutoCache() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -6415,12 +6443,12 @@ export default function AutoCache() {
                   </div>
                   {/* Menu items */}
                   {[
-                    { icon: "👤", label: "Mes informations", action: () => { setSettingsOpen(false); setShowProfileModal(true); } },
-                    { icon: "💳", label: "Abonnement", action: () => { setSettingsOpen(false); setShowPlansModal(true); } },
-                    { icon: "🎟", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
-                    { icon: "✉", label: "Nous contacter", action: () => { setSettingsOpen(false); setShowContactModal(true); } },
-                    { icon: "📖", label: "Revoir le didacticiel", action: () => { setSettingsOpen(false); setShowTutorial(true); } },
-                    { icon: "🎮", label: "Mini-jeu", action: () => { setSettingsOpen(false); setShowMiniGame(true); } },
+                    { icon: "profile", label: "Mes informations", action: () => { setSettingsOpen(false); setShowProfileModal(true); } },
+                    { icon: "subscription", label: "Abonnement", action: () => { setSettingsOpen(false); setShowPlansModal(true); } },
+                    { icon: "promo", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
+                    { icon: "contact", label: "Nous contacter", action: () => { setSettingsOpen(false); setShowContactModal(true); } },
+                    { icon: "tutorial", label: "Revoir le didacticiel", action: () => { setSettingsOpen(false); setShowTutorial(true); } },
+                    { icon: "game", label: "Mini-jeu", action: () => { setSettingsOpen(false); setShowMiniGame(true); } },
                   ].map((item, i) => (
                     <button key={i} onClick={item.action}
                       style={{
@@ -6433,7 +6461,7 @@ export default function AutoCache() {
                       onMouseEnter={e => e.currentTarget.style.background = "#1a1a1a"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                     >
-                      <span style={{ fontSize: 15, width: 20, textAlign: "center" }}>{item.icon}</span>
+                      <span style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", color: "#9a9a9a" }}><SettingsIcon name={item.icon} /></span>
                       {item.label}
                     </button>
                   ))}
@@ -6450,7 +6478,7 @@ export default function AutoCache() {
                     onMouseEnter={e => e.currentTarget.style.background = "rgba(192,57,43,0.08)"}
                     onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                   >
-                    <span style={{ fontSize: 15, width: 20, textAlign: "center" }}>🚪</span>
+                    <span style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center" }}><SettingsIcon name="logout" /></span>
                     Déconnexion
                   </button>
                 </div>
