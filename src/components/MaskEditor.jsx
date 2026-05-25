@@ -15,7 +15,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   const containerRef = useRef(null);
 
   const [mode, setMode] = useState('erase'); // 'erase' | 'recover' | 'restore' | 'glass'
-  const [brushSize, setBrushSize] = useState(30);
+  const [brushSize, setBrushSize] = useState(10);
   const [glassOpacity, setGlassOpacity] = useState(110); // 0..255, alpha appliqué en mode "Vitrages"
   const [bgMode, setBgMode] = useState('checker'); // 'checker' | 'white' | 'black'
   const [isDrawing, setIsDrawing] = useState(false);
@@ -386,7 +386,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         <span style={{ color: '#b3bac4', fontSize: 13, margin: '0 4px' }}>|</span>
         <label style={{ color: '#dde0e5', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
           Taille
-          <input type="range" min={1} max={120} value={brushSize}
+          <input type="range" min={1} max={30} value={brushSize}
             onChange={e => setBrushSize(Number(e.target.value))}
             onMouseDown={e => e.stopPropagation()}
             style={{ width: 80 }} />
