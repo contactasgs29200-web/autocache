@@ -4020,7 +4020,6 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   // Le bas du véhicule reste ancré à 82 % de la hauteur du décor (= sol).
   const carY = H * 0.82 - actualBottomFrac * ch + offsetY;
 
-  const carBottom = carY + actualBottomFrac * ch;
   const debugMode = getShowroomDebugMode();
 
   // ── Debug: mainMask — show isolated car mask on white ──
@@ -4096,24 +4095,15 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   }
 
   // ── Shadow layer (drawn BEFORE car) ──
+  // No matte → no shadow. When the user unchecks "Ombres au sol" the matte is
+  // null on purpose, so we must draw nothing (no fallback contact strip, which
+  // would otherwise leave a stray dark line on the ground under the car).
   if (shadowImg) {
     ctx.save();
     ctx.globalAlpha = 1.0;
     ctx.drawImage(shadowImg, carX, carY, cw, ch);
     ctx.restore();
     console.log('[Shadow] drawn at carPos=[' + Math.round(carX) + ',' + Math.round(carY) + '] size=[' + Math.round(cw) + 'x' + Math.round(ch) + ']');
-  } else {
-    // Fallback: thin contact shadow under car bottom
-    const stripH = ch * 0.012;
-    const grad = ctx.createLinearGradient(carX, carBottom - stripH, carX, carBottom + stripH * 2);
-    grad.addColorStop(0, 'rgba(0,0,0,0.15)');
-    grad.addColorStop(0.5, 'rgba(0,0,0,0.08)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.save();
-    ctx.fillStyle = grad;
-    ctx.fillRect(carX + cw * 0.08, carBottom - stripH, cw * 0.84, stripH * 3);
-    ctx.restore();
-    console.log('[Shadow] fallback contact shadow at y=%d', Math.round(carBottom));
   }
 
   ctx.save();
@@ -8079,7 +8069,11 @@ export default function AutoCache() {
                         if (y < carT) carT = y; if (y > carB) carB = y;
                       }
                   const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
-                  const newShadow = await generateShadowFromCarAlpha(correctedDataURL, carBounds, lightbox.yoloBbox ?? null);
+                  // Respect the "Ombres au sol" choice: don't resurrect a shadow
+                  // the user disabled when they re-edit the mask.
+                  const newShadow = showroomFloorShadow
+                    ? await generateShadowFromCarAlpha(correctedDataURL, carBounds, lightbox.yoloBbox ?? null)
+                    : null;
                   // Recomposite
                   const wOpts = lightbox.wallLogoSrc ? {
                     src: lightbox.wallLogoSrc,
