@@ -36,7 +36,7 @@ const SWIPE_THRESHOLD   = 30;
  *  • Desktop: ← / → arrow keys move one lane.
  *  • Mobile: swipe left / right to move one lane.
  */
-export default function LoadingGame() {
+export default function LoadingGame({ autoStart = false }) {
   const canvasRef = useRef(null);
   const [phase, setPhase] = useState("idle"); // 'idle' | 'playing' | 'gameover'
   const [score, setScore] = useState(0);
@@ -77,6 +77,13 @@ export default function LoadingGame() {
     setScore(0);
     setPhase("playing");
   }, [resetState]);
+
+  /* Lance la partie immédiatement au montage si demandé (l'utilisateur a déjà
+   * appuyé sur Espace / touché la phrase pour lancer un jeu). */
+  useEffect(() => {
+    if (autoStart) startGame();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ── Lane move ────────────────────────────────────────────────────────── */
   const moveLane = useCallback((dir) => {

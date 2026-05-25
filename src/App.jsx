@@ -4998,6 +4998,7 @@ export default function AutoCache() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
   const [showMiniGame,     setShowMiniGame]     = useState(false);
+  const [loadGameActive,   setLoadGameActive]   = useState(false); // jeu lancé pendant le chargement (sur appui Espace)
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCreditPopup, setShowCreditPopup] = useState(false);
   const [subInfo, setSubInfo] = useState(null); // { periodStart, periodEnd, plan, daysLeft }
@@ -5243,6 +5244,21 @@ export default function AutoCache() {
       events.forEach(e => window.removeEventListener(e, reset));
     };
   }, [user]);
+
+  // Pendant le chargement : le jeu ne se lance pas tout seul. On affiche une
+  // phrase et on attend l'appui sur la barre espace pour le lancer.
+  useEffect(() => {
+    if (!processing) { setLoadGameActive(false); return; }
+    if (loadGameActive) return;
+    const onKey = (e) => {
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        setLoadGameActive(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [processing, loadGameActive]);
 
   // Fermer le menu settings au clic extérieur
   useEffect(() => {
@@ -8735,8 +8751,22 @@ export default function AutoCache() {
           <div style={{ width: 200, height: 2, background: "#1e1e1e", borderRadius: 1, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
           </div>
-          {/* Mini-jeu d'esquive pour patienter pendant le traitement */}
-          <LoadingGame />
+          {/* Le jeu ne se propose pas tout seul : petite phrase, puis lancement
+              à l'appui sur Espace (ou au tap sur la phrase, pour le mobile). */}
+          {loadGameActive ? (
+            <LoadingGame autoStart />
+          ) : (
+            <button
+              onClick={() => setLoadGameActive(true)}
+              style={{
+                marginTop: 8, background: "transparent", border: "none",
+                color: "#666", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace",
+                fontSize: 11, letterSpacing: 1.5,
+              }}
+            >
+              {isMobile ? "Touchez ici pour lancer un jeu" : "Appuyez sur la barre espace pour lancer un jeu"}
+            </button>
+          )}
         </div>
       )}
 
