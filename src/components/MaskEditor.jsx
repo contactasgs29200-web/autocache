@@ -403,8 +403,8 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
           </label>
         )}
         <span style={{ color: '#b3bac4', fontSize: 13, margin: '0 4px' }}>|</span>
-        <button style={btnStyle(canUndo)} onClick={undo} disabled={!canUndo}>Annuler</button>
-        <button style={btnStyle(canRedo)} onClick={redo} disabled={!canRedo}>Refaire</button>
+        <button style={{ ...btnStyle(canUndo), fontSize: 18, lineHeight: 1, padding: '6px 12px' }} onClick={undo} disabled={!canUndo} title="Annuler" aria-label="Annuler">↶</button>
+        <button style={{ ...btnStyle(canRedo), fontSize: 18, lineHeight: 1, padding: '6px 12px' }} onClick={redo} disabled={!canRedo} title="Refaire" aria-label="Refaire">↷</button>
         <span style={{ color: '#b3bac4', fontSize: 13, margin: '0 4px' }}>|</span>
         <select value={bgMode} onChange={e => setBgMode(e.target.value)}
           onMouseDown={e => e.stopPropagation()}
