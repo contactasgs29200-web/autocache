@@ -545,43 +545,57 @@ function autoEnhance(ctx, W, H, intensity = 5, photoName = '') {
   const N  = d.length;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-  // ── 1. Mesure la dominante réelle sur les mi-tons ──────────────────────
-  // Les pixels trop sombres (<25) ou trop clairs (>235) ne portent pas
-  // d'information sur la dominante (noirs, ciels brûlés, vitres, etc.)
-  // → on les ignore pour estimer la balance des blancs.
-  let rSum = 0, gSum = 0, bSum = 0, count = 0;
+  // ── 1. Mesure la dominante sur les surfaces NEUTRES ────────────────────
+  // On ignore les pixels trop sombres (<25) ou trop clairs (>235), et on
+  // pondère chaque pixel restant par sa neutralité (1 = gris parfait, 0 =
+  // couleur saturée). La dominante de l'éclairage se lit sur les surfaces
+  // grises (carrosserie blanche, sol béton, murs) — identiques d'une photo
+  // à l'autre. Les zones colorées (porte éclairée chaude, reflets, peinture)
+  // sont écartées : c'est ce qui rend la balance des blancs INDÉPENDANTE du
+  // cadrage, donc cohérente entre deux photos de la même scène.
+  const SAT_CUT = 0.32; // au-delà, un pixel est "coloré" et n'informe pas l'illuminant
+  let rN = 0, gN = 0, bN = 0, wN = 0;          // pondéré neutre
+  let rAll = 0, gAll = 0, bAll = 0, nAll = 0;  // tous les mi-tons (repli)
   const sampleStep = 4 * Math.max(1, Math.floor(N / 4 / 50000)); // ~50k samples max
   for (let i = 0; i < N; i += sampleStep) {
     const r = d[i], g = d[i + 1], b = d[i + 2];
     const luma = r * 0.299 + g * 0.587 + b * 0.114;
     if (luma < 25 || luma > 235) continue;
-    rSum += r; gSum += g; bSum += b;
-    count++;
+    rAll += r; gAll += g; bAll += b; nAll++;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const sat = mx > 0 ? (mx - mn) / mx : 0;
+    const t = clamp((SAT_CUT - sat) / SAT_CUT, 0, 1);
+    const w = t * t; // 1 = gris parfait, 0 = saturé (porte chaude, peinture, reflets)
+    if (w > 0) { rN += r * w; gN += g * w; bN += b * w; wN += w; }
   }
 
-  if (count < 100) {
-    console.log('[Enhance]', photoName, 'aborted — too few mid-tone pixels', { count });
+  if (nAll < 100) {
+    console.log('[Enhance]', photoName, 'aborted — too few mid-tone pixels', { count: nAll });
     return;
   }
 
-  const rMean = rSum / count;
-  const gMean = gSum / count;
-  const bMean = bSum / count;
+  // Assez de surfaces neutres → on ancre la balance des blancs dessus (stable
+  // d'une photo à l'autre) ; sinon repli sur un gray-world global classique.
+  const useNeutral = wN >= nAll * 0.05;
+  const rMean = useNeutral ? rN / wN : rAll / nAll;
+  const gMean = useNeutral ? gN / wN : gAll / nAll;
+  const bMean = useNeutral ? bN / wN : bAll / nAll;
   const gray  = (rMean + gMean + bMean) / 3;
 
-  // ── 2. Gains de balance des blancs (gray-world) ────────────────────────
-  // Chaque canal est rééchelonné pour que sa moyenne rejoigne la moyenne
-  // globale gris. On borne les gains pour éviter les corrections extrêmes
-  // (ex : photo dominée par une seule couleur de carrosserie).
+  // ── 2. Gains de balance des blancs (gray-world pondéré neutre) ──────────
+  // Chaque canal est rééchelonné pour que sa moyenne (neutre) rejoigne la
+  // moyenne globale gris. On borne les gains pour éviter les corrections
+  // extrêmes (ex : photo dominée par une seule couleur de carrosserie).
   let rGainFull = clamp(gray / Math.max(rMean, 1), 0.70, 1.40);
   let gGainFull = clamp(gray / Math.max(gMean, 1), 0.70, 1.40);
   let bGainFull = clamp(gray / Math.max(bMean, 1), 0.70, 1.40);
 
-  // Léger biais froid quand il reste une dominante jaune mesurable.
-  if (bMean < gMean) {
-    bGainFull = clamp(bGainFull * 1.04, 0.70, 1.45);
-    rGainFull = clamp(rGainFull * 0.98, 0.65, 1.40);
-  }
+  // Réduction du jaune CONTINUE, proportionnelle à la dominante chaude
+  // mesurée — pas de seuil binaire qui ferait basculer deux photos quasi
+  // identiques vers des rendus différents.
+  const yellowness = clamp((gMean - bMean) / Math.max(gMean, 1), 0, 0.4);
+  bGainFull = clamp(bGainFull * (1 + 0.20 * yellowness), 0.70, 1.45);
+  rGainFull = clamp(rGainFull * (1 - 0.10 * yellowness), 0.65, 1.40);
 
   // Mix avec l'identité selon l'intensité demandée (0..1).
   const rGain = 1 + (rGainFull - 1) * k;
