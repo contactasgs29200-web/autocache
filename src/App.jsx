@@ -592,36 +592,48 @@ function autoEnhance(ctx, W, H, intensity = 5, photoName = '') {
 
   // Réduction du jaune CONTINUE, proportionnelle à la dominante chaude
   // mesurée — pas de seuil binaire qui ferait basculer deux photos quasi
-  // identiques vers des rendus différents.
-  const yellowness = clamp((gMean - bMean) / Math.max(gMean, 1), 0, 0.4);
-  bGainFull = clamp(bGainFull * (1 + 0.20 * yellowness), 0.70, 1.45);
-  rGainFull = clamp(rGainFull * (1 - 0.10 * yellowness), 0.65, 1.40);
+  // identiques vers des rendus différents. Refroidissement marqué pour un
+  // rendu "pro" qui supprime franchement la dominante LED chaude.
+  const yellowness = clamp((gMean - bMean) / Math.max(gMean, 1), 0, 0.5);
+  bGainFull = clamp(bGainFull * (1 + 0.35 * yellowness), 0.70, 1.55);
+  rGainFull = clamp(rGainFull * (1 - 0.18 * yellowness), 0.60, 1.40);
 
   // Mix avec l'identité selon l'intensité demandée (0..1).
   const rGain = 1 + (rGainFull - 1) * k;
   const gGain = 1 + (gGainFull - 1) * k;
   const bGain = 1 + (bGainFull - 1) * k;
 
-  // Saturation modérée (un peu plus douce que la version fixe d'avant).
-  const sat = 1 + 0.15 * k;
+  // Saturation et contraste accentués pour un rendu plus "pro" / vendeur.
+  const sat    = 1 + 0.35 * k;
+  const sCurve = 0.45 * k; // intensité de la courbe S (contraste mi-tons)
 
-  // ── 3. Application pixel-par-pixel avec soft-clip ──────────────────────
-  // Si un canal dépasse 255 après gain, on remet tous les canaux à
-  // l'échelle (proportionnel) pour préserver la teinte plutôt que de
-  // brûler la zone en pur blanc.
+  // ── 3. Application pixel-par-pixel ─────────────────────────────────────
   for (let i = 0; i < N; i += 4) {
     let r = d[i]     * rGain;
     let g = d[i + 1] * gGain;
     let b = d[i + 2] * bGain;
 
+    // Soft-clip : si un canal dépasse 255, on rééchelonne les trois pour
+    // préserver la teinte plutôt que de brûler la zone en pur blanc.
     const maxC = Math.max(r, g, b);
     if (maxC > 255) {
       const scale = 255 / maxC;
       r *= scale; g *= scale; b *= scale;
     }
 
+    // Contraste en courbe S sur la luminance (assombrit les ombres, soutient
+    // les hautes lumières) — appliqué via un facteur d'échelle commun aux 3
+    // canaux, donc la teinte est préservée et l'image gagne en "punch".
+    let lum = r * 0.299 + g * 0.587 + b * 0.114;
+    if (sCurve > 0 && lum > 0) {
+      const x = lum / 255;
+      const sx = x * x * (3 - 2 * x); // smoothstep
+      const cf = (255 * (x + (sx - x) * sCurve)) / lum;
+      r *= cf; g *= cf; b *= cf;
+    }
+
     // Saturation autour de la luminance (préserve les valeurs neutres).
-    const lum = r * 0.299 + g * 0.587 + b * 0.114;
+    lum = r * 0.299 + g * 0.587 + b * 0.114;
     r = lum + (r - lum) * sat;
     g = lum + (g - lum) * sat;
     b = lum + (b - lum) * sat;
@@ -4639,7 +4651,7 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
   return c.toDataURL('image/png');
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 3) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
   const photoURL = URL.createObjectURL(photoFile);
@@ -5063,7 +5075,7 @@ export default function AutoCache() {
   const [bodyPolish, setBodyPolish] = useState(false);
   const [floorClean, setFloorClean] = useState(false);
   const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
-  const [enhanceProIntensity, setEnhanceProIntensity] = useState(2); // 0–5 : force de la réduction du jaune (2 par défaut, modifiable)
+  const [enhanceProIntensity, setEnhanceProIntensity] = useState(3); // 0–5 : force de l'amélioration (3 par défaut, modifiable)
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
