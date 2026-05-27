@@ -4163,12 +4163,38 @@ async function detectGptData(b64) {
   }
 }
 
+// Downscale an image before sending it to the YOLO backend. The backend
+// returns normalized coordinates, so the scale factor is irrelevant to the
+// geometry — this only shrinks upload + server-side decode time. Returns the
+// original file when it's already small enough or if anything fails.
+function downscaleForUpload(file, maxPx = 1600, quality = 0.9) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      const scale = Math.min(1, maxPx / Math.max(w, h));
+      if (scale >= 1) { URL.revokeObjectURL(url); resolve(file); return; }
+      const c = document.createElement('canvas');
+      c.width = Math.round(w * scale);
+      c.height = Math.round(h * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob((blob) => resolve(blob || file), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
 async function detectPlateYOLO(imageFile) {
   const backendUrl = import.meta.env.VITE_YOLO_BACKEND_URL;
   if (!backendUrl) { console.warn('VITE_YOLO_BACKEND_URL non défini'); return null; }
   try {
+    const upload = await downscaleForUpload(imageFile);
     const formData = new FormData();
-    formData.append('file', imageFile);
+    formData.append('file', upload, upload.name || 'upload.jpg');
     const r = await fetch(`${backendUrl}/detect-plate`, {
       method: 'POST',
       body: formData,
@@ -4200,8 +4226,9 @@ async function detectVehicles(imageFile) {
   const backendUrl = import.meta.env.VITE_YOLO_BACKEND_URL;
   if (!backendUrl) return null;
   try {
+    const upload = await downscaleForUpload(imageFile);
     const formData = new FormData();
-    formData.append('file', imageFile);
+    formData.append('file', upload, upload.name || 'upload.jpg');
     const r = await fetch(`${backendUrl}/detect-vehicles`, {
       method: 'POST',
       body: formData,

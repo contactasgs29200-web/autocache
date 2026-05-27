@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import urllib.request
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import cv2
@@ -17,7 +18,34 @@ from ultralytics import YOLO
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Plate Detector")
+def _warmup_models() -> None:
+    """Load every model and run a tiny inference at boot, so the first real
+    request doesn't pay the lazy-load cost. Best-effort: a failure here must
+    never prevent the server from starting (the lazy loaders still run on
+    demand)."""
+    dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+    stages = (
+        ("plate", get_model, lambda m: m(dummy, conf=0.25, verbose=False)),
+        ("vehicle", get_vehicle_model,
+         lambda m: m.predict(source=dummy, conf=0.25, verbose=False)),
+        ("segment", get_seg_model,
+         lambda m: m.predict(source=dummy, conf=0.25, verbose=False)),
+    )
+    for name, loader, runner in stages:
+        try:
+            runner(loader())
+            logger.info(f"Warmup OK: {name} model ready")
+        except Exception as exc:
+            logger.warning(f"Warmup failed for {name} model: {exc}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _warmup_models()
+    yield
+
+
+app = FastAPI(title="Plate Detector", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
