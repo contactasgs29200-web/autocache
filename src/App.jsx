@@ -542,117 +542,65 @@ function autoEnhance(ctx, W, H, intensity = 5, photoName = '') {
 
   const id = ctx.getImageData(0, 0, W, H);
   const d  = id.data;
-  const N  = d.length;
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-  // ── 1. Mesure la dominante sur les surfaces NEUTRES ────────────────────
-  // On ignore les pixels trop sombres (<25) ou trop clairs (>235), et on
-  // pondère chaque pixel restant par sa neutralité (1 = gris parfait, 0 =
-  // couleur saturée). La dominante de l'éclairage se lit sur les surfaces
-  // grises (carrosserie blanche, sol béton, murs) — identiques d'une photo
-  // à l'autre. Les zones colorées (porte éclairée chaude, reflets, peinture)
-  // sont écartées : c'est ce qui rend la balance des blancs INDÉPENDANTE du
-  // cadrage, donc cohérente entre deux photos de la même scène.
-  const SAT_CUT = 0.32; // au-delà, un pixel est "coloré" et n'informe pas l'illuminant
-  let rN = 0, gN = 0, bN = 0, wN = 0;          // pondéré neutre
-  let rAll = 0, gAll = 0, bAll = 0, nAll = 0;  // tous les mi-tons (repli)
-  const sampleStep = 4 * Math.max(1, Math.floor(N / 4 / 50000)); // ~50k samples max
-  for (let i = 0; i < N; i += sampleStep) {
-    const r = d[i], g = d[i + 1], b = d[i + 2];
-    const luma = r * 0.299 + g * 0.587 + b * 0.114;
-    if (luma < 25 || luma > 235) continue;
-    rAll += r; gAll += g; bAll += b; nAll++;
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    const sat = mx > 0 ? (mx - mn) / mx : 0;
-    const t = clamp((SAT_CUT - sat) / SAT_CUT, 0, 1);
-    const w = t * t; // 1 = gris parfait, 0 = saturé (porte chaude, peinture, reflets)
-    if (w > 0) { rN += r * w; gN += g * w; bN += b * w; wN += w; }
+  const sCurve = v => v < 0.5
+    ? 0.5 * Math.pow(v * 2, 1.17)
+    : 1 - 0.5 * Math.pow((1 - v) * 2, 0.87);
+
+  // Refroidissement FIXE : dé-jaunit uniformément (rouge ↓, bleu ↑) pour une
+  // luminosité plus blanche. Indépendant du contenu → deux photos de la même
+  // scène reçoivent exactement la même correction (rendu cohérent).
+  const rFactor = 1 + (0.90 - 1) * k;
+  const gFactor = 1 + (0.97 - 1) * k;
+  const bFactor = 1 + (1.11 - 1) * k;
+
+  const rLUT = new Uint8Array(256);
+  const gLUT = new Uint8Array(256);
+  const bLUT = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    const t = v / 255;
+    rLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * rFactor) * 255)));
+    gLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(t * gFactor) * 255)));
+    bLUT[v] = Math.min(255, Math.max(0, Math.round(sCurve(Math.min(1, t * bFactor)) * 255)));
   }
 
-  if (nAll < 100) {
-    console.log('[Enhance]', photoName, 'aborted — too few mid-tone pixels', { count: nAll });
-    return;
+  // Échantillonnage avant / après pour confirmer dans la console que la
+  // correction colorimétrique a bien été appliquée sur CETTE photo.
+  let rBefore = 0, gBefore = 0, bBefore = 0, rAfter = 0, gAfter = 0, bAfter = 0;
+  const sampleStep = Math.max(4, Math.floor(d.length / 4 / 4096) * 4);
+  let sampled = 0;
+  for (let i = 0; i < d.length; i += sampleStep) {
+    rBefore += d[i]; gBefore += d[i + 1]; bBefore += d[i + 2];
+    sampled++;
   }
 
-  // Assez de surfaces neutres → on ancre la balance des blancs dessus (stable
-  // d'une photo à l'autre) ; sinon repli sur un gray-world global classique.
-  const useNeutral = wN >= nAll * 0.05;
-  const rMean = useNeutral ? rN / wN : rAll / nAll;
-  const gMean = useNeutral ? gN / wN : gAll / nAll;
-  const bMean = useNeutral ? bN / wN : bAll / nAll;
-  const gray  = (rMean + gMean + bMean) / 3;
-
-  // ── 2. Gains de balance des blancs (gray-world pondéré neutre) ──────────
-  // Chaque canal est rééchelonné pour que sa moyenne (neutre) rejoigne la
-  // moyenne globale gris. On borne les gains pour éviter les corrections
-  // extrêmes (ex : photo dominée par une seule couleur de carrosserie).
-  let rGainFull = clamp(gray / Math.max(rMean, 1), 0.70, 1.40);
-  let gGainFull = clamp(gray / Math.max(gMean, 1), 0.70, 1.40);
-  let bGainFull = clamp(gray / Math.max(bMean, 1), 0.70, 1.40);
-
-  // Réduction du jaune CONTINUE, proportionnelle à la dominante chaude
-  // mesurée — pas de seuil binaire qui ferait basculer deux photos quasi
-  // identiques vers des rendus différents. Refroidissement marqué pour un
-  // rendu "pro" qui supprime franchement la dominante LED chaude.
-  const yellowness = clamp((gMean - bMean) / Math.max(gMean, 1), 0, 0.5);
-  bGainFull = clamp(bGainFull * (1 + 0.35 * yellowness), 0.70, 1.55);
-  rGainFull = clamp(rGainFull * (1 - 0.18 * yellowness), 0.60, 1.40);
-
-  // Mix avec l'identité selon l'intensité demandée (0..1).
-  const rGain = 1 + (rGainFull - 1) * k;
-  const gGain = 1 + (gGainFull - 1) * k;
-  const bGain = 1 + (bGainFull - 1) * k;
-
-  // Saturation et contraste accentués pour un rendu plus "pro" / vendeur.
-  const sat    = 1 + 0.35 * k;
-  const sCurve = 0.45 * k; // intensité de la courbe S (contraste mi-tons)
-
-  // ── 3. Application pixel-par-pixel ─────────────────────────────────────
-  for (let i = 0; i < N; i += 4) {
-    let r = d[i]     * rGain;
-    let g = d[i + 1] * gGain;
-    let b = d[i + 2] * bGain;
-
-    // Soft-clip : si un canal dépasse 255, on rééchelonne les trois pour
-    // préserver la teinte plutôt que de brûler la zone en pur blanc.
-    const maxC = Math.max(r, g, b);
-    if (maxC > 255) {
-      const scale = 255 / maxC;
-      r *= scale; g *= scale; b *= scale;
-    }
-
-    // Contraste en courbe S sur la luminance (assombrit les ombres, soutient
-    // les hautes lumières) — appliqué via un facteur d'échelle commun aux 3
-    // canaux, donc la teinte est préservée et l'image gagne en "punch".
-    let lum = r * 0.299 + g * 0.587 + b * 0.114;
-    if (sCurve > 0 && lum > 0) {
-      const x = lum / 255;
-      const sx = x * x * (3 - 2 * x); // smoothstep
-      const cf = (255 * (x + (sx - x) * sCurve)) / lum;
-      r *= cf; g *= cf; b *= cf;
-    }
-
-    // Saturation autour de la luminance (préserve les valeurs neutres).
-    lum = r * 0.299 + g * 0.587 + b * 0.114;
-    r = lum + (r - lum) * sat;
-    g = lum + (g - lum) * sat;
-    b = lum + (b - lum) * sat;
-
-    d[i]     = clamp(Math.round(r), 0, 255);
-    d[i + 1] = clamp(Math.round(g), 0, 255);
-    d[i + 2] = clamp(Math.round(b), 0, 255);
+  const SAT = 1 + (1.17 - 1) * k;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = rLUT[d[i]];
+    let g = gLUT[d[i + 1]];
+    let b = bLUT[d[i + 2]];
+    const lum = r * 0.299 + g * 0.587 + b * 0.114;
+    d[i]     = Math.max(0, Math.min(255, Math.round(lum + (r - lum) * SAT)));
+    d[i + 1] = Math.max(0, Math.min(255, Math.round(lum + (g - lum) * SAT)));
+    d[i + 2] = Math.max(0, Math.min(255, Math.round(lum + (b - lum) * SAT)));
   }
-
+  for (let i = 0; i < d.length; i += sampleStep) {
+    rAfter += d[i]; gAfter += d[i + 1]; bAfter += d[i + 2];
+  }
   ctx.putImageData(id, 0, 0);
 
-  console.log('[Enhance]', photoName, {
-    intensity,
-    k: +k.toFixed(2),
-    midToneSamples: count,
-    midToneMean: { r: +rMean.toFixed(1), g: +gMean.toFixed(1), b: +bMean.toFixed(1) },
-    gains: { r: +rGain.toFixed(3), g: +gGain.toFixed(3), b: +bGain.toFixed(3) },
-    saturation: +sat.toFixed(2),
-  });
+  if (sampled > 0) {
+    const mean = (a, b, c) => +((a + b + c) / (3 * sampled)).toFixed(1);
+    console.log('[Enhance]', photoName, {
+      intensity,
+      k: +k.toFixed(2),
+      meanBefore: mean(rBefore, gBefore, bBefore),
+      meanAfter:  mean(rAfter,  gAfter,  bAfter),
+      deltaR:     +((rAfter - rBefore) / sampled).toFixed(1),
+      deltaG:     +((gAfter - gBefore) / sampled).toFixed(1),
+      deltaB:     +((bAfter - bBefore) / sampled).toFixed(1),
+    });
+  }
 }
 
 // ── Lustrage des optiques — retouche IA locale au masque ─────────────────────
@@ -4651,7 +4599,7 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
   return c.toDataURL('image/png');
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 3) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, headlightPolish = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
   const photoURL = URL.createObjectURL(photoFile);
@@ -5075,7 +5023,7 @@ export default function AutoCache() {
   const [bodyPolish, setBodyPolish] = useState(false);
   const [floorClean, setFloorClean] = useState(false);
   const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
-  const [enhanceProIntensity, setEnhanceProIntensity] = useState(3); // 0–5 : force de l'amélioration (3 par défaut, modifiable)
+  const [enhanceProIntensity, setEnhanceProIntensity] = useState(2); // 0–5 : force du dé-jaunissement (2 par défaut, modifiable)
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
