@@ -534,7 +534,7 @@ function applyFloorBlur(ctx, canvasEl, W, H) {
 //   2. Courbe S (ombres plus profondes, hautes lumières préservées)
 //   3. Boost de saturation (bleus plus vifs, couleurs carrosserie plus engageantes)
 function autoEnhance(ctx, W, H, intensity = 5, photoName = '') {
-  const k = Math.max(0, Math.min(5, Number(intensity))) / 5; // 0 = aucun effet, 1 = pleine intensité
+  const k = Math.max(0, Math.min(5, Number(intensity))) / 5 * 1.2; // 0 = aucun effet, 1 = pleine intensité (×1.2 = +20 % de boost global)
   if (k === 0) {
     console.log('[Enhance]', photoName, 'skipped (intensity=0)');
     return;
