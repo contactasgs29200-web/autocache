@@ -141,14 +141,11 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, w, h);
     } else if (bgMode === 'source' && origImageElRef.current) {
-      // Affiche la photo originale derrière le cutout transparent — pratique
-      // pour voir EXACTEMENT ce que "Récupérer" va peindre par-dessus.
-      // On la convertit en noir & blanc assombri pour qu'elle reste un calque
-      // de référence : le cutout en couleurs (au-dessus) reste clairement
-      // l'image principale, la source ne crée pas d'effet "double véhicule".
-      ctx.filter = 'grayscale(100%) brightness(0.42) contrast(1.05)';
+      // Affiche la photo originale derrière le cutout — en VRAIES COULEURS
+      // pour que l'utilisateur voie clairement la source dans laquelle
+      // "Récupérer" va piocher. (En mode recover, l'opacité du cutout est
+      // réduite côté CSS pour que l'original reste l'image dominante.)
       ctx.drawImage(origImageElRef.current, 0, 0, w, h);
-      ctx.filter = 'none';
     } else {
       // Checker pattern (default)
       const sz = 16;
@@ -451,7 +448,16 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
             onTouchStart={handlePointerDown}
             onTouchMove={handlePointerMove}
             onTouchEnd={handlePointerUp}
-            style={{ position: 'relative', zIndex: 1, touchAction: 'none' }}
+            style={{
+              position: 'relative',
+              zIndex: 1,
+              touchAction: 'none',
+              // En mode "Récupérer" sur fond Source, on fait dominer la photo
+              // originale en passant le cutout en semi-transparence : il reste
+              // visible comme repère (zones déjà retenues) sans masquer la
+              // source dans laquelle on s'apprête à peindre.
+              opacity: mode === 'recover' && bgMode === 'source' ? 0.4 : 1,
+            }}
           />
         </div>
       </div>
