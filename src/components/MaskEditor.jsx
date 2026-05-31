@@ -18,8 +18,8 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   const [brushSize, setBrushSize] = useState(10);
   const [glassOpacity, setGlassOpacity] = useState(110); // 0..255, alpha appliqué en mode "Vitrages"
   const [bgMode, setBgMode] = useState('checker'); // 'checker' | 'white' | 'black' | 'source'
-  const [cursorPos, setCursorPos] = useState(null); // position du curseur de pinceau (coords image)
   const lastPosRef = useRef(null); // dernière position peinte du tracé courant (pour interpoler le trait)
+  const strokeOverlayRef = useRef(null); // canvas de teinte pour visualiser la "sélection" en mode Récupérer
   const [isDrawing, setIsDrawing] = useState(false);
 
   // Zoom & pan
@@ -77,6 +77,16 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       origAlphaRef.current = new Uint8Array(w * h);
       for (let i = 0; i < w * h; i++) {
         origAlphaRef.current[i] = initial.data[i * 4 + 3];
+      }
+
+      // Size the stroke overlay (recover-mode tint) to match the cutout.
+      const so = strokeOverlayRef.current;
+      if (so) {
+        so.width = w;
+        so.height = h;
+        so.style.width = Math.round(w * scale) + 'px';
+        so.style.height = Math.round(h * scale) + 'px';
+        so.getContext('2d').clearRect(0, 0, w, h);
       }
     };
     img.src = cutoutDataURL;
@@ -280,6 +290,27 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       }
     }
     ctx.putImageData(imgData, xMin, yMin);
+
+    // Feedback visuel en mode Récupérer : teinte cyan translucide sur la zone
+    // peinte, indépendante du fond. C'est ce qui matérialise la "sélection"
+    // pour l'utilisateur — sans elle, peindre sur des pixels identiques à ceux
+    // sous-jacents (source visible derrière) ne produit aucun changement
+    // perceptible et donne l'impression que rien ne se passe.
+    if (mode === 'recover') {
+      const so = strokeOverlayRef.current;
+      if (so) {
+        const sctx = so.getContext('2d');
+        sctx.strokeStyle = 'rgba(0, 200, 255, 0.55)';
+        sctx.lineCap = 'round';
+        sctx.lineJoin = 'round';
+        sctx.lineWidth = brushSize;
+        sctx.beginPath();
+        sctx.moveTo(ax, ay);
+        sctx.lineTo(bx, by);
+        sctx.stroke();
+      }
+    }
+
     lastPosRef.current = { x, y };
   }, [brushSize, mode, glassOpacity]);
 
@@ -295,7 +326,6 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     setIsDrawing(true);
     lastPosRef.current = null; // nouveau tracé : premier point isolé
     const pos = getCanvasPos(e);
-    setCursorPos(pos);
     paint(pos.x, pos.y);
   }, [getCanvasPos, paint, pan]);
 
@@ -307,10 +337,9 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       setPan({ x: panStartRef.current.panX + dx, y: panStartRef.current.panY + dy });
       return;
     }
-    const pos = getCanvasPos(e);
-    setCursorPos(pos); // toujours mettre à jour, même hors tracé (preview du pinceau)
     if (!isDrawing) return;
     e.preventDefault();
+    const pos = getCanvasPos(e);
     paint(pos.x, pos.y);
   }, [isDrawing, getCanvasPos, paint]);
 
@@ -327,9 +356,19 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     pushHistory();
   }, [isDrawing, pushHistory]);
 
-  const handlePointerLeave = useCallback(() => {
-    setCursorPos(null);
+  // Vide le calque de teinte (utilisé sur changement de mode et sur Apply/Cancel).
+  const clearStrokeOverlay = useCallback(() => {
+    const so = strokeOverlayRef.current;
+    if (!so) return;
+    const sctx = so.getContext('2d');
+    sctx.clearRect(0, 0, so.width, so.height);
   }, []);
+
+  // Quand on quitte le mode Récupérer, on efface la teinte : elle n'est
+  // pertinente que pendant la sélection en cours.
+  useEffect(() => {
+    if (mode !== 'recover') clearStrokeOverlay();
+  }, [mode, clearStrokeOverlay]);
 
   // Zoom with mouse wheel
   const handleWheel = useCallback((e) => {
@@ -348,8 +387,9 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   const handleApply = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !onApply) return;
+    clearStrokeOverlay();
     onApply(canvas.toDataURL('image/png'));
-  }, [onApply]);
+  }, [onApply, clearStrokeOverlay]);
 
   // Reset zoom
   const resetZoom = useCallback(() => {
@@ -481,31 +521,17 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
             onMouseDown={handlePointerDown}
             onMouseMove={handlePointerMove}
             onMouseUp={handlePointerUp}
-            onMouseLeave={(e) => { handlePointerUp(e); handlePointerLeave(); }}
+            onMouseLeave={handlePointerUp}
             onTouchStart={handlePointerDown}
             onTouchMove={handlePointerMove}
             onTouchEnd={handlePointerUp}
-            style={{ position: 'relative', zIndex: 1, touchAction: 'none', cursor: 'none' }}
+            style={{ position: 'relative', zIndex: 1, touchAction: 'none' }}
           />
-          {/* Curseur de pinceau : cercle qui suit la souris et matérialise la
-              taille exacte de la brosse. À l'intérieur du conteneur zoomable
-              → suit zoom et pan naturellement. */}
-          {cursorPos && (
-            <div
-              style={{
-                position: 'absolute',
-                left: cursorPos.x * dimRef.current.scale - (brushSize * dimRef.current.scale) / 2,
-                top: cursorPos.y * dimRef.current.scale - (brushSize * dimRef.current.scale) / 2,
-                width: brushSize * dimRef.current.scale,
-                height: brushSize * dimRef.current.scale,
-                borderRadius: '50%',
-                border: '2px solid rgba(255, 138, 0, 0.95)',
-                boxShadow: '0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.35)',
-                pointerEvents: 'none',
-                zIndex: 2,
-              }}
-            />
-          )}
+          {/* Calque de teinte : matérialise visuellement la zone "sélectionnée"
+              en mode Récupérer, indépendamment du fond. pointerEvents:none →
+              clicks et déplacements passent au canvas en-dessous. */}
+          <canvas ref={strokeOverlayRef}
+            style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 2 }} />
         </div>
       </div>
 
@@ -517,7 +543,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       {/* Bottom actions */}
       <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
         <button
-          onClick={(e) => { e.stopPropagation(); onCancel(); }}
+          onClick={(e) => { e.stopPropagation(); clearStrokeOverlay(); onCancel(); }}
           onMouseDown={e => e.stopPropagation()}
           style={{
             padding: '10px 24px', background: '#4b5563', color: '#fff',
