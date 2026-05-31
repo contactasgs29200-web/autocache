@@ -18,6 +18,8 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   const [brushSize, setBrushSize] = useState(10);
   const [glassOpacity, setGlassOpacity] = useState(110); // 0..255, alpha appliqué en mode "Vitrages"
   const [bgMode, setBgMode] = useState('checker'); // 'checker' | 'white' | 'black' | 'source'
+  const [cursorPos, setCursorPos] = useState(null); // position du curseur de pinceau (coords image)
+  const lastPosRef = useRef(null); // dernière position peinte du tracé courant (pour interpoler le trait)
   const [isDrawing, setIsDrawing] = useState(false);
 
   // Zoom & pan
@@ -212,49 +214,73 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     const canvas = canvasRef.current;
     if (!canvas) return;
     const { w, h } = dimRef.current;
+    if (!w) return;
     const ctx = canvas.getContext('2d');
     const r = brushSize / 2;
-    const x0 = Math.max(0, Math.floor(x - r));
-    const y0 = Math.max(0, Math.floor(y - r));
-    const x1 = Math.min(w - 1, Math.ceil(x + r));
-    const y1 = Math.min(h - 1, Math.ceil(y + r));
-    const imgData = ctx.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+
+    // On peint un DISQUE BALAYÉ entre la dernière position et la position
+    // courante : pointermove arrivant à ~60 Hz, sans interpolation un trait
+    // rapide laisse des points isolés. Avec la distance-au-segment, le trait
+    // reste continu quel que soit le rythme des événements.
+    const prev = lastPosRef.current;
+    const ax = prev ? prev.x : x, ay = prev ? prev.y : y;
+    const bx = x,                  by = y;
+
+    const xMin = Math.max(0, Math.floor(Math.min(ax, bx) - r));
+    const yMin = Math.max(0, Math.floor(Math.min(ay, by) - r));
+    const xMax = Math.min(w - 1, Math.ceil(Math.max(ax, bx) + r));
+    const yMax = Math.min(h - 1, Math.ceil(Math.max(ay, by) + r));
+    if (xMax < xMin || yMax < yMin) { lastPosRef.current = { x, y }; return; }
+
+    const width = xMax - xMin + 1;
+    const imgData = ctx.getImageData(xMin, yMin, width, yMax - yMin + 1);
     const data = imgData.data;
     const rSq = r * r;
 
+    const sdx = bx - ax, sdy = by - ay;
+    const segLenSq = sdx * sdx + sdy * sdy;
+
     const orig = origPixelsRef.current;
-    for (let py = y0; py <= y1; py++) {
-      for (let px = x0; px <= x1; px++) {
-        const dx = px - x, dy = py - y;
-        if (dx * dx + dy * dy > rSq) continue;
-        const li = ((py - y0) * (x1 - x0 + 1) + (px - x0)) * 4;
+    for (let py = yMin; py <= yMax; py++) {
+      for (let px = xMin; px <= xMax; px++) {
+        // Projeté du pixel sur le segment, t borné à [0,1] (point pour t=0
+        // ou t=1, segment au milieu) → couvre les deux disques extrêmes ET
+        // la bande rectangulaire entre eux.
+        let t = segLenSq > 0 ? ((px - ax) * sdx + (py - ay) * sdy) / segLenSq : 0;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        const cx = ax + t * sdx, cy = ay + t * sdy;
+        const ddx = px - cx, ddy = py - cy;
+        if (ddx * ddx + ddy * ddy > rSq) continue;
+
+        const li = ((py - yMin) * width + (px - xMin)) * 4;
         if (mode === 'erase') {
           data[li + 3] = 0;
         } else if (mode === 'recover' && orig) {
-          // Paint pixels back from the original full-image (rescues bits the
-          // AI cutout dropped — antennas, optics, etc.) — full alpha.
+          // Récupère le pixel RGB depuis la photo source (sauve antennes,
+          // optiques, etc. perdues par la segmentation IA) — alpha plein.
           const oi = (py * w + px) * 4;
           data[li + 0] = orig[oi + 0];
           data[li + 1] = orig[oi + 1];
           data[li + 2] = orig[oi + 2];
           data[li + 3] = 255;
         } else if (mode === 'glass' && orig) {
-          // Vitrages — on garde le RGB d'origine (reflets, teinte) mais on
-          // baisse l'alpha pour que le décor showroom transparaisse à travers.
+          // Vitrages — RGB d'origine (reflets, teinte) avec alpha réduit
+          // pour que le décor showroom transparaisse à travers.
           const oi = (py * w + px) * 4;
           data[li + 0] = orig[oi + 0];
           data[li + 1] = orig[oi + 1];
           data[li + 2] = orig[oi + 2];
           data[li + 3] = glassOpacity;
         } else {
-          // Restore from the cutout's initial alpha (undoes erasures done in
-          // this session, won't bring back content the AI never kept).
+          // Restaure depuis l'alpha initial du cutout (annule les coups de
+          // gomme de la session — ne ramène pas ce que l'IA n'a jamais gardé).
           const oi = py * w + px;
           data[li + 3] = origAlphaRef.current ? origAlphaRef.current[oi] : 255;
         }
       }
     }
-    ctx.putImageData(imgData, x0, y0);
+    ctx.putImageData(imgData, xMin, yMin);
+    lastPosRef.current = { x, y };
   }, [brushSize, mode, glassOpacity]);
 
   const handlePointerDown = useCallback((e) => {
@@ -267,7 +293,9 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       return;
     }
     setIsDrawing(true);
+    lastPosRef.current = null; // nouveau tracé : premier point isolé
     const pos = getCanvasPos(e);
+    setCursorPos(pos);
     paint(pos.x, pos.y);
   }, [getCanvasPos, paint, pan]);
 
@@ -279,9 +307,10 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
       setPan({ x: panStartRef.current.panX + dx, y: panStartRef.current.panY + dy });
       return;
     }
+    const pos = getCanvasPos(e);
+    setCursorPos(pos); // toujours mettre à jour, même hors tracé (preview du pinceau)
     if (!isDrawing) return;
     e.preventDefault();
-    const pos = getCanvasPos(e);
     paint(pos.x, pos.y);
   }, [isDrawing, getCanvasPos, paint]);
 
@@ -294,8 +323,13 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
     }
     if (!isDrawing) return;
     setIsDrawing(false);
+    lastPosRef.current = null; // fin du tracé
     pushHistory();
   }, [isDrawing, pushHistory]);
+
+  const handlePointerLeave = useCallback(() => {
+    setCursorPos(null);
+  }, []);
 
   // Zoom with mouse wheel
   const handleWheel = useCallback((e) => {
@@ -447,12 +481,31 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
             onMouseDown={handlePointerDown}
             onMouseMove={handlePointerMove}
             onMouseUp={handlePointerUp}
-            onMouseLeave={handlePointerUp}
+            onMouseLeave={(e) => { handlePointerUp(e); handlePointerLeave(); }}
             onTouchStart={handlePointerDown}
             onTouchMove={handlePointerMove}
             onTouchEnd={handlePointerUp}
-            style={{ position: 'relative', zIndex: 1, touchAction: 'none' }}
+            style={{ position: 'relative', zIndex: 1, touchAction: 'none', cursor: 'none' }}
           />
+          {/* Curseur de pinceau : cercle qui suit la souris et matérialise la
+              taille exacte de la brosse. À l'intérieur du conteneur zoomable
+              → suit zoom et pan naturellement. */}
+          {cursorPos && (
+            <div
+              style={{
+                position: 'absolute',
+                left: cursorPos.x * dimRef.current.scale - (brushSize * dimRef.current.scale) / 2,
+                top: cursorPos.y * dimRef.current.scale - (brushSize * dimRef.current.scale) / 2,
+                width: brushSize * dimRef.current.scale,
+                height: brushSize * dimRef.current.scale,
+                borderRadius: '50%',
+                border: '2px solid rgba(255, 138, 0, 0.95)',
+                boxShadow: '0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.35)',
+                pointerEvents: 'none',
+                zIndex: 2,
+              }}
+            />
+          )}
         </div>
       </div>
 
