@@ -7999,7 +7999,7 @@ export default function AutoCache() {
               {/* Style commun flèche */}
               {[
                 { dir: "up",    dx: 0,          dy: -NUDGE_STEP, label: "▲", style: { top: "8%",  left: "50%", transform: "translateX(-50%)" } },
-                { dir: "down",  dx: 0,          dy:  NUDGE_STEP, label: "▼", style: { bottom: "8%", left: "50%", transform: "translateX(-50%)" } },
+                { dir: "down",  dx: 0,          dy:  NUDGE_STEP, label: "▼", style: { bottom: "18%", left: "50%", transform: "translateX(-50%)" } },
                 { dir: "left",  dx: -NUDGE_STEP, dy: 0,          label: "◀", style: { left: "2%",  top: "50%",  transform: "translateY(-50%)" } },
                 { dir: "right", dx:  NUDGE_STEP, dy: 0,          label: "▶", style: { right: "2%", top: "50%",  transform: "translateY(-50%)" } },
               ].map(({ dir, dx, dy, label, style }) => (
