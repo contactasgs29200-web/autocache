@@ -17,7 +17,6 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
   const [mode, setMode] = useState('erase'); // 'erase' | 'recover' | 'restore' | 'glass'
   const [brushSize, setBrushSize] = useState(10);
   const [glassOpacity, setGlassOpacity] = useState(110); // 0..255, alpha appliqué en mode "Vitrages"
-  const [recoverCutoutOpacity, setRecoverCutoutOpacity] = useState(0.4); // 0..1, opacité du cutout en mode Récupérer (0 = on ne voit QUE la source)
   const [bgMode, setBgMode] = useState('checker'); // 'checker' | 'white' | 'black' | 'source'
   const [isDrawing, setIsDrawing] = useState(false);
 
@@ -400,17 +399,6 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
             <span style={{ minWidth: 34, textAlign: 'right' }}>{Math.round(glassOpacity / 255 * 100)}%</span>
           </label>
         )}
-        {mode === 'recover' && (
-          <label style={{ color: '#dde0e5', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}
-                 title="Opacité du cutout pendant la récupération : 0 % = on ne voit que la photo d'origine.">
-            Cutout
-            <input type="range" min={0} max={100} value={Math.round(recoverCutoutOpacity * 100)}
-              onChange={e => setRecoverCutoutOpacity(Number(e.target.value) / 100)}
-              onMouseDown={e => e.stopPropagation()}
-              style={{ width: 80 }} />
-            <span style={{ minWidth: 34, textAlign: 'right' }}>{Math.round(recoverCutoutOpacity * 100)}%</span>
-          </label>
-        )}
         <span style={{ color: '#b3bac4', fontSize: 13, margin: '0 4px' }}>|</span>
         <button style={{ ...btnStyle(canUndo), fontSize: 18, lineHeight: 1, padding: '6px 12px' }} onClick={undo} disabled={!canUndo} title="Annuler" aria-label="Annuler">↶</button>
         <button style={{ ...btnStyle(canRedo), fontSize: 18, lineHeight: 1, padding: '6px 12px' }} onClick={redo} disabled={!canRedo} title="Refaire" aria-label="Refaire">↷</button>
@@ -460,16 +448,7 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
             onTouchStart={handlePointerDown}
             onTouchMove={handlePointerMove}
             onTouchEnd={handlePointerUp}
-            style={{
-              position: 'relative',
-              zIndex: 1,
-              touchAction: 'none',
-              // En mode Récupérer + fond Source, l'opacité du cutout est pilotée
-              // par le slider "Cutout" (0 = on ne voit que la photo d'origine,
-              // 100 = cutout plein). Pratique pour peindre directement sur la
-              // source sans être gêné par la sélection actuelle.
-              opacity: mode === 'recover' && bgMode === 'source' ? recoverCutoutOpacity : 1,
-            }}
+            style={{ position: 'relative', zIndex: 1, touchAction: 'none' }}
           />
         </div>
       </div>
