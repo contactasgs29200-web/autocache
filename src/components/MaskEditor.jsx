@@ -437,12 +437,11 @@ export default function MaskEditor({ cutoutDataURL, originalDataURL, onApply, on
         </button>
         <button style={btnStyle(mode === 'recover')} onClick={() => {
           setMode('recover');
-          // NE PAS basculer le fond sur "Source" automatiquement : le cutout
-          // étant désormais aligné au pixel près avec la photo d'origine, peindre
-          // par-dessus revient à réécrire la même couleur → les traits sont
-          // visuellement invisibles. Le fond par défaut (damier) fait apparaître
-          // clairement les zones manquantes et chaque trait de récupération.
-          if (bgMode === 'source') setBgMode('checker');
+          // Bascule sur "Source" : la photo d'origine est la référence
+          // naturelle pour décider quelles parties ramener. Le feedback de
+          // sélection (teinte cyan, calque dédié) reste parfaitement visible
+          // ici puisqu'il est indépendant du fond.
+          if (origReady) setBgMode('source');
         }}>
           Récupérer
         </button>
