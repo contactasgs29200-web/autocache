@@ -4589,13 +4589,25 @@ async function cropToROI(dataUrl, roi) {
 }
 
 async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
-  if (roi.x1 === 0 && roi.y1 === 0 && roi.x2 === 1 && roi.y2 === 1) return croppedCutoutUrl;
   const img = await loadImg(croppedCutoutUrl);
+  const fullROI = roi.x1 === 0 && roi.y1 === 0 && roi.x2 === 1 && roi.y2 === 1;
+  // Déjà à la taille pleine et ROI pleine → rien à faire (fast path).
+  if (fullROI && img.naturalWidth === origW && img.naturalHeight === origH) {
+    return croppedCutoutUrl;
+  }
   const c = document.createElement('canvas');
   c.width = origW; c.height = origH;
   const ctx = c.getContext('2d');
+  // removeBackground (@imgly) downscale l'image à 2000 px max via shrinkDataUrl.
+  // Sans étirement, le cutout occuperait une zone plus petite que la ROI d'origine
+  // → décalage / "double véhicule" visible dans le MaskEditor avec la photo source.
+  // On étire ici le cutout (potentiellement réduit) pour qu'il remplisse exactement
+  // la région ROI dans le canvas origW×origH : véhicule aligné au pixel près avec
+  // baseDataURL, et output toujours aux dimensions attendues en aval.
   const cx1 = Math.round(roi.x1 * origW), cy1 = Math.round(roi.y1 * origH);
-  ctx.drawImage(img, cx1, cy1);
+  const cx2 = Math.round(roi.x2 * origW), cy2 = Math.round(roi.y2 * origH);
+  const cw = cx2 - cx1, ch = cy2 - cy1;
+  ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, cx1, cy1, cw, ch);
   return c.toDataURL('image/png');
 }
 
