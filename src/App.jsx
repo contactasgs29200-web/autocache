@@ -6283,6 +6283,10 @@ export default function AutoCache() {
               <div style={{ fontSize: 12, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
                 Les {results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""} seront envoyées en pièces jointes à l'adresse ci-dessous{outputFormat !== "original" ? ` (format ${OUTPUT_FORMATS[outputFormat].label})` : ""}.
               </div>
+              <div style={{ fontSize: 11, color: "#8a8a8a", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6, background: "#0a0a0a", border: "1px solid #1c1c1c", borderRadius: 4, padding: "10px 12px" }}>
+                ⓘ Les photos peuvent être légèrement compressées pour l'envoi par mail.<br />
+                Si vous ne recevez rien, pensez à vérifier le dossier <span style={{ color: "#f26522" }}>courrier indésirable (spam)</span>.
+              </div>
               <div>
                 <label style={{ fontSize: 10, color: "#888", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Adresse email</label>
                 <input
