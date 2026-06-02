@@ -3606,18 +3606,25 @@ export default function AutoCache() {
     setEmailStatus({ type: "progress", msg: "Préparation des photos…" });
     try {
       const ratio = OUTPUT_FORMATS[outputFormat]?.ratio ?? null;
-      // Construit les pièces jointes (base64 pur) au format choisi.
+      // Construit les pièces jointes au format choisi, allégées pour l'email
+      // (redimensionnées + légèrement compressées) : indispensable pour
+      // regrouper plusieurs photos par mail et éviter d'envoyer 1 photo/mail.
+      const EMAIL_MAX_PX = 2000;   // grand côté max des pièces jointes
+      const EMAIL_QUALITY = 0.85;  // compression JPEG légère (qualité conservée)
       const items = [];
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
-        const dataURL = await reframeDataURL(r.showroomDataURL || r.processed, ratio);
+        const framed = await reframeDataURL(r.showroomDataURL || r.processed, ratio);
+        const dataURL = await shrinkDataUrl(framed, EMAIL_MAX_PX, EMAIL_QUALITY);
         const content = dataURL.includes(",") ? dataURL.split(",").pop() : dataURL;
         const base = (r.name || `photo_${i + 1}`).replace(/\.[^.]+$/, "");
         const prefix = r.showroomDataURL ? "showroom_" : "autocache_";
         items.push({ name: `${prefix}${base}.jpg`, content });
       }
-      // Découpe en lots : ~3,5 Mo de base64 par requête (sous la limite Vercel).
-      const MAX_BATCH_BYTES = 3_500_000;
+      // Découpe en lots : on remplit chaque mail au maximum sous la limite de
+      // requête Vercel (~4,5 Mo). Avec les photos allégées, cela regroupe
+      // plusieurs photos par mail (en pratique bien plus que 3).
+      const MAX_BATCH_BYTES = 4_000_000;
       const batches = [];
       let cur = [], curSize = 0;
       for (const it of items) {
