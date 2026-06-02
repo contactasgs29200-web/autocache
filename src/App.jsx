@@ -4617,12 +4617,32 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
   URL.revokeObjectURL(photoURL);
+
+  // ── Résolution de travail minimale (qualité du cache plaque) ──
+  // Le cache plaque est dessiné en perspective DANS la région de la
+  // plaque du canvas de sortie. En pixels, cette région a donc la taille
+  // que lui impose la résolution de la photo : sur une photo de basse
+  // qualité, la plaque ne fait que quelques dizaines de pixels et le logo
+  // (pourtant haute définition) s'y retrouve écrasé → cache plaque flou.
+  // Pour que la qualité du cache plaque ne dépende PLUS de la qualité de
+  // l'image saisie, on garantit ici une résolution de travail minimale :
+  // on agrandit le canvas (jamais on ne le réduit) afin que la plaque
+  // dispose d'assez de pixels pour reproduire le logo à sa qualité
+  // d'origine. Les photos déjà nettes (≥ MIN_WORK_PX) ne sont pas touchées
+  // (renderScale = 1 → rendu identique à l'existant).
+  const natW = photoImg.naturalWidth  || photoImg.width;
+  const natH = photoImg.naturalHeight || photoImg.height;
+  const MIN_WORK_PX = 2000;
+  const renderScale = Math.max(1, MIN_WORK_PX / Math.max(natW, natH));
   const c = document.createElement("canvas");
-  c.width = photoImg.naturalWidth;
-  c.height = photoImg.naturalHeight;
+  c.width  = Math.round(natW * renderScale);
+  c.height = Math.round(natH * renderScale);
   const ctx = c.getContext("2d");
+  // Lissage haute qualité pour l'agrandissement éventuel de la photo.
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.filter = `brightness(${adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation})`;
-  ctx.drawImage(photoImg, 0, 0);
+  ctx.drawImage(photoImg, 0, 0, c.width, c.height);
   ctx.filter = "none";
   // Amélioration couleurs (canvas) — intensité réglable pour enhancePro
   // Try/catch défensif : on ne laisse JAMAIS une exception sur une photo
