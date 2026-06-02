@@ -1,8 +1,9 @@
 const PROMO_CODES = {
   "AURELE30":  { photos: 30, reset: true },
   "AURELE5":   { photos: 5,  reset: false },
-  "AURELEPRO":       { plan: "pro" },
-  "AURELEESSENTIEL": { plan: "essential" },
+  "AURELEPREMIUM":   { plan: "premium" },
+  "AURELEPRO":       { plan: "premium" }, // ancien code → abonnement unique
+  "AURELEESSENTIEL": { plan: "premium" }, // ancien code → abonnement unique
   "AURELEESSAI":     { plan: "trial" },
 };
 

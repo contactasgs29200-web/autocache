@@ -2968,6 +2968,23 @@ function SettingsIcon({ name, size = 16 }) {
   }
 }
 
+// ── Abonnement unique AutoCache, décliné en 3 formules de facturation ──
+const SUBSCRIPTION_FORMULES = [
+  { key: "weekly",  name: "Hebdomadaire", tag: "Découverte", price: "5,90 €",   period: "/semaine", note: "Renouvelé tous les 7 jours", badge: null },
+  { key: "monthly", name: "Mensuel",      tag: "Conseillé",  price: "14,90 €",  period: "/mois",     note: "Renouvelé chaque mois, le même jour", badge: "Conseillé" },
+  { key: "annual",  name: "Annuel",       tag: "Économies",  price: "129,90 €", period: "/an",       note: "au lieu de 178,80 € en mensuel", badge: "Économies" },
+];
+const FORMULE_LABELS = { weekly: "Hebdomadaire", monthly: "Mensuelle", annual: "Annuelle" };
+const SUBSCRIPTION_FEATURES = [
+  "400 photos / mois",
+  "Cache plaque personnalisé",
+  "Logo importé ou généré",
+  "Ajustements couleurs & amélioration auto",
+  "Lustrage carrosserie",
+  "Showroom Virtuel (fonds IA)",
+  "Enseigne murale",
+];
+
 export default function AutoCache() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -2994,7 +3011,7 @@ export default function AutoCache() {
   const [subInfoLoading, setSubInfoLoading] = useState(false);
   const creditPopupRef = useRef(null);
   const [hoveredPlan, setHoveredPlan] = useState(null);
-  const [checkoutLoading, setCheckoutLoading] = useState(null); // "essential" | "pro" | null
+  const [checkoutLoading, setCheckoutLoading] = useState(null); // "weekly" | "monthly" | "annual" | null
   const [portalLoading, setPortalLoading] = useState(null); // null | "invoices" | "cancel" | "upgrade"
   const [portalError, setPortalError] = useState("");
   const [promoCode, setPromoCode] = useState("");
@@ -3695,11 +3712,13 @@ export default function AutoCache() {
     }
   };
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
-  const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "essential" | "pro"
-  const PLAN_LIMIT = userPlan === "pro" ? 250 : userPlan === "essential" ? 200 : TRIAL_LIMIT;
-  const PLAN_LABEL = userPlan === "pro" || userPlan === "essential" ? "CRÉDIT" : "ESSAI";
-  const canUseShowroom  = userPlan === "pro" || userPlan === "trial";
-  const canUseBodyPolish  = userPlan === "pro" || userPlan === "essential";
+  const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "premium" (ancien : "essential" | "pro")
+  const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
+  const PLAN_LIMIT = isPaid ? 400 : TRIAL_LIMIT;
+  const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
+  // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
+  const canUseShowroom  = isPaid || userPlan === "trial";
+  const canUseBodyPolish  = isPaid;
   const canStart = logo && photos.length > 0 && !processing;
 
   const fetchSubInfo = useCallback(async () => {
@@ -3717,7 +3736,7 @@ export default function AutoCache() {
         const startDate = new Date(d.periodStart * 1000);
         const now = new Date();
         const daysLeft = Math.max(0, Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)));
-        setSubInfo({ periodStart: startDate, periodEnd: endDate, plan: d.plan, daysLeft });
+        setSubInfo({ periodStart: startDate, periodEnd: endDate, plan: d.plan, formule: d.formule, daysLeft });
       } else {
         setSubInfo({ hasSubscription: false });
       }
@@ -3727,6 +3746,98 @@ export default function AutoCache() {
     }
     setSubInfoLoading(false);
   }, [user?.id, subInfoLoading]);
+
+  // ── Renouvellement mensuel des crédits (400 photos / mois) ──
+  // Indépendant de la cadence de facturation : que l'abonnement soit hebdo,
+  // mensuel ou annuel, le quota se réinitialise chaque mois au même jour.
+  useEffect(() => {
+    if (!user?.id) return;
+    const meta = user.user_metadata || {};
+    if ((meta.plan ?? "trial") === "trial") return; // l'essai n'a pas de renouvellement
+    const now = new Date();
+    const anchorStr = meta.photos_period_start;
+    if (!anchorStr) {
+      // Initialise la fenêtre mensuelle (abonnement créé avant ce mécanisme)
+      const data = { photos_period_start: now.toISOString() };
+      supabase.auth.updateUser({ data });
+      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...data } } : prev);
+      return;
+    }
+    const anchor = new Date(anchorStr);
+    let months = (now.getFullYear() - anchor.getFullYear()) * 12 + (now.getMonth() - anchor.getMonth());
+    if (now.getDate() < anchor.getDate()) months -= 1; // jour du mois pas encore atteint
+    if (months >= 1) {
+      const newAnchor = new Date(anchor);
+      newAnchor.setMonth(newAnchor.getMonth() + months);
+      const data = { photos_used: 0, photos_period_start: newAnchor.toISOString() };
+      supabase.auth.updateUser({ data });
+      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...data } } : prev);
+    }
+  }, [user?.id]);
+
+  // Lance le paiement Stripe pour une formule donnée (weekly | monthly | annual)
+  const startCheckout = async (formule) => {
+    setCheckoutLoading(formule);
+    try {
+      const res = await fetch("/api/create-checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ formule, userId: user.id, userEmail: user.email }),
+      });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+      else alert("Erreur lors de la création du paiement.");
+    } catch (e) {
+      alert("Erreur réseau, réessayez.");
+    } finally {
+      setCheckoutLoading(null);
+    }
+  };
+
+  // Grille des 3 formules + liste des fonctionnalités incluses (réutilisée dans plusieurs modales)
+  const renderFormulesGrid = () => (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 22 }}>
+        {SUBSCRIPTION_FORMULES.map(f => {
+          const hot = f.key === "monthly";
+          return (
+            <div key={f.key}
+              onMouseEnter={() => setHoveredPlan(f.key)}
+              onMouseLeave={() => setHoveredPlan(null)}
+              style={{ background: hot ? "rgba(242,101,34,0.06)" : "#0e0e0e", border: `1px solid ${hot ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "22px 18px", position: "relative", transform: hoveredPlan === f.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
+              {f.badge && (
+                <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{f.badge}</div>
+              )}
+              <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: hot ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 2 }}>{f.name}</div>
+              <div style={{ fontSize: 9, color: "#777", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>{f.tag}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 4 }}>
+                <span style={{ fontSize: 23, fontWeight: 700, color: hot ? "#f26522" : "#e0dbd4" }}>{f.price}</span>
+                <span style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>{f.period}</span>
+              </div>
+              <div style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5, marginBottom: 18, minHeight: 28 }}>{f.note}</div>
+              <button
+                disabled={checkoutLoading === f.key}
+                onClick={() => startCheckout(f.key)}
+                style={{ width: "100%", background: hot ? "#f26522" : "transparent", color: hot ? "#090909" : "#888", border: `1px solid ${hot ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+                {checkoutLoading === f.key ? "Redirection..." : "Choisir"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ background: "#0e0e0e", border: "1px solid #1f1f1f", borderRadius: 6, padding: "16px 20px", marginBottom: 22 }}>
+        <div style={{ fontSize: 10, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 12 }}>Inclus dans toutes les formules</div>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: "7px 18px" }}>
+          {SUBSCRIPTION_FEATURES.map((label, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12, color: "#27ae60", flexShrink: 0 }}>✓</span>
+              <span style={{ fontSize: 11, color: "#bbb", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
 
   // Close credit popup on click outside
   useEffect(() => {
@@ -3754,8 +3865,8 @@ export default function AutoCache() {
         await supabase.auth.updateUser({ data: { plan: data.plan } });
         setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, plan: data.plan } } : prev);
         setPromoStatus("success");
-        const planLabel = data.plan === "pro" ? "Pro" : data.plan === "essential" ? "Essentiel" : "Essai gratuit";
-        setPromoMsg(`Plan ${planLabel} activé.`);
+        const planLabel = data.plan === "trial" ? "Essai gratuit" : "Abonnement";
+        setPromoMsg(`${planLabel} activé.`);
         return;
       }
       const currentUsed = user?.user_metadata?.photos_used ?? 0;
@@ -4416,7 +4527,11 @@ export default function AutoCache() {
                       <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid #1c1c1c" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                           <div style={{ fontSize: 11, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>
-                            {userPlan === "pro" ? "Plan Pro" : userPlan === "essential" ? "Plan Essentiel" : "Essai gratuit"}
+                            {(() => {
+                              if (!isPaid) return "Essai gratuit";
+                              const fk = subInfo?.formule ?? user?.user_metadata?.formule;
+                              return `Abonnement${fk && FORMULE_LABELS[fk] ? " · " + FORMULE_LABELS[fk] : ""}`;
+                            })()}
                           </div>
                           <div onClick={() => setShowCreditPopup(false)} style={{ color: "#ddd", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "2px 4px" }}>✕</div>
                         </div>
@@ -4762,7 +4877,7 @@ export default function AutoCache() {
                     toggle: () => { if (!canUseBodyPolish) { setShowPlansModal(true); return; } setBodyPolish(p => !p); },
                     icon: "✦",
                     label: "Lustrage carrosserie",
-                    sub: canUseBodyPolish ? "Brillance, saturation & profondeur de couleur" : "Disponible dès l'abonnement Essentiel",
+                    sub: canUseBodyPolish ? "Brillance, saturation & profondeur de couleur" : "Disponible avec l'abonnement",
                     locked: !canUseBodyPolish,
                   },
                 ].map(({ active, toggle, icon, label, sub, locked, credit }) => (
@@ -6361,7 +6476,9 @@ export default function AutoCache() {
       {/* ── Modal Mes Informations ── */}
       {showProfileModal && (() => {
         const meta = user?.user_metadata ?? {};
-        const planLabel = { trial: "Essai gratuit", essential: "Essentiel", pro: "Pro" }[meta.plan ?? "trial"] ?? "Essai gratuit";
+        const planLabel = (meta.plan ?? "trial") === "trial"
+          ? "Essai gratuit"
+          : `Abonnement${meta.formule ? " · " + (FORMULE_LABELS[meta.formule] ?? "") : ""}`;
         const photosUsed = meta.photos_used ?? 0;
         const joined = user?.created_at ? new Date(user.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" }) : "—";
         const rows = [
@@ -6444,97 +6561,19 @@ export default function AutoCache() {
         <div onClick={() => setShowPlansModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: userPlan === "trial" ? 740 : 480, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: isPaid ? 480 : 880, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
 
-            {userPlan === "trial" ? (
-              /* ── Vue comparaison des plans (utilisateurs en essai) ── */
+            {!isPaid ? (
+              /* ── Vue choix de formule (utilisateurs en essai) ── */
               <>
-                <div style={{ textAlign: "center", marginBottom: 32 }}>
-                  <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Nos Abonnements</div>
+                <div style={{ textAlign: "center", marginBottom: 28 }}>
+                  <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Notre Abonnement</div>
                   <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
-                    Plan actuel : <span style={{ color: "#f26522" }}>Essai gratuit</span>
+                    Un seul abonnement, 3 formules au choix · Plan actuel : <span style={{ color: "#f26522" }}>Essai gratuit</span>
                   </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 28 }}>
-                  {[
-                    {
-                      key: "essential",
-                      name: "Essentiel",
-                      price: "14,90 €",
-                      badge: null,
-                      features: [
-                        { ok: true,  label: "Cache plaque personnalisé" },
-                        { ok: true,  label: "Logo importé ou généré" },
-                        { ok: true,  label: "Ajustements couleurs" },
-                        { ok: true,  label: "Amélioration automatique" },
-                        { ok: false, label: "Showroom Virtuel (fonds IA)" },
-                        { ok: false, label: "Enseigne murale" },
-                      ],
-                    },
-                    {
-                      key: "pro",
-                      name: "Pro",
-                      price: "24,90 €",
-                      badge: "Recommandé",
-                      features: [
-                        { ok: true, label: "Cache plaque personnalisé" },
-                        { ok: true, label: "Logo importé ou généré" },
-                        { ok: true, label: "Ajustements couleurs" },
-                        { ok: true, label: "Amélioration automatique" },
-                        { ok: true, label: "Showroom Virtuel (fonds IA)" },
-                        { ok: true, label: "Enseigne murale" },
-                      ],
-                    },
-                  ].map(plan => {
-                    const isPro = plan.key === "pro";
-                    return (
-                      <div key={plan.key}
-                        onMouseEnter={() => setHoveredPlan(plan.key)}
-                        onMouseLeave={() => setHoveredPlan(null)}
-                        style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 22px", position: "relative", transform: hoveredPlan === plan.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
-                        {plan.badge && (
-                          <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
-                        )}
-                        <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 4 }}>{plan.name}</div>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 2 }}>
-                          <span style={{ fontSize: 23, fontWeight: 700, color: isPro ? "#f26522" : "#ccc" }}>{plan.price}</span>
-                          <span style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>/mois</span>
-                        </div>
-                        <div style={{ marginBottom: 20, marginTop: 14 }}>
-                          {plan.features.map((f, i) => (
-                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-                              <span style={{ fontSize: 12, color: f.ok ? "#27ae60" : "#444", flexShrink: 0 }}>{f.ok ? "✓" : "✕"}</span>
-                              <span style={{ fontSize: 11, color: f.ok ? "#bbb" : "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{f.label}</span>
-                            </div>
-                          ))}
-                        </div>
-                        <button
-                          disabled={checkoutLoading === plan.key}
-                          onClick={async () => {
-                            setCheckoutLoading(plan.key);
-                            try {
-                              const res = await fetch("/api/create-checkout-session", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ plan: plan.key, userId: user.id, userEmail: user.email }),
-                              });
-                              const data = await res.json();
-                              if (data.url) window.location.href = data.url;
-                              else alert("Erreur lors de la création du paiement.");
-                            } catch (e) {
-                              alert("Erreur réseau, réessayez.");
-                            } finally {
-                              setCheckoutLoading(null);
-                            }
-                          }}
-                          style={{ width: "100%", background: isPro ? "#f26522" : "transparent", color: isPro ? "#090909" : "#777", border: `1px solid ${isPro ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
-                          {checkoutLoading === plan.key ? "Redirection..." : `Choisir ${plan.name}`}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
+                {renderFormulesGrid()}
 
                 <button onClick={() => setShowPlansModal(false)}
                   style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
@@ -6548,50 +6587,28 @@ export default function AutoCache() {
                 <div style={{ textAlign: "center", marginBottom: 32 }}>
                   <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Mon Abonnement</div>
                   <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
-                    Plan actif : <span style={{ color: "#f26522", fontWeight: 700 }}>
-                      {userPlan === "pro" ? "Pro" : "Essentiel"}
+                    Formule active : <span style={{ color: "#f26522", fontWeight: 700 }}>
+                      {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </span>
                   </div>
                 </div>
 
-                {/* Badge plan */}
-                <div style={{ background: userPlan === "pro" ? "rgba(242,101,34,0.08)" : "#0e0e0e", border: `1px solid ${userPlan === "pro" ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "20px 24px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                {/* Badge abonnement */}
+                <div style={{ background: "rgba(242,101,34,0.08)", border: "1px solid #f26522", borderRadius: 6, padding: "20px 24px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <div>
-                    <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: 2, color: userPlan === "pro" ? "#f26522" : "#ccc", textTransform: "uppercase" }}>
-                      {userPlan === "pro" ? "Pro" : "Essentiel"}
+                    <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: 2, color: "#f26522", textTransform: "uppercase" }}>
+                      {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </div>
                     <div style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 4, letterSpacing: 1 }}>
-                      {userPlan === "pro" ? "Toutes les fonctionnalités incluses" : "Fonctionnalités de base"}
+                      400 photos / mois · Toutes les fonctionnalités incluses
                     </div>
                   </div>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
                 </div>
 
-                {/* Bouton upgrade (Essentiel → Pro) */}
-                {userPlan === "essential" && (
-                  <button
-                    disabled={portalLoading === "upgrade"}
-                    onClick={async () => {
-                      setPortalLoading("upgrade");
-                      try {
-                        const res = await fetch("/api/create-checkout-session", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ plan: "pro", userId: user.id, userEmail: user.email }),
-                        });
-                        const data = await res.json();
-                        if (data.url) window.location.href = data.url;
-                        else alert("Erreur lors de la création du paiement.");
-                      } catch (e) {
-                        alert("Erreur réseau, réessayez.");
-                      } finally {
-                        setPortalLoading(null);
-                      }
-                    }}
-                    style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
-                    {portalLoading === "upgrade" ? "Redirection..." : "Améliorer vers Pro"}
-                  </button>
-                )}
+                <div style={{ fontSize: 10, color: "#777", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 16 }}>
+                  Pour changer de formule (hebdo / mensuel / annuel) ou mettre à jour votre paiement, ouvrez votre espace de facturation ci-dessous.
+                </div>
 
                 {/* Bouton Factures */}
                 {(() => {
@@ -6661,14 +6678,14 @@ export default function AutoCache() {
             style={{ background: "#141414", border: "1px solid #f26522", borderRadius: 6, padding: isMobile ? "24px 16px" : "36px 40px", maxWidth: 420, width: "92%", textAlign: "center", fontFamily: "'Rajdhani',sans-serif" }}>
             <div style={{ fontSize: 33, marginBottom: 12 }}>⬡</div>
             <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 4, textTransform: "uppercase" }}>Showroom Virtuel</div>
-            <div style={{ fontSize: 12, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 16, textTransform: "uppercase" }}>Abonnement Pro requis</div>
+            <div style={{ fontSize: 12, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 16, textTransform: "uppercase" }}>Abonnement requis</div>
             <div style={{ fontSize: 14, color: "#ddd", lineHeight: 1.7, marginBottom: 28, fontFamily: "'JetBrains Mono',monospace" }}>
-              Le mode Showroom Virtuel — détourage IA et fonds de showroom — est inclus dans l'abonnement <span style={{ color: "#f26522", fontWeight: 700 }}>Pro</span>.<br /><br />
-              Contactez-nous pour mettre votre compte à niveau.
+              Le mode Showroom Virtuel — détourage IA et fonds de showroom — est inclus dans <span style={{ color: "#f26522", fontWeight: 700 }}>l'abonnement</span>.<br /><br />
+              Choisissez la formule qui vous convient.
             </div>
-            <button onClick={() => { setShowUpgradeProModal(false); window.open("mailto:contact@autocache.fr?subject=Abonnement Pro AutoCache", "_blank"); }}
+            <button onClick={() => { setShowUpgradeProModal(false); setShowPlansModal(true); }}
               style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
-              Passer à l'abonnement Pro
+              Voir les formules
             </button>
             <button onClick={() => setShowUpgradeProModal(false)}
               style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
@@ -6682,7 +6699,7 @@ export default function AutoCache() {
       {showUpgradeModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: 740, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: 880, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
 
             {/* En-tête */}
             <div style={{ textAlign: "center", marginBottom: 28 }}>
@@ -6690,84 +6707,12 @@ export default function AutoCache() {
               <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase", marginBottom: 10 }}>Continuez à sublimer vos photos</div>
               <div style={{ fontSize: 12, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7 }}>
                 Vous avez utilisé vos <span style={{ color: "#f26522" }}>30 photos d'essai</span>.<br />
-                Choisissez un abonnement pour continuer à traiter vos photos sans limite.
+                Choisissez votre formule pour continuer à traiter vos photos.
               </div>
             </div>
 
-            {/* Cartes plans */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 24 }}>
-              {[
-                {
-                  key: "essential",
-                  name: "Essentiel",
-                  price: "14,90€",
-                  badge: null,
-                  features: [
-                    { ok: true,  label: "200 photos / mois" },
-                    { ok: true,  label: "Cache plaque personnalisé" },
-                    { ok: true,  label: "Logo importé ou généré" },
-                    { ok: true,  label: "Ajustements couleurs" },
-                    { ok: false, label: "Showroom Virtuel (fonds IA)" },
-                    { ok: false, label: "Enseigne murale" },
-                  ],
-                },
-                {
-                  key: "pro",
-                  name: "Pro",
-                  price: "24,90€",
-                  badge: "Recommandé",
-                  features: [
-                    { ok: true, label: "250 photos / mois" },
-                    { ok: true, label: "Cache plaque personnalisé" },
-                    { ok: true, label: "Logo importé ou généré" },
-                    { ok: true, label: "Ajustements couleurs" },
-                    { ok: true, label: "Showroom Virtuel (fonds IA)" },
-                    { ok: true, label: "Enseigne murale" },
-                  ],
-                },
-              ].map(plan => {
-                const isPro = plan.key === "pro";
-                return (
-                  <div key={plan.key}
-                    onMouseEnter={() => setHoveredPlan(`trial-${plan.key}`)}
-                    onMouseLeave={() => setHoveredPlan(null)}
-                    style={{ background: isPro ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${isPro ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "22px 20px", position: "relative", transform: hoveredPlan === `trial-${plan.key}` ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
-                    {plan.badge && (
-                      <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
-                    )}
-                    <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 2 }}>{plan.name}</div>
-                    <div style={{ fontSize: 19, fontWeight: 700, color: "#e0dbd4", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>{plan.price}<span style={{ fontSize: 11, color: "#ddd", fontWeight: 400 }}> /mois</span></div>
-                    <div style={{ marginBottom: 18 }}>
-                      {plan.features.map((f, i) => (
-                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span style={{ fontSize: 12, color: f.ok ? "#27ae60" : "#444", flexShrink: 0 }}>{f.ok ? "✓" : "✕"}</span>
-                          <span style={{ fontSize: 11, color: f.ok ? "#bbb" : "#444", fontFamily: "'JetBrains Mono',monospace" }}>{f.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <button
-                      disabled={checkoutLoading === plan.key}
-                      onClick={async () => {
-                        setCheckoutLoading(plan.key);
-                        try {
-                          const res = await fetch("/api/create-checkout-session", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ plan: plan.key, userId: user.id, userEmail: user.email }),
-                          });
-                          const data = await res.json();
-                          if (data.url) window.location.href = data.url;
-                          else alert("Erreur lors de la création du paiement.");
-                        } catch { alert("Erreur réseau, réessayez."); }
-                        finally { setCheckoutLoading(null); }
-                      }}
-                      style={{ width: "100%", background: isPro ? "#f26522" : "transparent", color: isPro ? "#090909" : "#888", border: `1px solid ${isPro ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
-                      {checkoutLoading === plan.key ? "Redirection..." : `Choisir ${plan.name}`}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+            {/* Formules */}
+            {renderFormulesGrid()}
 
             <button onClick={() => setShowUpgradeModal(false)}
               style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #222", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>

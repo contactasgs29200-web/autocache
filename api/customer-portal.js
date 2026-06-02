@@ -33,6 +33,7 @@ export default async function handler(req, res) {
         periodStart: sub.current_period_start,
         periodEnd: sub.current_period_end,
         plan: sub.metadata?.plan || null,
+        formule: sub.metadata?.formule || null,
         status: sub.status,
       });
     } catch (e) {

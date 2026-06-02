@@ -28,8 +28,12 @@ async function setUserPlan(userId, plan) {
   if (error) throw new Error(`Supabase update failed: ${error.message}`);
 }
 
-async function setUserPlanAndCustomer(userId, plan, stripeCustomerId) {
-  const meta = { plan };
+async function activateSubscription(userId, plan, formule, stripeCustomerId) {
+  // Active l'abonnement et démarre une fenêtre mensuelle de crédits.
+  // Le quota (400 photos/mois) est remis à zéro chaque mois côté application,
+  // indépendamment de la cadence de facturation (hebdo / mensuel / annuel).
+  const meta = { plan, photos_used: 0, photos_period_start: new Date().toISOString() };
+  if (formule) meta.formule = formule;
   if (stripeCustomerId) meta.stripe_customer_id = stripeCustomerId;
   const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
     user_metadata: meta,
@@ -56,11 +60,12 @@ export default async function handler(req, res) {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
       const userId     = session.client_reference_id || session.metadata?.userId;
-      const plan       = session.metadata?.plan;
+      const plan       = session.metadata?.plan || "premium";
+      const formule    = session.metadata?.formule || null;
       const customerId = typeof session.customer === "string" ? session.customer : null;
-      if (userId && plan) {
-        await setUserPlanAndCustomer(userId, plan, customerId);
-        console.log(`Plan "${plan}" activé pour user ${userId} (customer: ${customerId})`);
+      if (userId) {
+        await activateSubscription(userId, plan, formule, customerId);
+        console.log(`Abonnement "${plan}" (formule: ${formule}) activé pour user ${userId} (customer: ${customerId})`);
       }
     }
 
@@ -88,18 +93,24 @@ export default async function handler(req, res) {
     }
 
     if (event.type === "invoice.paid") {
-      // Paiement réussi (renouvellement ou rattrapage d'impayé) → réactive le plan + remet les crédits à zéro
+      // Paiement réussi (renouvellement ou rattrapage d'impayé) → réactive le plan.
+      // Le quota photos est géré par fenêtre mensuelle côté application, on ne
+      // remet donc PAS les crédits à zéro ici (sinon une formule hebdo serait
+      // rechargée chaque semaine, et une formule annuelle une seule fois par an).
       const invoice = event.data.object;
       if (invoice.subscription && invoice.billing_reason === "subscription_cycle") {
         const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
-        const userId = subscription.metadata?.userId;
-        const plan   = subscription.metadata?.plan;
-        if (userId && plan) {
+        const userId  = subscription.metadata?.userId;
+        const plan    = subscription.metadata?.plan || "premium";
+        const formule = subscription.metadata?.formule || null;
+        if (userId) {
+          const meta = { plan };
+          if (formule) meta.formule = formule;
           const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
-            user_metadata: { plan, photos_used: 0 },
+            user_metadata: meta,
           });
-          if (error) throw new Error(`Supabase reset failed: ${error.message}`);
-          console.log(`Renouvellement réussi — user ${userId} plan "${plan}" réactivé, crédits remis à zéro`);
+          if (error) throw new Error(`Supabase update failed: ${error.message}`);
+          console.log(`Renouvellement réussi — user ${userId} abonnement "${plan}" (formule: ${formule}) réactivé`);
         }
       }
     }
