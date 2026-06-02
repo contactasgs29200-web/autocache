@@ -4623,22 +4623,48 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const photoImg = await loadImg(photoURL);
   URL.revokeObjectURL(photoURL);
 
-  // ── Résolution de travail minimale (qualité du cache plaque) ──
-  // Le cache plaque est dessiné en perspective DANS la région de la
-  // plaque du canvas de sortie. En pixels, cette région a donc la taille
-  // que lui impose la résolution de la photo : sur une photo de basse
-  // qualité, la plaque ne fait que quelques dizaines de pixels et le logo
-  // (pourtant haute définition) s'y retrouve écrasé → cache plaque flou.
-  // Pour que la qualité du cache plaque ne dépende PLUS de la qualité de
-  // l'image saisie, on garantit ici une résolution de travail minimale :
-  // on agrandit le canvas (jamais on ne le réduit) afin que la plaque
-  // dispose d'assez de pixels pour reproduire le logo à sa qualité
-  // d'origine. Les photos déjà nettes (≥ MIN_WORK_PX) ne sont pas touchées
-  // (renderScale = 1 → rendu identique à l'existant).
+  // ── Dimensionnement du canvas piloté par la TAILLE DE LA PLAQUE ──
+  // Le cache plaque est dessiné en perspective DANS la région de la plaque
+  // du canvas de sortie. En pixels, cette région a la taille que lui impose
+  // la résolution de la photo : deux photos de qualités différentes donnent
+  // donc deux plaques de tailles différentes → qualités différentes.
+  // Pour que la qualité du cache plaque soit CONSTANTE d'une photo à
+  // l'autre, on détecte la plaque AVANT de créer le canvas et on agrandit
+  // le canvas (jamais on ne le réduit) pour viser une largeur de plaque
+  // cible fixe (TARGET_PLATE_PX), indépendamment de la résolution de la
+  // photo. Un plancher général (MIN_WORK_PX) couvre le cas « pas de plaque
+  // détectée », et un garde-fou mémoire (MAX_DIM) borne la taille du canvas.
   const natW = photoImg.naturalWidth  || photoImg.width;
   const natH = photoImg.naturalHeight || photoImg.height;
-  const MIN_WORK_PX = 1600;
-  const renderScale = Math.max(1, MIN_WORK_PX / Math.max(natW, natH));
+
+  // Détection plaque (coordonnées normalisées 0–1, sur le fichier original).
+  const yolo = await detectPlateYOLO(photoFile);
+
+  // Largeur de la plaque en pixels natifs (coins si dispo, sinon bbox).
+  let plateNativePx = 0;
+  if (yolo) {
+    if (yolo.corners && yolo.corners.length === 4) {
+      const xs = yolo.corners.map(p => p.x), ys = yolo.corners.map(p => p.y);
+      plateNativePx = Math.max(
+        (Math.max(...xs) - Math.min(...xs)) * natW,
+        (Math.max(...ys) - Math.min(...ys)) * natH
+      );
+    } else if (yolo.bbox) {
+      const b = yolo.bbox;
+      plateNativePx = Math.max((b.x2 - b.x1) * natW, (b.y2 - b.y1) * natH);
+    }
+  }
+
+  const MIN_WORK_PX     = 1600;  // plancher image entière (fallback sans plaque)
+  const TARGET_PLATE_PX = 400;   // largeur de plaque visée → qualité constante
+  const MAX_DIM         = 4400;  // garde-fou mémoire (plus grand côté du canvas)
+  let renderScale = Math.max(1, MIN_WORK_PX / Math.max(natW, natH));
+  if (plateNativePx > 2) {
+    renderScale = Math.max(renderScale, TARGET_PLATE_PX / plateNativePx);
+  }
+  renderScale = Math.min(renderScale, MAX_DIM / Math.max(natW, natH));
+  renderScale = Math.max(1, renderScale);
+
   const c = document.createElement("canvas");
   c.width  = Math.round(natW * renderScale);
   c.height = Math.round(natH * renderScale);
@@ -4684,7 +4710,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   let plateFound = false;
   let savedCorners = null;
 
-  const yolo = await detectPlateYOLO(photoFile);
+  // `yolo` a déjà été récupéré plus haut (dimensionnement du canvas).
   if (yolo) {
     plateFound = true;
     // ── Diagnostic console : qui pilote la pose du cache plaque, et
