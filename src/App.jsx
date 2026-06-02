@@ -2983,6 +2983,10 @@ export default function AutoCache() {
   const [showPlansModal, setShowPlansModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
+  const [showEmailModal,   setShowEmailModal]   = useState(false);
+  const [emailTo,          setEmailTo]          = useState("");
+  const [emailSending,     setEmailSending]     = useState(false);
+  const [emailStatus,      setEmailStatus]      = useState(null); // { type: "ok"|"err"|"progress", msg }
   const [showMiniGame,     setShowMiniGame]     = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showCreditPopup, setShowCreditPopup] = useState(false);
@@ -3575,34 +3579,84 @@ export default function AutoCache() {
   };
   const downloadAll = async () => { for (const r of results) await downloadOne(r); };
 
-  // Export originals where YOLO detected a plate → use to build the
-  // YOLOv8-pose keypoint dataset (drop in backend/dataset/raw/ then
-  // upload to Roboflow). One sequential download per file with a
-  // small spacing so the browser doesn't drop any.
-  const exportDatasetRaw = async () => {
-    const detected = photos.filter(p =>
-      results.some(r => r.name === p.file.name && r.plateFound)
-    );
-    if (!detected.length) {
-      setError("Aucune photo avec plaque détectée à exporter pour le dataset.");
+  // Ouvre la modale d'envoi par email en pré-remplissant l'adresse :
+  // adresse sauvegardée sur le compte, sinon l'email du compte.
+  const openEmailModal = () => {
+    setEmailTo(user?.user_metadata?.export_email || user?.email || "");
+    setEmailStatus(null);
+    setShowEmailModal(true);
+  };
+
+  // Envoie toutes les photos traitées en pièces jointes par email (via Brevo,
+  // /api/send-photos). Les photos sont recadrées au format d'export choisi puis
+  // découpées en lots pour rester sous la limite de requête de Vercel (~4,5 Mo).
+  const sendPhotosByEmail = async () => {
+    const to = emailTo.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      setEmailStatus({ type: "err", msg: "Adresse email invalide." });
       return;
     }
-    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 16);
-    for (let i = 0; i < detected.length; i++) {
-      const p = detected[i];
-      const ext = (p.file.name.split(".").pop() || "jpg").toLowerCase();
-      const base = p.file.name.replace(/\.[^.]+$/, "");
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(p.file);
-      a.download = `plate_${ts}_${String(i + 1).padStart(4, "0")}_${base}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      // Petit délai pour ne pas saturer le navigateur
-      await new Promise(r => setTimeout(r, 80));
-      URL.revokeObjectURL(a.href);
+    if (!results.length) {
+      setEmailStatus({ type: "err", msg: "Aucune photo à envoyer." });
+      return;
     }
-    console.log(`Dataset export: ${detected.length} originaux téléchargés (préfixe plate_${ts}_*)`);
+    setEmailSending(true);
+    setEmailStatus({ type: "progress", msg: "Préparation des photos…" });
+    try {
+      const ratio = OUTPUT_FORMATS[outputFormat]?.ratio ?? null;
+      // Construit les pièces jointes (base64 pur) au format choisi.
+      const items = [];
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        const dataURL = await reframeDataURL(r.showroomDataURL || r.processed, ratio);
+        const content = dataURL.includes(",") ? dataURL.split(",").pop() : dataURL;
+        const base = (r.name || `photo_${i + 1}`).replace(/\.[^.]+$/, "");
+        const prefix = r.showroomDataURL ? "showroom_" : "autocache_";
+        items.push({ name: `${prefix}${base}.jpg`, content });
+      }
+      // Découpe en lots : ~3,5 Mo de base64 par requête (sous la limite Vercel).
+      const MAX_BATCH_BYTES = 3_500_000;
+      const batches = [];
+      let cur = [], curSize = 0;
+      for (const it of items) {
+        const sz = it.content.length;
+        if (cur.length && curSize + sz > MAX_BATCH_BYTES) { batches.push(cur); cur = []; curSize = 0; }
+        cur.push(it); curSize += sz;
+      }
+      if (cur.length) batches.push(cur);
+
+      for (let b = 0; b < batches.length; b++) {
+        setEmailStatus({ type: "progress", msg: `Envoi ${b + 1}/${batches.length}…` });
+        const resp = await fetch("/api/send-photos", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to,
+            subject: "Vos photos AutoCache",
+            attachments: batches[b],
+            batch: { index: b + 1, total: batches.length },
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || `Erreur ${resp.status}`);
+        }
+      }
+
+      // Mémorise l'adresse comme défaut du compte si elle a changé.
+      if (user && to !== (user.user_metadata?.export_email || "")) {
+        try {
+          await supabase.auth.updateUser({ data: { export_email: to } });
+          setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, export_email: to } } : prev);
+        } catch {}
+      }
+
+      setEmailStatus({ type: "ok", msg: `${results.length} photo${results.length > 1 ? "s" : ""} envoyée${results.length > 1 ? "s" : ""} à ${to}.` });
+    } catch (e) {
+      setEmailStatus({ type: "err", msg: e.message || "Échec de l'envoi." });
+    } finally {
+      setEmailSending(false);
+    }
   };
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "essential" | "pro"
@@ -5049,11 +5103,11 @@ export default function AutoCache() {
                   </div>
                   {!processing && (
                     <div style={{ display: "flex", gap: 8 }}>
-                      {results.some(r => r.plateFound) && (
-                        <button onClick={exportDatasetRaw}
-                          title="Exporter les photos originales où une plaque a été détectée — pour construire le dataset YOLOv8-pose"
+                      {results.length > 0 && (
+                        <button onClick={openEmailModal}
+                          title="Envoyer toutes les photos traitées par email"
                           style={{ background: "transparent", color: "#ddd", border: "1px solid #2a2a2a", padding: "9px 16px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
-                          Export dataset ({results.filter(r => r.plateFound).length})
+                          ✉ Envoyer par mail
                         </button>
                       )}
                       <button onClick={downloadAll} style={{ background: "#f26522", color: "#090909", border: "none", padding: "9px 22px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3 }}>
@@ -6201,6 +6255,47 @@ export default function AutoCache() {
                   </div>
                 </a>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Envoyer par mail ── */}
+      {showEmailModal && (
+        <div onClick={() => { if (!emailSending) setShowEmailModal(false); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "92%", maxWidth: 440, fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Envoyer par mail</div>
+              <button onClick={() => { if (!emailSending) setShowEmailModal(false); }} style={{ background: "none", border: "none", color: "#ddd", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ fontSize: 12, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
+                Les {results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""} seront envoyées en pièces jointes à l'adresse ci-dessous{outputFormat !== "original" ? ` (format ${OUTPUT_FORMATS[outputFormat].label})` : ""}.
+              </div>
+              <div>
+                <label style={{ fontSize: 10, color: "#888", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Adresse email</label>
+                <input
+                  type="email"
+                  value={emailTo}
+                  disabled={emailSending}
+                  onChange={e => setEmailTo(e.target.value)}
+                  placeholder="client@exemple.com"
+                  style={{ width: "100%", marginTop: 6, boxSizing: "border-box", background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 4, color: "#ddd5c8", fontSize: 15, padding: "11px 13px", fontFamily: "'Rajdhani',sans-serif", outline: "none" }}
+                />
+                <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 6 }}>Mémorisée comme adresse par défaut du compte.</div>
+              </div>
+              {emailStatus && (
+                <div style={{ fontSize: 12, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.5,
+                  color: emailStatus.type === "ok" ? "#5fbf5f" : emailStatus.type === "err" ? "#e06b5f" : "#f26522" }}>
+                  {emailStatus.type === "ok" ? "✓ " : emailStatus.type === "err" ? "✕ " : "⏳ "}{emailStatus.msg}
+                </div>
+              )}
+              <button onClick={sendPhotosByEmail} disabled={emailSending}
+                style={{ width: "100%", background: emailSending ? "#3a1a0a" : "#f26522", color: emailSending ? "#aaa" : "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: emailSending ? "default" : "pointer" }}>
+                {emailSending ? "Envoi en cours…" : "Envoyer"}
+              </button>
             </div>
           </div>
         </div>
