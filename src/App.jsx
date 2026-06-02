@@ -3582,7 +3582,9 @@ export default function AutoCache() {
   // Ouvre la modale d'envoi par email en pré-remplissant l'adresse :
   // adresse sauvegardée sur le compte, sinon l'email du compte.
   const openEmailModal = () => {
-    setEmailTo(user?.user_metadata?.export_email || user?.email || "");
+    // Pré-remplit uniquement avec l'adresse déjà saisie/sauvegardée — pas
+    // l'email du compte — pour que le champ soit vide à la première utilisation.
+    setEmailTo(user?.user_metadata?.export_email || "");
     setEmailStatus(null);
     setShowEmailModal(true);
   };
