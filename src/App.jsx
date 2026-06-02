@@ -284,7 +284,12 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   // ── Step 1: multi-step halving ──
   // Canvas drawImage handles 2× downscale well but degrades at 4×+.
   // Halve the source progressively until it's close to the output size.
-  const targetW = Math.max(plateW * 3, 600);
+  // IMPORTANT (netteté du cache plaque) : la source halvée ne doit JAMAIS
+  // descendre sous la résolution de supersampling (plateW × SS_MAX),
+  // sinon l'étape 3 ré-agrandit la source dans l'offscreen → cache plaque
+  // flou. On garde une marge ×2 pour un sous-échantillonnage propre.
+  const SS_MAX = 4;
+  const targetW = Math.max(plateW * SS_MAX * 2, 1400);
   let src = img, sw = iw, sh = ih;
   while (sw > targetW * 2 && sw > 2) {
     const half = document.createElement('canvas');
@@ -312,7 +317,7 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   }
 
   // ── Step 3: supersampled perspective ──
-  const ssScale = Math.max(1, Math.min(sw / plateW, 4));
+  const ssScale = Math.max(1, Math.min(sw / plateW, SS_MAX));
   const useOffscreen = ssScale > 1.5;
 
   let tCtx, sTl, sTr, sBr, sBl, offCanvas;
@@ -4632,7 +4637,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // (renderScale = 1 → rendu identique à l'existant).
   const natW = photoImg.naturalWidth  || photoImg.width;
   const natH = photoImg.naturalHeight || photoImg.height;
-  const MIN_WORK_PX = 2000;
+  const MIN_WORK_PX = 1600;
   const renderScale = Math.max(1, MIN_WORK_PX / Math.max(natW, natH));
   const c = document.createElement("canvas");
   c.width  = Math.round(natW * renderScale);
