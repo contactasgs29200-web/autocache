@@ -42,7 +42,7 @@ const STEPS = [
     mode: "spotlight",
     target: "enhancements",
     title: "Améliorations automatiques",
-    body: "Activez les options d'amélioration : correction des couleurs, lustrage des optiques, lustrage carrosserie... Chaque option est indépendante et s'applique lors du traitement.",
+    body: "Activez les options d'amélioration : correction des couleurs, lustrage carrosserie... Chaque option est indépendante et s'applique lors du traitement.",
     icon: "✨",
   },
   {
