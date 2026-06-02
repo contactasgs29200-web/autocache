@@ -182,6 +182,39 @@ function loadImg(src) {
 
 function lerp(a, b, t) { return a + (b - a) * t; }
 
+// ── Formats d'export des photos ─────────────────────────────────────────────
+// Le format choisi recadre la photo finale (recadrage centré « cover », sans
+// déformation ni marges) au moment de l'aperçu (CSS) et du téléchargement
+// (ré-encodage canvas). « original » conserve le ratio source : aucun recadrage.
+const OUTPUT_FORMATS = {
+  original: { label: "Original",    sub: "Ratio d'origine",     ratio: null,   css: "4 / 3" },
+  "1:1":    { label: "Carré 1:1",   sub: "Réseaux sociaux",     ratio: 1,      css: "1 / 1" },
+  "4:3":    { label: "Annonce 4:3", sub: "Sites d'annonces",    ratio: 4 / 3,  css: "4 / 3" },
+  "16:9":   { label: "Pano 16:9",   sub: "Bannière / showroom", ratio: 16 / 9, css: "16 / 9" },
+  "4:5":    { label: "Portrait 4:5", sub: "Mobile / story",     ratio: 4 / 5,  css: "4 / 5" },
+};
+const OUTPUT_FORMAT_KEYS = ["original", "1:1", "4:3", "16:9", "4:5"];
+
+// Recadre une dataURL au ratio cible (largeur/hauteur), recadrage centré sans
+// déformation. Retourne la source inchangée si ratio nul (format « original »).
+async function reframeDataURL(src, ratio) {
+  if (!src || !ratio) return src;
+  const img = await loadImg(src);
+  const sw = img.naturalWidth || img.width;
+  const sh = img.naturalHeight || img.height;
+  if (!sw || !sh) return src;
+  const srcRatio = sw / sh;
+  let tw, th;
+  if (srcRatio > ratio) { th = sh; tw = Math.round(sh * ratio); }
+  else                  { tw = sw; th = Math.round(sw / ratio); }
+  const sx = Math.round((sw - tw) / 2);
+  const sy = Math.round((sh - th) / 2);
+  const c = document.createElement("canvas");
+  c.width = tw; c.height = th;
+  c.getContext("2d").drawImage(img, sx, sy, tw, th, 0, 0, tw, th);
+  return c.toDataURL("image/jpeg", 0.97);
+}
+
 function extractJSON(txt) {
   let depth = 0, start = -1;
   for (let i = 0; i < txt.length; i++) {
@@ -2972,6 +3005,7 @@ export default function AutoCache() {
   const [floorClean, setFloorClean] = useState(false);
   const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
   const [enhanceProIntensity, setEnhanceProIntensity] = useState(2); // 0–5 : force du dé-jaunissement (2 par défaut, modifiable)
+  const [outputFormat, setOutputFormat] = useState("original"); // format d'export : clé de OUTPUT_FORMATS
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
@@ -3534,8 +3568,12 @@ export default function AutoCache() {
 
   const start = () => startAfterInfo();
 
-  const downloadOne = r => { const a = document.createElement("a"); a.href = r.showroomDataURL || r.processed; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click(); };
-  const downloadAll = () => results.forEach(downloadOne);
+  const downloadOne = async r => {
+    const ratio = OUTPUT_FORMATS[outputFormat]?.ratio ?? null;
+    const href = await reframeDataURL(r.showroomDataURL || r.processed, ratio);
+    const a = document.createElement("a"); a.href = href; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click();
+  };
+  const downloadAll = async () => { for (const r of results) await downloadOne(r); };
 
   // Export originals where YOLO detected a plate → use to build the
   // YOLOv8-pose keypoint dataset (drop in backend/dataset/raw/ then
@@ -4675,6 +4713,25 @@ export default function AutoCache() {
                   </Fragment>
                 ))}
 
+                {/* ── Format d'export des photos ── */}
+                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginTop: 4, marginBottom: 10 }}>Format d'export</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                  {OUTPUT_FORMAT_KEYS.map(key => {
+                    const f = OUTPUT_FORMATS[key];
+                    const active = outputFormat === key;
+                    return (
+                      <button key={key} onClick={() => setOutputFormat(key)}
+                        style={{ flex: "1 1 0", minWidth: 72, background: active ? "#f26522" : "#0a0a0a", border: `1px solid ${active ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, padding: "9px 6px", cursor: "pointer", textAlign: "center" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, color: active ? "#090909" : "#aaa", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase" }}>{f.label}</div>
+                        <div style={{ fontSize: 9, marginTop: 2, color: active ? "#3a1400" : "#666", fontFamily: "'JetBrains Mono',monospace" }}>{f.sub}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 10, color: "#777", fontFamily: "'JetBrains Mono',monospace", marginBottom: 22, lineHeight: 1.5 }}>
+                  {outputFormat === "original" ? "Conserve le ratio d'origine de chaque photo." : "Recadrage centré au format choisi · appliqué à l'aperçu et au téléchargement."}
+                </div>
+
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
                   <div style={{ fontSize: 13, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#444", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
                   <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "#1a1a1a", border: `1px solid ${adjEnabled ? "#f26522" : "#2a2a2a"}`, color: adjEnabled ? "#090909" : "#444", padding: "4px 13px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>
@@ -5009,7 +5066,7 @@ export default function AutoCache() {
                   {results.map((r, i) => (
                     <div key={i} style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
-                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4/3", objectFit: "contain", background: "#1e1e1e", display: "block" }} />
+                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: OUTPUT_FORMATS[outputFormat]?.css || "4 / 3", objectFit: outputFormat === "original" ? "contain" : "cover", background: "#1e1e1e", display: "block" }} />
                         {!r.showroomDataURL && window.location.search.includes('plateDebug') && r.yoloBbox && r.imgW && (
                           <svg
                             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
