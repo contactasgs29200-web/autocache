@@ -3104,14 +3104,33 @@ export default function AutoCache() {
   // Restaurer logos depuis localStorage au démarrage (persistent même après déconnexion)
   useEffect(() => {
     try {
+      // Paramètres du logo généré (restaurés en premier pour que l'effet de
+      // génération reconstruise le bon logo si on bascule en mode "generate").
+      const savedGen = JSON.parse(localStorage.getItem('ac_logo_gen') || 'null');
+      if (savedGen && typeof savedGen === 'object') {
+        if (typeof savedGen.genText === 'string') setGenText(savedGen.genText);
+        if (savedGen.genBg) setGenBg(savedGen.genBg);
+        if (savedGen.genFg) setGenFg(savedGen.genFg);
+        if (savedGen.genFont) setGenFont(savedGen.genFont);
+        if (savedGen.genBorderColor) setGenBorderColor(savedGen.genBorderColor);
+        if (typeof savedGen.genBorderWidth === 'number') setGenBorderWidth(savedGen.genBorderWidth);
+      }
+
       const savedPreview = localStorage.getItem('ac_logo_preview');
       if (savedPreview) {
         const wasGenerated = localStorage.getItem('ac_logo_generated') === '1';
         const savedBg = localStorage.getItem('ac_logo_bgcolor') || '#ffffff';
-        const restored = { file: null, preview: savedPreview, generated: wasGenerated, bgColor: savedBg };
-        setLogo(restored);
-        if (!wasGenerated) setImportedLogo(restored);
-        setLogoMode('import');
+        if (wasGenerated) {
+          // Logo généré : on ouvre l'onglet "Générer" ; l'effet de génération
+          // reconstruit le logo à partir des paramètres restaurés ci-dessus.
+          // L'onglet "Mon logo" reste réservé aux logos importés.
+          setLogoMode('generate');
+        } else {
+          const restored = { file: null, preview: savedPreview, generated: false, bgColor: savedBg };
+          setLogo(restored);
+          setImportedLogo(restored);
+          setLogoMode('import');
+        }
       }
       const savedOriginal = localStorage.getItem('ac_logo_original');
       if (savedOriginal) setLogoOriginal(savedOriginal);
@@ -3140,6 +3159,14 @@ export default function AutoCache() {
       else localStorage.removeItem('ac_logo_original');
     } catch(e) {}
   }, [logoOriginal]);
+
+  // Persiste les paramètres du logo généré (texte, couleurs, police, liseret)
+  // pour pouvoir le reconstruire à l'identique au prochain démarrage.
+  useEffect(() => {
+    try {
+      localStorage.setItem('ac_logo_gen', JSON.stringify({ genText, genBg, genFg, genFont, genBorderColor, genBorderWidth }));
+    } catch(e) {}
+  }, [genText, genBg, genFg, genFont, genBorderColor, genBorderWidth]);
 
   useEffect(() => {
     if (!logoCropDrag) return;
