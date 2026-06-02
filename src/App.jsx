@@ -2939,6 +2939,7 @@ export default function AutoCache() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [logo, setLogo] = useState(null);
+  const [importedLogo, setImportedLogo] = useState(null); // mémorise le dernier logo importé pour le restaurer après un aller-retour vers "Générer"
   const [photos, setPhotos] = useState([]);
   const [results, setResults] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -3069,7 +3070,9 @@ export default function AutoCache() {
       if (savedPreview) {
         const wasGenerated = localStorage.getItem('ac_logo_generated') === '1';
         const savedBg = localStorage.getItem('ac_logo_bgcolor') || '#ffffff';
-        setLogo({ file: null, preview: savedPreview, generated: wasGenerated, bgColor: savedBg });
+        const restored = { file: null, preview: savedPreview, generated: wasGenerated, bgColor: savedBg };
+        setLogo(restored);
+        if (!wasGenerated) setImportedLogo(restored);
         setLogoMode('import');
       }
       const savedOriginal = localStorage.getItem('ac_logo_original');
@@ -3215,7 +3218,11 @@ export default function AutoCache() {
     setLogoCropActive(false);
     setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 });
     const reader = new FileReader();
-    reader.onload = (e) => setLogo({ file: f, preview: e.target.result, generated: false, bgColor: '#ffffff' });
+    reader.onload = (e) => {
+      const imported = { file: f, preview: e.target.result, generated: false, bgColor: '#ffffff' };
+      setLogo(imported);
+      setImportedLogo(imported);
+    };
     reader.readAsDataURL(f);
   };
 
@@ -3260,7 +3267,9 @@ export default function AutoCache() {
       c.width = sw; c.height = sh;
       c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
       if (!logoOriginal) setLogoOriginal(logo.preview);
-      setLogo({ ...logo, preview: c.toDataURL('image/png') });
+      const cropped = { ...logo, preview: c.toDataURL('image/png') };
+      setLogo(cropped);
+      setImportedLogo(cropped);
       setLogoCropActive(false);
       setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 });
     };
@@ -4427,7 +4436,7 @@ export default function AutoCache() {
                 <div style={{ display: "flex", marginBottom: 14, background: "#121212", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
                   {[["import","Mon logo"],["generate","Générer"]].map(([m, label]) => (
                     <button key={m} onClick={() => {
-                      if (m === "import") { setLogo(null); setLogoOriginal(null); setLogoCropActive(false); }
+                      if (m === "import") { setLogo(importedLogo); setLogoOriginal(null); setLogoCropActive(false); }
                       setLogoMode(m);
                     }} style={{ flex: 1, background: logoMode === m ? "#f26522" : "transparent", color: logoMode === m ? "#090909" : "#555", border: "none", padding: "8px 0", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>
                       {label}
