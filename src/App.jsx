@@ -8773,8 +8773,10 @@ export default function AutoCache() {
           <div style={{ width: 200, height: 2, background: "#1e1e1e", borderRadius: 1, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
           </div>
-          {/* Mini-jeu d'esquive pour patienter pendant le traitement */}
-          <LoadingGame />
+          {/* Mini-jeu d'esquive pour patienter pendant le traitement.
+              `gated` : le jeu ne s'affiche pas d'office — une phrase invite
+              à appuyer sur Espace pour le lancer. */}
+          <LoadingGame gated />
         </div>
       )}
 

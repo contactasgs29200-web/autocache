@@ -36,9 +36,12 @@ const SWIPE_THRESHOLD   = 30;
  *  • Desktop: ← / → arrow keys move one lane.
  *  • Mobile: swipe left / right to move one lane.
  */
-export default function LoadingGame() {
+export default function LoadingGame({ gated = false }) {
   const canvasRef = useRef(null);
-  const [phase, setPhase] = useState("idle"); // 'idle' | 'playing' | 'gameover'
+  // 'hidden' : rien n'est affiché sauf une phrase d'invitation (mode `gated`,
+  // utilisé sous le spinner de chargement — le jeu ne démarre PAS d'office).
+  // 'idle' | 'playing' | 'gameover' : déroulé normal une fois lancé.
+  const [phase, setPhase] = useState(gated ? "hidden" : "idle");
   const [score, setScore] = useState(0);
   const [hiScore, setHiScore] = useState(() => {
     try { return Number(localStorage.getItem(STORAGE_KEY)) || 0; }
@@ -89,7 +92,7 @@ export default function LoadingGame() {
     const handleDown = (e) => {
       if (e.key === " " || e.code === "Space") {
         e.preventDefault();
-        if (phase === "idle" || phase === "gameover") startGame();
+        if (phase === "hidden" || phase === "idle" || phase === "gameover") startGame();
         return;
       }
       if (phase === "playing") {
@@ -227,6 +230,27 @@ export default function LoadingGame() {
     s.rafId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(s.rafId);
   }, [phase, hiScore]);
+
+  /* ── Mode `gated` : tant que le jeu n'a pas été lancé, on n'affiche pas
+   *    le plateau — juste une petite phrase d'invitation en bas. ─────────── */
+  if (phase === "hidden") {
+    return (
+      <button
+        type="button"
+        onClick={startGame}
+        style={{
+          marginTop: 14,
+          background: "none", border: "none", cursor: "pointer",
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 11, color: "#888", letterSpacing: 1.5,
+          textTransform: "uppercase", lineHeight: 1.6,
+          userSelect: "none",
+        }}
+      >
+        Appuie sur la barre <kbd style={kbdStyle}>Espace</kbd> pour lancer le mini-jeu
+      </button>
+    );
+  }
 
   /* ── Render ────────────────────────────────────────────────────────── */
   return (
