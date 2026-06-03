@@ -159,8 +159,9 @@ function makeSignDataURL({ logoImg = null, title = "", titleColor = "#ffffff", f
   return { url: c.toDataURL("image/png"), ratio: c.height / c.width };
 }
 
-// Superpose une enseigne (PNG transparent) en bandeau haut d'une image.
-async function overlaySignOnImage(baseUrl, signUrl) {
+// Superpose une enseigne (PNG transparent) sur une image, centrée sur `pos`
+// (coords normalisées 0..1) et large de `scale` × la largeur de l'image.
+async function overlaySignOnImage(baseUrl, signUrl, pos = { x: 0.5, y: 0.16 }, scale = 0.64) {
   if (!signUrl) return baseUrl;
   const [base, sign] = await Promise.all([loadImg(baseUrl), loadImg(signUrl)]);
   const W = base.naturalWidth || base.width, H = base.naturalHeight || base.height;
@@ -169,10 +170,9 @@ async function overlaySignOnImage(baseUrl, signUrl) {
   const ctx = c.getContext("2d");
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
   ctx.drawImage(base, 0, 0, W, H);
-  // Bandeau : largeur 64% de l'image, centré, bord supérieur à 6% de la hauteur
-  const sw = W * 0.64;
+  const sw = W * scale;
   const sh = sw * ((sign.naturalHeight || sign.height) / (sign.naturalWidth || sign.width));
-  ctx.drawImage(sign, (W - sw) / 2, H * 0.06, sw, sh);
+  ctx.drawImage(sign, pos.x * W - sw / 2, pos.y * H - sh / 2, sw, sh);
   return c.toDataURL("image/jpeg", 0.95);
 }
 
@@ -3265,6 +3265,8 @@ export default function AutoCache() {
   const [signScope,         setSignScope]         = useState("all"); // "all" | "selected"
   const [signSelectedIds,   setSignSelectedIds]   = useState(() => new Set());
   const signLogoInputRef = useRef(null);
+  const [signLive, setSignLive] = useState(null); // { pos, scale } pendant le déplacement dans la lightbox
+  const signDragRef = useRef(null);
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
   const [showroomZoom,    setShowroomZoom]    = useState(DEFAULT_SHOWROOM_ZOOM);
@@ -3567,18 +3569,19 @@ export default function AutoCache() {
     const resolvedWallLogo = null;
     const wallLogoRatio = 0.4;
     // ── Enseigne murale & logo : bannière (logo + enseigne + sous-titre) ──
-    let signImageUrl = null;
+    let signImageUrl = null, signRatio = 0.4;
     if (signEnabled && (signTitle.trim() || signSubtitle.trim() || signLogo)) {
       let signLogoImg = null;
       if (signLogo) { try { signLogoImg = await loadImg(signLogo); } catch (_) {} }
-      signImageUrl = makeSignDataURL({
+      const sm = makeSignDataURL({
         logoImg: signLogoImg,
         title: signTitle.trim(),
         titleColor: signTitleColor,
         fontKey: signFont,
         subtitle: signSubtitle.trim(),
         subtitleColor: signSubtitleColor,
-      }).url;
+      });
+      signImageUrl = sm.url; signRatio = sm.ratio;
     }
     const all = [];
     const showroomBgDataUrl = showroomEnabled
@@ -3782,13 +3785,16 @@ export default function AutoCache() {
       // ── Applique l'enseigne sur la sortie finale (avec ou sans showroom) ──
       const applySign = signImageUrl && (signScope === "all" || signSelectedIds.has(photosToProcess[i].id));
       if (applySign) {
-        entry.signImageUrl = signImageUrl; // conservé pour ré-appliquer après ré-édition
+        const pos = { x: 0.5, y: 0.16 }, scale = 0.64;
+        const base = entry.showroomDataURL || entry.processed; // image propre (sans enseigne)
+        entry.signImageUrl = signImageUrl;
+        entry.signRatio    = signRatio;
+        entry.signPos      = pos;
+        entry.signScale    = scale;
+        entry.signBaseUrl  = base; // conservée pour déplacer/redimensionner l'enseigne
         try {
-          if (entry.showroomDataURL) {
-            entry.showroomDataURL = await overlaySignOnImage(entry.showroomDataURL, signImageUrl);
-          } else {
-            entry.processed = await overlaySignOnImage(entry.processed, signImageUrl);
-          }
+          const baked = await overlaySignOnImage(base, signImageUrl, pos, scale);
+          if (entry.showroomDataURL) entry.showroomDataURL = baked; else entry.processed = baked;
         } catch (e) { console.error('Sign overlay error:', e); }
       }
       all.push(entry);
@@ -4115,8 +4121,13 @@ export default function AutoCache() {
             prev.carBoundsCache
           );
           // Ré-applique l'enseigne (le compositing repart du décor sans elle)
-          const finalShowroom = prev.signImageUrl ? await overlaySignOnImage(sr.dataURL, prev.signImageUrl) : sr.dataURL;
-          const updated = { ...prev, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl };
+          let finalShowroom = sr.dataURL;
+          const signExtra = {};
+          if (prev.signImageUrl) {
+            signExtra.signBaseUrl = sr.dataURL; // base propre pour déplacer l'enseigne
+            finalShowroom = await overlaySignOnImage(sr.dataURL, prev.signImageUrl, prev.signPos, prev.signScale);
+          }
+          const updated = { ...prev, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl, ...signExtra };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
         }
@@ -4533,18 +4544,19 @@ export default function AutoCache() {
     const ov = adjustOverlayCanvasRef.current; if (ov) fctx.drawImage(ov, 0, 0);
     const flatURL = flat.toDataURL('image/jpeg', 0.97);
     const sign = lightbox.signImageUrl || null; // ré-applique l'enseigne si présente
+    const sPos = lightbox.signPos, sScale = lightbox.signScale;
     if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
       // Mode showroom : fond+voiture+cache plaque aplatis à qualité native
       const t = adjustShowroomTransformRef.current;
       const photoCorners   = cornersFromShowroom(latestCorners, t);
-      const url = await overlaySignOnImage(flatURL, sign);
-      const updated = { ...lightbox, corners: photoCorners, showroomDataURL: url };
+      const url = sign ? await overlaySignOnImage(flatURL, sign, sPos, sScale) : flatURL;
+      const updated = { ...lightbox, corners: photoCorners, showroomDataURL: url, ...(sign ? { signBaseUrl: flatURL } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
     } else {
       // Mode normal : sauvegarde la photo avec le cache plaque
-      const url = await overlaySignOnImage(flatURL, sign);
-      const updated = { ...lightbox, processed: url, corners: latestCorners, ...(manualPlateMode ? { plateFound: true } : {}) };
+      const url = sign ? await overlaySignOnImage(flatURL, sign, sPos, sScale) : flatURL;
+      const updated = { ...lightbox, processed: url, corners: latestCorners, ...(sign ? { signBaseUrl: flatURL } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       // Régénère le showroom avec les nouveaux coins si showroom actif
@@ -4556,13 +4568,53 @@ export default function AutoCache() {
           const logoImgEl = await loadImg(snap.logoPreview);
           const sr = await compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
             logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, null, snap.shadowMatteDataURL, showroomBlend);
-          const finalShowroom = await overlaySignOnImage(sr.dataURL, sign);
-          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
+          const finalShowroom = sign ? await overlaySignOnImage(sr.dataURL, sign, sPos, sScale) : sr.dataURL;
+          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend, ...(sign ? { signBaseUrl: sr.dataURL } : {}) };
           setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
           setLightbox(prev => prev?.name === snap.name ? withSR : prev);
         } catch (e) { console.error('showroom regen (adjust):', e); }
       }
     }
+  };
+
+  // ── Déplacement / redimensionnement de l'enseigne dans la lightbox ────────
+  const onSignPointerDown = (e, mode = "move") => {
+    if (!lightbox?.signImageUrl) return;
+    e.stopPropagation(); e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+    const pos = lightbox.signPos || { x: 0.5, y: 0.16 };
+    const scale = lightbox.signScale ?? 0.64;
+    signDragRef.current = { mode, startMx: e.clientX, startMy: e.clientY, startPos: { ...pos }, startScale: scale };
+    setSignLive({ pos, scale });
+  };
+  const onSignPointerMove = (e) => {
+    const d = signDragRef.current; if (!d) return;
+    e.preventDefault();
+    const rect = cropImgRef.current?.getBoundingClientRect(); if (!rect || !rect.width) return;
+    if (d.mode === "resize") {
+      const dx = (e.clientX - d.startMx) / rect.width;
+      const ns = Math.max(0.15, Math.min(1.2, d.startScale + dx * 2));
+      setSignLive({ pos: d.startPos, scale: ns });
+    } else {
+      const dx = (e.clientX - d.startMx) / rect.width;
+      const dy = (e.clientY - d.startMy) / rect.height;
+      setSignLive({ pos: { x: Math.max(0, Math.min(1, d.startPos.x + dx)), y: Math.max(0, Math.min(1, d.startPos.y + dy)) }, scale: d.startScale });
+    }
+  };
+  const onSignPointerUp = async (e) => {
+    const d = signDragRef.current; if (!d) return;
+    signDragRef.current = null;
+    const live = signLive || { pos: lightbox.signPos, scale: lightbox.signScale };
+    setSignLive(null);
+    const snap = lightbox;
+    const baseClean = snap.signBaseUrl || snap.showroomDataURL || snap.processed;
+    const updated = { ...snap, signPos: live.pos, signScale: live.scale };
+    try {
+      const baked = await overlaySignOnImage(baseClean, snap.signImageUrl, live.pos, live.scale);
+      if (snap.showroomDataURL) updated.showroomDataURL = baked; else updated.processed = baked;
+    } catch (err) { console.error('sign rebake', err); }
+    setLightbox(prev => prev?.name === updated.name ? updated : prev);
+    setResults(prev => prev.map(r => r.name === updated.name ? updated : r));
   };
 
   // ── Zoom / Pan de la lightbox ─────────────────────────────────────────────
@@ -5355,7 +5407,7 @@ export default function AutoCache() {
                     {/* Enseigne */}
                     <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>ENSEIGNE</div>
                     <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                      <input type="text" value={signTitle} onChange={e => setSignTitle(e.target.value)} placeholder="Ex : VOLVO SELEKT"
+                      <input type="text" value={signTitle} onChange={e => setSignTitle(e.target.value)} placeholder="Ex : nom de l'enseigne"
                         style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "'Rajdhani',sans-serif", fontSize: 14 }} />
                       <input type="color" value={signTitleColor} onChange={e => setSignTitleColor(e.target.value)}
                         style={{ width: 34, height: 34, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer", flexShrink: 0 }} />
@@ -5363,7 +5415,7 @@ export default function AutoCache() {
                     {/* Sous-titre */}
                     <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>SOUS-TITRE</div>
                     <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                      <input type="text" value={signSubtitle} onChange={e => setSignSubtitle(e.target.value)} placeholder="Ex : Véhicules d'occasion certifiés"
+                      <input type="text" value={signSubtitle} onChange={e => setSignSubtitle(e.target.value)} placeholder="Ex : votre slogan"
                         style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "'Rajdhani',sans-serif", fontSize: 14 }} />
                       <input type="color" value={signSubtitleColor} onChange={e => setSignSubtitleColor(e.target.value)}
                         style={{ width: 34, height: 34, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer", flexShrink: 0 }} />
@@ -5949,10 +6001,34 @@ export default function AutoCache() {
             ) : (
               <img
                 ref={cropImgRef}
-                src={lightbox.showroomDataURL || lightbox.processed}
+                src={(lightbox.signImageUrl && lightbox.signBaseUrl) ? lightbox.signBaseUrl : (lightbox.showroomDataURL || lightbox.processed)}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
               />
             )}
+
+            {/* ── Enseigne déplaçable (calque par-dessus l'image) ── */}
+            {!cropMode && !adjustMode && lightbox.signImageUrl && (() => {
+              const live = signLive || { pos: lightbox.signPos || { x: 0.5, y: 0.16 }, scale: lightbox.signScale ?? 0.64 };
+              return (
+                <div
+                  onClick={e => e.stopPropagation()}
+                  onPointerDown={e => onSignPointerDown(e, "move")}
+                  onPointerMove={onSignPointerMove}
+                  onPointerUp={onSignPointerUp}
+                  style={{ position: "absolute", left: `${live.pos.x * 100}%`, top: `${live.pos.y * 100}%`, width: `${live.scale * 100}%`, transform: "translate(-50%,-50%)", cursor: signDragRef.current?.mode === "move" ? "grabbing" : "grab", touchAction: "none", pointerEvents: "all", zIndex: 6, userSelect: "none" }}
+                >
+                  <img src={lightbox.signImageUrl} draggable={false} style={{ width: "100%", display: "block", pointerEvents: "none", userSelect: "none" }} />
+                  <div style={{ position: "absolute", inset: 0, border: "1px dashed rgba(242,101,34,0.7)", pointerEvents: "none" }} />
+                  <div
+                    onClick={e => e.stopPropagation()}
+                    onPointerDown={e => onSignPointerDown(e, "resize")}
+                    onPointerMove={onSignPointerMove}
+                    onPointerUp={onSignPointerUp}
+                    style={{ position: "absolute", right: -11, bottom: -11, width: 22, height: 22, borderRadius: "50%", background: "#f26522", border: "2px solid #fff", boxShadow: "0 1px 5px rgba(0,0,0,0.7)", cursor: "nwse-resize", touchAction: "none" }}
+                  />
+                </div>
+              );
+            })()}
 
             {/* ── Debug YOLO bbox + corners overlay (only with ?plateDebug in URL) ── */}
             {!cropMode && !adjustMode && !lightbox.showroomDataURL && window.location.search.includes('plateDebug') && lightbox.yoloBbox && lightbox.imgW && (
