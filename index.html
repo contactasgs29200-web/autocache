@@ -8,6 +8,33 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@700&family=Cormorant+Garamond:wght@600&family=Bebas+Neue&family=Montserrat:wght@700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <style>
+      /* ── Thème NUIT (couleurs actuelles, par défaut) ── */
+      :root{
+        --c-1c1c1c:#1c1c1c; --c-161616:#161616; --c-141414:#141414; --c-121212:#121212;
+        --c-0e0e0e:#0e0e0e; --c-181818:#181818; --c-0a0a0a:#0a0a0a; --c-111:#111111;
+        --c-2a2a2a:#2a2a2a; --c-252525:#252525; --c-222:#222222; --c-1e1e1e:#1e1e1e;
+        --c-1a1a1a:#1a1a1a; --c-333:#333333; --c-282828:#282828; --c-3a1400:#3a1400;
+        --c-e0dbd4:#e0dbd4; --c-ddd5c8:#ddd5c8; --c-ddd:#dddddd; --c-ccc:#cccccc;
+        --c-bbb:#bbbbbb; --c-aaa:#aaaaaa; --c-9a9a9a:#9a9a9a; --c-888:#888888;
+        --c-777:#777777; --c-666:#666666; --c-555:#555555; --c-4a4a4a:#4a4a4a; --c-444:#444444;
+      }
+      /* ── Thème JOUR (couleurs claires) ── */
+      :root[data-theme="light"]{
+        --c-1c1c1c:#efece6; --c-161616:#ffffff; --c-141414:#ffffff; --c-121212:#ece8e1;
+        --c-0e0e0e:#e9e5dd; --c-181818:#efebe3; --c-0a0a0a:#e7e2d9; --c-111:#f6f3ed;
+        --c-2a2a2a:#d9d2c6; --c-252525:#ddd6ca; --c-222:#dbd4c8; --c-1e1e1e:#e2dbcf;
+        --c-1a1a1a:#e6dfd3; --c-333:#cdc4b6; --c-282828:#d3cbbd; --c-3a1400:#f2d8c3;
+        --c-e0dbd4:#1d1b18; --c-ddd5c8:#26241f; --c-ddd:#3a3530; --c-ccc:#4a453e;
+        --c-bbb:#595349; --c-aaa:#6b6459; --c-9a9a9a:#6f685c; --c-888:#7a7367;
+        --c-777:#857d70; --c-666:#8c8478; --c-555:#968d7f; --c-4a4a4a:#9a917f; --c-444:#b3ab9b;
+      }
+      html,body{ background:var(--c-1c1c1c); }
+    </style>
+    <script>
+      /* Applique le thème enregistré avant le premier rendu (évite un flash de couleur) */
+      try { document.documentElement.setAttribute("data-theme", localStorage.getItem("ac_theme") || "dark"); } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

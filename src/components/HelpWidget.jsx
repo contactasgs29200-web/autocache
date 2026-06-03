@@ -98,8 +98,8 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
               position: "absolute",
               bottom: 52,
               right: 0,
-              background: "#141414",
-              border: "1px solid #2a2a2a",
+              background: "var(--c-141414)",
+              border: "1px solid var(--c-2a2a2a)",
               borderRadius: 4,
               minWidth: 220,
               boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
@@ -113,12 +113,12 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                 style={{
                   display: "flex", alignItems: "center", gap: 10, width: "100%",
                   padding: "11px 16px", background: "transparent", border: "none",
-                  color: "#ddd", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
+                  color: "var(--c-ddd)", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
                   fontSize: 13, fontWeight: 600, letterSpacing: 1, textAlign: "left",
-                  borderBottom: i < items.length - 1 ? "1px solid #1a1a1a" : "none",
+                  borderBottom: i < items.length - 1 ? "1px solid var(--c-1a1a1a)" : "none",
                   transition: "background 0.12s",
                 }}
-                onMouseEnter={e => e.currentTarget.style.background = "#1a1a1a"}
+                onMouseEnter={e => e.currentTarget.style.background = "var(--c-1a1a1a)"}
                 onMouseLeave={e => e.currentTarget.style.background = "transparent"}
               >
                 <span style={{ fontSize: 15, width: 20, textAlign: "center" }}>{item.icon}</span>
@@ -173,7 +173,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              background: "#111", border: "1px solid #222", borderRadius: 6,
+              background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 6,
               width: "100%", maxWidth: 640,
               maxHeight: "90vh",
               display: "flex", flexDirection: "column",
@@ -184,7 +184,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
             <div
               style={{
                 padding: "20px 24px 16px",
-                borderBottom: "1px solid #1c1c1c",
+                borderBottom: "1px solid var(--c-1c1c1c)",
                 display: "flex", alignItems: "center", justifyContent: "space-between",
               }}
             >
@@ -192,11 +192,11 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                 <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
                   FAQ
                 </div>
-                <div style={{ fontSize: 14, color: "#ddd" }}>Questions fréquentes</div>
+                <div style={{ fontSize: 14, color: "var(--c-ddd)" }}>Questions fréquentes</div>
               </div>
               <button
                 onClick={() => setFaqOpen(false)}
-                style={{ background: "none", border: "none", color: "#ddd", fontSize: 21, cursor: "pointer", lineHeight: 1 }}
+                style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 21, cursor: "pointer", lineHeight: 1 }}
                 title="Fermer"
               >
                 ✕
@@ -208,7 +208,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
               {FAQ_ITEMS.map((item, i) => {
                 const open = expanded === i;
                 return (
-                  <div key={i} style={{ borderBottom: i < FAQ_ITEMS.length - 1 ? "1px solid #161616" : "none" }}>
+                  <div key={i} style={{ borderBottom: i < FAQ_ITEMS.length - 1 ? "1px solid var(--c-161616)" : "none" }}>
                     <button
                       onClick={() => setExpanded(open ? null : i)}
                       style={{
@@ -220,14 +220,14 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                         fontFamily: "'Rajdhani', sans-serif",
                         transition: "background 0.12s",
                       }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#161616"}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--c-161616)"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                     >
-                      <span style={{ fontSize: 15, fontWeight: 600, color: open ? "#f26522" : "#ddd5c8", letterSpacing: 0.3 }}>
+                      <span style={{ fontSize: 15, fontWeight: 600, color: open ? "#f26522" : "var(--c-ddd5c8)", letterSpacing: 0.3 }}>
                         {item.q}
                       </span>
                       <span style={{
-                        fontSize: 15, color: open ? "#f26522" : "#666",
+                        fontSize: 15, color: open ? "#f26522" : "var(--c-666)",
                         flexShrink: 0,
                         transform: open ? "rotate(45deg)" : "rotate(0)",
                         transition: "transform 0.2s ease",
@@ -240,7 +240,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                       <div style={{
                         padding: "0 24px 18px",
                         fontSize: 14,
-                        color: "#ddd",
+                        color: "var(--c-ddd)",
                         lineHeight: 1.7,
                       }}>
                         {item.a}
