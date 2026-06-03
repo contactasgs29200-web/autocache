@@ -1849,6 +1849,18 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   return dataUrl;
 }
 
+// Moyenne RGB + luminance sur les pixels opaques d'un ImageData (alpha ≥ 16).
+function _opaqueMean(data) {
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 16) continue;
+    r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+  }
+  if (!n) return null;
+  r /= n; g /= n; b /= n;
+  return { r, g, b, l: Math.max(1, 0.299 * r + 0.587 * g + 0.114 * b) };
+}
+
 async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, shadowMatteUrl = null, blend = 0, carBoundsHint = null) {
   const [bgImg, carImg, wallImg, shadowImg] = await Promise.all([
     loadImg(bgDataUrl),
@@ -2019,14 +2031,76 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+  let graded = false;
   if (blend > 0) {
     const t = Math.max(0, Math.min(100, blend)) / 100;
-    const bVal = (1 - 0.08 * t).toFixed(3); // brightness 1.0 → 0.92
-    const cVal = (1 - 0.12 * t).toFixed(3); // contrast   1.0 → 0.88
-    const sVal = (1 - 0.12 * t).toFixed(3); // saturation 1.0 → 0.88
-    ctx.filter = `brightness(${bVal}) contrast(${cVal}) saturate(${sVal})`;
+    // ── Fondu adaptatif : aligne l'exposition, la balance des blancs et la
+    //    saturation du véhicule sur l'ambiance lumineuse réelle du décor là où
+    //    il se pose. Corrige les gros écarts (voiture extérieure très lumineuse
+    //    posée dans un showroom intérieur sombre) pour un rendu cohérent. ──
+    let bgStats = null, carStats = null;
+    try {
+      const SS = 48;
+      const bw = bgImg.naturalWidth || bgImg.width;
+      const bh = bgImg.naturalHeight || bgImg.height;
+      const sxBg = bw / W, syBg = bh / H;
+      // Région du décor = boîte de la voiture élargie de 15 %, en coords natives du décor
+      const ex = cw * 0.15, ey = ch * 0.15;
+      let rx = (carX - ex) * sxBg, ry = (carY - ey) * syBg;
+      let rw = (cw + 2 * ex) * sxBg, rh = (ch + 2 * ey) * syBg;
+      rx = Math.max(0, Math.min(bw - 1, rx)); ry = Math.max(0, Math.min(bh - 1, ry));
+      rw = Math.max(1, Math.min(bw - rx, rw)); rh = Math.max(1, Math.min(bh - ry, rh));
+      const bgC = document.createElement('canvas'); bgC.width = SS; bgC.height = SS;
+      const bgCtx = bgC.getContext('2d');
+      bgCtx.drawImage(bgImg, rx, ry, rw, rh, 0, 0, SS, SS);
+      bgStats = _opaqueMean(bgCtx.getImageData(0, 0, SS, SS).data);
+      const carC = document.createElement('canvas'); carC.width = SS; carC.height = SS;
+      const carCtx = carC.getContext('2d');
+      carCtx.drawImage(carImg, 0, 0, SS, SS);
+      carStats = _opaqueMean(carCtx.getImageData(0, 0, SS, SS).data);
+    } catch (_) { /* fallback ci-dessous */ }
+
+    if (bgStats && carStats) try {
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const expW = 0.85 * t;   // rapprochement d'exposition (luminance)
+      const colW = 0.65 * t;   // rapprochement de teinte (balance des blancs)
+      let gExp = 1 + (bgStats.l / carStats.l - 1) * expW;
+      gExp = clamp(gExp, 0.4, 1.6);
+      const carCast = [carStats.r / carStats.l, carStats.g / carStats.l, carStats.b / carStats.l];
+      const bgCast  = [bgStats.r  / bgStats.l,  bgStats.g  / bgStats.l,  bgStats.b  / bgStats.l];
+      const gain = carCast.map((c, i) => gExp * clamp(1 + (bgCast[i] / c - 1) * colW, 0.7, 1.4));
+      const sat = 1 - 0.22 * t; // légère désaturation vers l'ambiance
+      const con = 1 - 0.12 * t; // léger adoucissement du contraste
+      const cw0 = carImg.naturalWidth || carImg.width;
+      const ch0 = carImg.naturalHeight || carImg.height;
+      const cc = document.createElement('canvas'); cc.width = cw0; cc.height = ch0;
+      const cctx = cc.getContext('2d');
+      cctx.drawImage(carImg, 0, 0);
+      const id = cctx.getImageData(0, 0, cw0, ch0);
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] === 0) continue;
+        let r = d[i] * gain[0], g = d[i + 1] * gain[1], b = d[i + 2] * gain[2];
+        r = (r - 128) * con + 128; g = (g - 128) * con + 128; b = (b - 128) * con + 128;
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = lum + (r - lum) * sat; g = lum + (g - lum) * sat; b = lum + (b - lum) * sat;
+        d[i]     = r < 0 ? 0 : r > 255 ? 255 : r;
+        d[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+        d[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+      }
+      cctx.putImageData(id, 0, 0);
+      ctx.drawImage(cc, carX, carY, cw, ch);
+      graded = true;
+    } catch (_) { graded = false; }
+    if (!graded) {
+      // Repli : filtre léger si l'échantillonnage/grading du décor échoue
+      const bVal = (1 - 0.08 * t).toFixed(3);
+      const cVal = (1 - 0.12 * t).toFixed(3);
+      const sVal = (1 - 0.12 * t).toFixed(3);
+      ctx.filter = `brightness(${bVal}) contrast(${cVal}) saturate(${sVal})`;
+    }
   }
-  ctx.drawImage(carImg, carX, carY, cw, ch);
+  if (!graded) ctx.drawImage(carImg, carX, carY, cw, ch);
   ctx.restore();
   // Snapshot avant plaque (pour Ajuster en mode showroom)
   const baseURL = returnFull ? c.toDataURL('image/jpeg', 0.97) : null;
