@@ -3,19 +3,26 @@ import { useState, useEffect, useRef, useCallback } from "react";
 const STORAGE_KEY = "autocache_game_hiscore";
 
 /* ── Game dimensions ──────────────────────────────────────────────────── */
-const ROAD_W = 360;
 const ROAD_H = 480;
 const CAR_W  = 38;
 const CAR_H  = 58;
-const LANE_PAD = 18;
+const EDGE   = 18;               // bordure (rail) de chaque côté
 const CAR_BOTTOM_MARGIN = 16;
 
-/* ── Lane system — 3 voies équidistantes ─────────────────────────────── */
-const LANE_COUNT = 3;
-const LANE_W = (ROAD_W - 2 * LANE_PAD) / LANE_COUNT;
-const LANE_X = Array.from({ length: LANE_COUNT }, (_, i) =>
-  LANE_PAD + LANE_W * (i + 0.5)
-);
+/* ── Lane system — la route démarre à 3 voies puis s'élargit à 5 ─────────
+ * Largeur de voie constante + route centrée : quand on passe de 3 à 5 voies,
+ * les 3 voies d'origine conservent exactement leur position et deux nouvelles
+ * voies apparaissent symétriquement (une à gauche, une à droite). */
+const LANE_W      = 72;
+const START_LANES = 3;
+const MAX_LANES   = 5;
+const ROAD_W      = MAX_LANES * LANE_W + 2 * EDGE; // largeur du canvas (5 voies max)
+const CENTER_X    = ROAD_W / 2;
+
+/* Centre en X d'une voie donnée pour un nombre de voies courant. */
+function laneCenterX(i, laneCount) {
+  return CENTER_X + (i - (laneCount - 1) / 2) * LANE_W;
+}
 
 /* ── Difficulty curves ────────────────────────────────────────────────── */
 const BASE_SPEED        = 130;   // px/s at t=0
@@ -24,6 +31,13 @@ const MAX_SPEED         = 520;
 const BASE_SPAWN_DELAY  = 1.30;
 const MIN_SPAWN_DELAY   = 0.40;
 const SPAWN_RAMP        = 0.018;
+
+/* ── Niveau 2 : débloqué une fois le score de 100 dépassé ─────────────────
+ * Deux voies supplémentaires s'ouvrent et le rythme s'accélère légèrement. */
+const LEVEL2_SCORE      = 100;   // score à dépasser
+const LEVEL2_SPEED_MULT = 1.10;  // un peu plus rapide
+const LEVEL2_SPAWN_MULT = 0.82;  // voitures un peu plus fréquentes
+const LEVELUP_FLASH_SEC = 1.6;   // durée de la bannière "niveau 2"
 
 /* Snap-to-lane animation speed (lerp factor 0..1 per frame) */
 const LANE_SNAP_RATE    = 0.22;
@@ -51,11 +65,14 @@ export default function LoadingGame({ gated = false }) {
   /* Game state kept out of React to avoid re-render thrash inside the loop. */
   const stateRef = useRef({
     lane:      1,                                  // current lane index (target)
-    carX:      LANE_X[1],                          // smooth-interpolated x
+    carX:      laneCenterX(1, START_LANES),        // smooth-interpolated x
     obstacles: [],                                 // [{ lane, x, y, w, h, hue }]
     speed:     BASE_SPEED,
     elapsed:   0,
     lastSpawn: 0,
+    laneCount: START_LANES,                        // nombre de voies ouvertes
+    level:     1,                                  // 1 = 3 voies, 2 = 5 voies
+    flash:     0,                                  // secondes restantes de la bannière "niveau 2"
     rafId:     0,
     lastT:     0,
   });
@@ -67,11 +84,14 @@ export default function LoadingGame({ gated = false }) {
   /* ── Reset for a new round ────────────────────────────────────────────── */
   const resetState = useCallback(() => {
     stateRef.current.lane      = 1;
-    stateRef.current.carX      = LANE_X[1];
+    stateRef.current.carX      = laneCenterX(1, START_LANES);
     stateRef.current.obstacles = [];
     stateRef.current.speed     = BASE_SPEED;
     stateRef.current.elapsed   = 0;
     stateRef.current.lastSpawn = 0;
+    stateRef.current.laneCount = START_LANES;
+    stateRef.current.level     = 1;
+    stateRef.current.flash     = 0;
     stateRef.current.lastT     = performance.now();
   }, []);
 
@@ -84,7 +104,7 @@ export default function LoadingGame({ gated = false }) {
   /* ── Lane move ────────────────────────────────────────────────────────── */
   const moveLane = useCallback((dir) => {
     const s = stateRef.current;
-    s.lane = Math.max(0, Math.min(LANE_COUNT - 1, s.lane + dir));
+    s.lane = Math.max(0, Math.min(s.laneCount - 1, s.lane + dir));
   }, []);
 
   /* ── Keyboard ────────────────────────────────────────────────────────── */
@@ -141,19 +161,23 @@ export default function LoadingGame({ gated = false }) {
       const dt = Math.min(0.05, (t - s.lastT) / 1000);
       s.lastT = t;
       s.elapsed += dt;
-      s.speed = Math.min(MAX_SPEED, BASE_SPEED + SPEED_RAMP * s.elapsed);
+      if (s.flash > 0) s.flash = Math.max(0, s.flash - dt);
+
+      const speedMult = s.level >= 2 ? LEVEL2_SPEED_MULT : 1;
+      s.speed = Math.min(MAX_SPEED, (BASE_SPEED + SPEED_RAMP * s.elapsed) * speedMult);
 
       /* Animate car toward its target lane */
-      const targetX = LANE_X[s.lane];
+      const targetX = laneCenterX(s.lane, s.laneCount);
       s.carX += (targetX - s.carX) * LANE_SNAP_RATE;
 
       /* Spawn opposing white cars */
-      const spawnDelay = Math.max(MIN_SPAWN_DELAY, BASE_SPAWN_DELAY - SPAWN_RAMP * s.elapsed);
+      const spawnMult  = s.level >= 2 ? LEVEL2_SPAWN_MULT : 1;
+      const spawnDelay = Math.max(MIN_SPAWN_DELAY, (BASE_SPAWN_DELAY - SPAWN_RAMP * s.elapsed) * spawnMult);
       if (s.elapsed - s.lastSpawn >= spawnDelay) {
-        const lane = Math.floor(Math.random() * LANE_COUNT);
+        const lane = Math.floor(Math.random() * s.laneCount);
         s.obstacles.push({
           lane,
-          x: LANE_X[lane],
+          x: laneCenterX(lane, s.laneCount),
           y: -CAR_H,
           w: CAR_W,
           h: CAR_H,
@@ -182,23 +206,40 @@ export default function LoadingGame({ gated = false }) {
       const newScore = Math.floor(s.elapsed * 10);
       setScore(newScore);
 
-      /* ── Render ────────────────────────────────────────────────────── */
-      // Road background
-      ctx.fillStyle = "#0e0e0e";
-      ctx.fillRect(0, 0, ROAD_W, ROAD_H);
+      /* Niveau 2 : dès que le score dépasse 100, deux voies s'ouvrent
+       * (une à gauche, une à droite) et le rythme s'accélère un peu. */
+      if (s.level < 2 && newScore > LEVEL2_SCORE) {
+        s.level     = 2;
+        s.laneCount = MAX_LANES;
+        s.lane     += 1;            // conserve la position physique (route élargie symétriquement)
+        s.flash     = LEVELUP_FLASH_SEC;
+      }
 
-      // Side rails
+      /* Bords de la route courante (centrée, élargie au niveau 2) */
+      const roadHalf  = (s.laneCount * LANE_W) / 2;
+      const roadLeft  = CENTER_X - roadHalf;
+      const roadRight = CENTER_X + roadHalf;
+
+      /* ── Render ────────────────────────────────────────────────────── */
+      // Hors-route (sombre) sur tout le canvas
+      ctx.fillStyle = "#060606";
+      ctx.fillRect(0, 0, ROAD_W, ROAD_H);
+      // Chaussée active
+      ctx.fillStyle = "#0e0e0e";
+      ctx.fillRect(roadLeft, 0, roadRight - roadLeft, ROAD_H);
+
+      // Side rails (bords de la chaussée active)
       ctx.fillStyle = "#181818";
-      ctx.fillRect(0, 0, LANE_PAD - 4, ROAD_H);
-      ctx.fillRect(ROAD_W - LANE_PAD + 4, 0, 4, ROAD_H);
+      ctx.fillRect(roadLeft, 0, 4, ROAD_H);
+      ctx.fillRect(roadRight - 4, 0, 4, ROAD_H);
 
       // Scrolling dashed lane lines
       const dashH = 30, gap = 16;
       const cycle = dashH + gap;
       const offset = (s.elapsed * s.speed) % cycle;
       ctx.fillStyle = "#2a2a2a";
-      for (let i = 1; i < LANE_COUNT; i++) {
-        const lx = LANE_PAD + LANE_W * i;
+      for (let i = 1; i < s.laneCount; i++) {
+        const lx = roadLeft + LANE_W * i;
         for (let y = -cycle + offset; y < ROAD_H; y += cycle) {
           ctx.fillRect(lx - 1, y, 2, dashH);
         }
@@ -213,6 +254,21 @@ export default function LoadingGame({ gated = false }) {
       const cx = s.carX - CAR_W / 2;
       const cy = ROAD_H - CAR_BOTTOM_MARGIN - CAR_H;
       drawCar(ctx, cx, cy, CAR_W, CAR_H, "#f26522", false);
+
+      // Bannière "niveau 2" (fondu sortant)
+      if (s.flash > 0) {
+        const a = Math.min(1, s.flash / LEVELUP_FLASH_SEC);
+        ctx.save();
+        ctx.globalAlpha = a;
+        ctx.fillStyle = "#f26522";
+        ctx.textAlign = "center";
+        ctx.font = "700 26px 'Rajdhani', sans-serif";
+        ctx.fillText("NIVEAU 2", CENTER_X, ROAD_H / 2 - 8);
+        ctx.font = "700 13px 'JetBrains Mono', monospace";
+        ctx.fillStyle = "#ddd5c8";
+        ctx.fillText("5 VOIES · PLUS RAPIDE", CENTER_X, ROAD_H / 2 + 16);
+        ctx.restore();
+      }
 
       if (hit) {
         if (newScore > hiScore) {
