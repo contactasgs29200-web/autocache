@@ -470,7 +470,7 @@ export default function Tutorial({ onClose, isMobile }) {
           background: "rgba(20,20,20,0.96)",
           backdropFilter: "blur(8px)",
           WebkitBackdropFilter: "blur(8px)",
-          border: "1px solid #2a2a2a",
+          border: "1px solid var(--c-2a2a2a)",
           borderRadius: 8,
           boxShadow: "0 16px 60px rgba(0,0,0,0.8)",
           fontFamily: "'Rajdhani', sans-serif",
@@ -483,7 +483,7 @@ export default function Tutorial({ onClose, isMobile }) {
         {/* Header */}
         <div style={{
           padding: "16px 20px 12px",
-          borderBottom: "1px solid #1c1c1c",
+          borderBottom: "1px solid var(--c-1c1c1c)",
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -495,12 +495,12 @@ export default function Tutorial({ onClose, isMobile }) {
             }}>
               {current.icon}
             </div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#ddd5c8", letterSpacing: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "var(--c-ddd5c8)", letterSpacing: 1 }}>
               {current.title}
             </div>
           </div>
           <button onClick={skip} style={{
-            background: "transparent", border: "none", color: "#ddd",
+            background: "transparent", border: "none", color: "var(--c-ddd)",
             cursor: "pointer", fontSize: 17, padding: "2px 6px", lineHeight: 1,
           }} title="Fermer">
             ✕
@@ -510,7 +510,7 @@ export default function Tutorial({ onClose, isMobile }) {
         {/* Body */}
         <div style={{ padding: "14px 20px 16px" }}>
           <p style={{
-            fontSize: 14, color: "#ddd", lineHeight: 1.7,
+            fontSize: 14, color: "var(--c-ddd)", lineHeight: 1.7,
             margin: 0, fontFamily: "'Rajdhani', sans-serif",
           }}>
             {current.body}
@@ -520,14 +520,14 @@ export default function Tutorial({ onClose, isMobile }) {
         {/* Footer: dots + buttons */}
         <div style={{
           padding: "10px 20px 14px",
-          borderTop: "1px solid #1c1c1c",
+          borderTop: "1px solid var(--c-1c1c1c)",
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
             {STEPS.map((_, i) => (
               <div key={i} style={{
                 width: i === step ? 14 : 5, height: 5, borderRadius: 3,
-                background: i <= step ? "#f26522" : "#2a2a2a",
+                background: i <= step ? "#f26522" : "var(--c-2a2a2a)",
                 opacity: i < step ? 0.4 : 1,
                 transition: "all 0.3s ease",
               }} />
@@ -537,15 +537,15 @@ export default function Tutorial({ onClose, isMobile }) {
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {!isFirst && (
               <button onClick={prev} style={{
-                background: "transparent", border: "1px solid #2a2a2a",
-                color: "#ddd", padding: "6px 14px", cursor: "pointer",
+                background: "transparent", border: "1px solid var(--c-2a2a2a)",
+                color: "var(--c-ddd)", padding: "6px 14px", cursor: "pointer",
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 3,
               }}>Précédent</button>
             )}
             {isFirst && (
               <button onClick={skip} style={{
-                background: "transparent", border: "none", color: "#ddd",
+                background: "transparent", border: "none", color: "var(--c-ddd)",
                 padding: "6px 10px", cursor: "pointer",
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 11, letterSpacing: 1, textTransform: "uppercase",
@@ -566,7 +566,7 @@ export default function Tutorial({ onClose, isMobile }) {
         {/* Step counter */}
         <div style={{
           position: "absolute", top: 18, right: 44,
-          fontSize: 10, color: "#ddd",
+          fontSize: 10, color: "var(--c-ddd)",
           fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1,
         }}>
           {step + 1}/{STEPS.length}

@@ -2765,7 +2765,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
 const Slider = ({ label, value, min, max, step, onChange }) => (
   <div style={{ marginBottom: 18 }}>
     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-      <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>{label}</span>
+      <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>{label}</span>
       <span style={{ fontSize: 12, color: "#f26522", fontFamily: "'JetBrains Mono',monospace" }}>{value.toFixed(2)}</span>
     </div>
     <input type="range" min={min} max={max} step={step} value={value}
@@ -2822,22 +2822,22 @@ function AuthScreen({ onAuth }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#1c1c1c", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
-      <div style={{ width: 380, padding: 40, background: "#161616", border: "1px solid #252525", borderRadius: 4 }}>
+    <div style={{ minHeight: "100vh", background: "var(--c-1c1c1c)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+      <div style={{ width: 380, padding: 40, background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 4 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
           <svg width="22" height="22" viewBox="0 0 22 22">
             <polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" />
             <polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#0f0f0f" />
           </svg>
-          <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", color: "#ddd5c8" }}>AutoCache</span>
+          <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", color: "var(--c-ddd5c8)" }}>AutoCache</span>
           <span style={{ fontSize: 10, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace" }}>PRO</span>
         </div>
-        <div style={{ display: "flex", marginBottom: 28, borderBottom: "1px solid #1c1c1c" }}>
+        <div style={{ display: "flex", marginBottom: 28, borderBottom: "1px solid var(--c-1c1c1c)" }}>
           {[["login", "Connexion"], ["signup", "Inscription"]].map(([m, label]) => (
             <button key={m} onClick={() => { setMode(m); setError(""); setSuccess(""); }} style={{
               flex: 1, background: "transparent", border: "none",
               borderBottom: mode === m ? "2px solid #f26522" : "2px solid transparent",
-              color: mode === m ? "#ddd5c8" : "#444", padding: "10px 0",
+              color: mode === m ? "var(--c-ddd5c8)" : "var(--c-444)", padding: "10px 0",
               cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
               fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase",
               transition: "all 0.15s", marginBottom: -1
@@ -2856,12 +2856,12 @@ function AuthScreen({ onAuth }) {
           const effectiveType = isPassword && showPassword ? "text" : type;
           return (
             <div key={label} style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 10, letterSpacing: 2, color: "#ddd", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: 10, letterSpacing: 2, color: "var(--c-ddd)", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
               <div style={{ position: "relative" }}>
                 <input type={effectiveType} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()}
                   placeholder={type === "tel" ? "06 12 34 56 78" : ""}
                   autoComplete={isPassword ? (mode === "signup" ? "new-password" : "current-password") : undefined}
-                  style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: isPassword ? "10px 44px 10px 12px" : "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                  style={{ width: "100%", background: "var(--c-1a1a1a)", border: "1px solid var(--c-222)", color: "var(--c-ddd5c8)", padding: isPassword ? "10px 44px 10px 12px" : "10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
                 {isPassword && (
                   <button
                     type="button"
@@ -2871,7 +2871,7 @@ function AuthScreen({ onAuth }) {
                     style={{
                       position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
                       background: "transparent", border: "none", padding: "6px 8px",
-                      cursor: "pointer", color: showPassword ? "#f26522" : "#ddd",
+                      cursor: "pointer", color: showPassword ? "#f26522" : "var(--c-ddd)",
                       fontSize: 17, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
                       minHeight: "unset",
                     }}
@@ -2887,10 +2887,10 @@ function AuthScreen({ onAuth }) {
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 18, marginTop: 4 }}>
             <div
               onClick={() => setCgvAccepted(p => !p)}
-              style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${cgvAccepted ? "#f26522" : "#444"}`, background: cgvAccepted ? "#f26522" : "transparent", flexShrink: 0, marginTop: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${cgvAccepted ? "#f26522" : "var(--c-444)"}`, background: cgvAccepted ? "#f26522" : "transparent", flexShrink: 0, marginTop: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
               {cgvAccepted && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
             </div>
-            <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
+            <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
               J'ai lu et j'accepte les{" "}
               <a href="/cgv.html" target="_blank" style={{ color: "#f26522", textDecoration: "none" }}>CGV</a>
               {" "}et la{" "}
@@ -2908,7 +2908,7 @@ function AuthScreen({ onAuth }) {
           </div>
         )}
         {mode === "reset" && (
-          <div style={{ fontSize: 11, color: "#ddd", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.5 }}>
+          <div style={{ fontSize: 11, color: "var(--c-ddd)", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.5 }}>
             Entrez votre email. Vous recevrez un lien pour réinitialiser votre mot de passe.
           </div>
         )}
@@ -2926,14 +2926,14 @@ function AuthScreen({ onAuth }) {
         {mode === "reset" && (
           <div style={{ textAlign: "center", marginTop: 14 }}>
             <span onClick={() => { setMode("login"); setError(""); setSuccess(""); }}
-              style={{ fontSize: 11, color: "#ddd", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
+              style={{ fontSize: 11, color: "var(--c-ddd)", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
               ← Retour à la connexion
             </span>
           </div>
         )}
-        <div style={{ marginTop: 28, paddingTop: 18, borderTop: "1px solid #1a1a1a", textAlign: "center", fontSize: 10, color: "#4a4a4a", fontFamily: "'JetBrains Mono',monospace", lineHeight: 2, letterSpacing: 1 }}>
-          <a href="/cgv.html" target="_blank" style={{ color: "#4a4a4a", textDecoration: "none", marginRight: 16 }}>CGV & Mentions légales</a>
-          <a href="/politique-confidentialite.html" target="_blank" style={{ color: "#4a4a4a", textDecoration: "none" }}>Politique de confidentialité</a>
+        <div style={{ marginTop: 28, paddingTop: 18, borderTop: "1px solid var(--c-1a1a1a)", textAlign: "center", fontSize: 10, color: "var(--c-4a4a4a)", fontFamily: "'JetBrains Mono',monospace", lineHeight: 2, letterSpacing: 1 }}>
+          <a href="/cgv.html" target="_blank" style={{ color: "var(--c-4a4a4a)", textDecoration: "none", marginRight: 16 }}>CGV & Mentions légales</a>
+          <a href="/politique-confidentialite.html" target="_blank" style={{ color: "var(--c-4a4a4a)", textDecoration: "none" }}>Politique de confidentialité</a>
         </div>
       </div>
     </div>
@@ -3061,6 +3061,8 @@ export default function AutoCache() {
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
   const [settingsOpen, setSettingsOpen] = useState(false); // menu settings en haut à droite
   const settingsRef = useRef(null); // ref pour fermer au clic extérieur
+  // Thème de l'interface : "dark" (nuit, couleurs actuelles) ou "light" (jour)
+  const [theme, setTheme] = useState(() => (typeof localStorage !== "undefined" && localStorage.getItem("ac_theme")) || "dark");
   const logoRef        = useRef();
   const logoCropContainerRef = useRef(null);
   const photosRef      = useRef();
@@ -3276,6 +3278,12 @@ export default function AutoCache() {
       events.forEach(e => window.removeEventListener(e, reset));
     };
   }, [user]);
+
+  // Applique le thème (jour/nuit) sur <html> et le persiste
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("ac_theme", theme); } catch {}
+  }, [theme]);
 
   // Fermer le menu settings au clic extérieur
   useEffect(() => {
@@ -3803,29 +3811,29 @@ export default function AutoCache() {
           <div key={f.key}
             onMouseEnter={() => setHoveredPlan(f.key)}
             onMouseLeave={() => setHoveredPlan(null)}
-            style={{ display: "flex", flexDirection: "column", background: hot ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${hot ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 20px", position: "relative", transform: hoveredPlan === f.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
+            style={{ display: "flex", flexDirection: "column", background: hot ? "rgba(242,101,34,0.05)" : "var(--c-0e0e0e)", border: `1px solid ${hot ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 6, padding: "24px 20px", position: "relative", transform: hoveredPlan === f.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
             {f.badge && (
               <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{f.badge}</div>
             )}
-            <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: hot ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 2 }}>{f.name}</div>
-            <div style={{ fontSize: 9, color: "#777", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>{f.tag}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: hot ? "#f26522" : "var(--c-aaa)", textTransform: "uppercase", marginBottom: 2 }}>{f.name}</div>
+            <div style={{ fontSize: 9, color: "var(--c-777)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>{f.tag}</div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 4 }}>
-              <span style={{ fontSize: 22, fontWeight: 700, color: hot ? "#f26522" : "#e0dbd4" }}>{f.price}</span>
-              <span style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>{f.period}</span>
+              <span style={{ fontSize: 22, fontWeight: 700, color: hot ? "#f26522" : "var(--c-e0dbd4)" }}>{f.price}</span>
+              <span style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>{f.period}</span>
             </div>
-            <div style={{ fontSize: 9.5, color: "#888", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5, marginBottom: 16, minHeight: 26 }}>{f.note}</div>
+            <div style={{ fontSize: 9.5, color: "var(--c-888)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5, marginBottom: 16, minHeight: 26 }}>{f.note}</div>
             <div style={{ marginBottom: 20 }}>
               {SUBSCRIPTION_FEATURES.map((label, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
                   <span style={{ fontSize: 12, color: "#27ae60", flexShrink: 0 }}>✓</span>
-                  <span style={{ fontSize: 11, color: "#bbb", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{label}</span>
+                  <span style={{ fontSize: 11, color: "var(--c-bbb)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{label}</span>
                 </div>
               ))}
             </div>
             <button
               disabled={checkoutLoading === f.key}
               onClick={() => startCheckout(f.key)}
-              style={{ width: "100%", marginTop: "auto", background: hot ? "#f26522" : "transparent", color: hot ? "#090909" : "#888", border: `1px solid ${hot ? "#f26522" : "#333"}`, padding: "11px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              style={{ width: "100%", marginTop: "auto", background: hot ? "#f26522" : "transparent", color: hot ? "#090909" : "var(--c-888)", border: `1px solid ${hot ? "#f26522" : "var(--c-333)"}`, padding: "11px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
               {checkoutLoading === f.key ? "Redirection..." : `Choisir ${f.name}`}
             </button>
           </div>
@@ -4382,7 +4390,7 @@ export default function AutoCache() {
   }, [adjustMode, lightbox?.baseDataURL, lightbox?.showroomBaseURL]);
 
   if (authLoading) return (
-    <div style={{ minHeight: "100vh", background: "#1c1c1c", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div style={{ minHeight: "100vh", background: "var(--c-1c1c1c)", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ color: "#f26522", fontFamily: "'JetBrains Mono',monospace", fontSize: 12, letterSpacing: 3 }}>CHARGEMENT...</div>
     </div>
   );
@@ -4401,26 +4409,26 @@ export default function AutoCache() {
       setRecoveryLoading(false);
     };
     return (
-      <div style={{ minHeight: "100vh", background: "#1c1c1c", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
-        <div style={{ width: 380, padding: 40, background: "#161616", border: "1px solid #252525", borderRadius: 4 }}>
+      <div style={{ minHeight: "100vh", background: "var(--c-1c1c1c)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+        <div style={{ width: 380, padding: 40, background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 4 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
             <svg width="22" height="22" viewBox="0 0 22 22">
               <polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" />
               <polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#0f0f0f" />
             </svg>
-            <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", color: "#ddd5c8" }}>AutoCache</span>
+            <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", color: "var(--c-ddd5c8)" }}>AutoCache</span>
             <span style={{ fontSize: 10, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace" }}>PRO</span>
           </div>
-          <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: 2, color: "#ddd5c8", textTransform: "uppercase", marginBottom: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: 2, color: "var(--c-ddd5c8)", textTransform: "uppercase", marginBottom: 24, textAlign: "center" }}>
             Nouveau mot de passe
           </div>
           {[["Nouveau mot de passe", newPassword, setNewPassword], ["Confirmer le mot de passe", newPasswordConfirm, setNewPasswordConfirm]].map(([label, val, set]) => (
             <div key={label} style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 10, letterSpacing: 2, color: "#ddd", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: 10, letterSpacing: 2, color: "var(--c-ddd)", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>{label}</div>
               <div style={{ position: "relative" }}>
                 <input type={showRecoveryPassword ? "text" : "password"} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && submitNewPassword()}
                   autoComplete="new-password"
-                  style={{ width: "100%", background: "#1a1a1a", border: "1px solid #222", color: "#ddd5c8", padding: "10px 44px 10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                  style={{ width: "100%", background: "var(--c-1a1a1a)", border: "1px solid var(--c-222)", color: "var(--c-ddd5c8)", padding: "10px 44px 10px 12px", borderRadius: 3, fontFamily: "'JetBrains Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
                 <button
                   type="button"
                   onClick={() => setShowRecoveryPassword(p => !p)}
@@ -4429,7 +4437,7 @@ export default function AutoCache() {
                   style={{
                     position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
                     background: "transparent", border: "none", padding: "6px 8px",
-                    cursor: "pointer", color: showRecoveryPassword ? "#f26522" : "#ddd",
+                    cursor: "pointer", color: showRecoveryPassword ? "#f26522" : "var(--c-ddd)",
                     fontSize: 17, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
                     minHeight: "unset",
                   }}
@@ -4461,9 +4469,10 @@ export default function AutoCache() {
     <div>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        /* Variables de thème (jour/nuit) définies dans index.html */
         *{box-sizing:border-box;margin:0;padding:0;}
-        html,body{overflow-x:hidden;max-width:100%;}
-        input[type=range]{-webkit-appearance:none;height:2px;background:#252525;border-radius:1px;outline:none;width:100%;}
+        html,body{overflow-x:hidden;max-width:100%;background:var(--c-1c1c1c);}
+        input[type=range]{-webkit-appearance:none;height:2px;background:var(--c-252525);border-radius:1px;outline:none;width:100%;}
         input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#f26522;cursor:pointer;}
         ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:#f26522;border-radius:2px;}
         @media(max-width:767px){
@@ -4476,8 +4485,8 @@ export default function AutoCache() {
         @-webkit-keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         .ac-spinner{animation:ac-spin 0.7s linear infinite;-webkit-animation:ac-spin 0.7s linear infinite;}
       `}</style>
-      <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "#1c1c1c", minHeight: "100vh", color: "#e0dbd4", overflowX: "hidden", maxWidth: "100vw" }}>
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: isMobile ? "0 12px" : "0 28px", height: 56, borderBottom: "1px solid #1e1e1e", position: "sticky", top: 0, background: "#1c1c1c", zIndex: 10 }}>
+      <div style={{ fontFamily: "'Rajdhani',sans-serif", background: "var(--c-1c1c1c)", minHeight: "100vh", color: "var(--c-e0dbd4)", overflowX: "hidden", maxWidth: "100vw" }}>
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: isMobile ? "0 12px" : "0 28px", height: 56, borderBottom: "1px solid var(--c-1e1e1e)", position: "sticky", top: 0, background: "var(--c-1c1c1c)", zIndex: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <svg width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
             <span style={{ fontSize: isMobile ? 16 : 20, fontWeight: 700, letterSpacing: isMobile ? 2 : 4, textTransform: "uppercase" }}>AutoCache</span>
@@ -4485,9 +4494,9 @@ export default function AutoCache() {
           </div>
           <nav style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 8 }}>
             {[["setup", isMobile ? "Config" : "Configuration"], ["results", `Résultats${results.length ? ` · ${results.length}` : ""}`]].map(([t, label]) => (
-              <button key={t} onClick={() => setTab(t)} {...(t === "results" ? { "data-tutorial": "results-tab" } : {})} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "#777", border: "none", padding: isMobile ? "7px 10px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 12 : 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", minHeight: "unset" }}>{label}</button>
+              <button key={t} onClick={() => setTab(t)} {...(t === "results" ? { "data-tutorial": "results-tab" } : {})} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "var(--c-777)", border: "none", padding: isMobile ? "7px 10px" : "7px 18px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 12 : 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", minHeight: "unset" }}>{label}</button>
             ))}
-            {!isMobile && <div style={{ width: 1, height: 20, background: "#252525", margin: "0 4px" }} />}
+            {!isMobile && <div style={{ width: 1, height: 20, background: "var(--c-252525)", margin: "0 4px" }} />}
             {/* ── Compteur crédits + popup abonnement ── */}
             {(() => {
               const used = user?.user_metadata?.photos_used ?? 0;
@@ -4502,10 +4511,10 @@ export default function AutoCache() {
                     setShowCreditPopup(next);
                     if (next && userPlan !== 'trial') fetchSubInfo();
                   }}
-                    style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "4px 6px" : "4px 10px", borderRadius: 2, border: `1px solid ${isExpired ? "#c0392b" : showCreditPopup ? "#f26522" : "#2a2a2a"}`, cursor: "pointer", background: isExpired ? "rgba(192,57,43,0.08)" : showCreditPopup ? "rgba(242,101,34,0.06)" : "transparent", transition: "all 0.15s" }}
+                    style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "4px 6px" : "4px 10px", borderRadius: 2, border: `1px solid ${isExpired ? "#c0392b" : showCreditPopup ? "#f26522" : "var(--c-2a2a2a)"}`, cursor: "pointer", background: isExpired ? "rgba(192,57,43,0.08)" : showCreditPopup ? "rgba(242,101,34,0.06)" : "transparent", transition: "all 0.15s" }}
                     title="Cliquez pour voir les détails"
                   >
-                    <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: isExpired ? "#c0392b" : isLow ? "#f26522" : "#666", letterSpacing: 1 }}>
+                    <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: isExpired ? "#c0392b" : isLow ? "#f26522" : "var(--c-666)", letterSpacing: 1 }}>
                       {isExpired
                         ? (isMobile ? "ÉPUISÉ" : `${PLAN_LABEL} ÉPUISÉ`)
                         : (isMobile ? `${left}/${PLAN_LIMIT}` : `${PLAN_LABEL} · ${left}/${PLAN_LIMIT}`)}
@@ -4514,12 +4523,12 @@ export default function AutoCache() {
                   {showCreditPopup && (
                     <div onClick={e => e.stopPropagation()} style={{
                       position: "fixed", top: 56, right: isMobile ? 4 : 60,
-                      background: "#141414", border: "1px solid #2a2a2a", borderRadius: 6,
+                      background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6,
                       minWidth: 280, maxWidth: "92vw", boxShadow: "0 12px 40px rgba(0,0,0,0.7)", zIndex: 3000,
                       fontFamily: "'Rajdhani',sans-serif", overflow: "hidden",
                     }}>
                       {/* En-tete plan + credits */}
-                      <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid #1c1c1c" }}>
+                      <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid var(--c-1c1c1c)" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                           <div style={{ fontSize: 11, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>
                             {(() => {
@@ -4528,12 +4537,12 @@ export default function AutoCache() {
                               return `Abonnement${fk && FORMULE_LABELS[fk] ? " · " + FORMULE_LABELS[fk] : ""}`;
                             })()}
                           </div>
-                          <div onClick={() => setShowCreditPopup(false)} style={{ color: "#ddd", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "2px 4px" }}>✕</div>
+                          <div onClick={() => setShowCreditPopup(false)} style={{ color: "var(--c-ddd)", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "2px 4px" }}>✕</div>
                         </div>
-                        <div style={{ fontSize: 14, color: "#ddd", marginBottom: 8 }}>
+                        <div style={{ fontSize: 14, color: "var(--c-ddd)", marginBottom: 8 }}>
                           {left} / {PLAN_LIMIT} photo{PLAN_LIMIT > 1 ? "s" : ""} restante{left > 1 ? "s" : ""}
                         </div>
-                        <div style={{ height: 4, background: "#252525", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ height: 4, background: "var(--c-252525)", borderRadius: 2, overflow: "hidden" }}>
                           <div style={{ height: "100%", width: `${Math.max(2, Math.round((left / PLAN_LIMIT) * 100))}%`, background: isExpired ? "#c0392b" : isLow ? "#f26522" : "#22c55e", borderRadius: 2, transition: "width 0.3s" }} />
                         </div>
                         {isExpired && (
@@ -4549,23 +4558,23 @@ export default function AutoCache() {
                       {userPlan !== 'trial' && (
                         <div style={{ padding: "12px 16px" }}>
                           {subInfoLoading ? (
-                            <div style={{ fontSize: 13, color: "#ddd", textAlign: "center", padding: "4px 0" }}>Chargement...</div>
+                            <div style={{ fontSize: 13, color: "var(--c-ddd)", textAlign: "center", padding: "4px 0" }}>Chargement...</div>
                           ) : subInfo?.periodEnd ? (
-                            <div style={{ fontSize: 13, color: "#ddd" }}>
+                            <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                                <span style={{ color: "#ddd" }}>Debut du cycle</span>
-                                <span style={{ color: "#ddd", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }}>
+                                <span style={{ color: "var(--c-ddd)" }}>Debut du cycle</span>
+                                <span style={{ color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }}>
                                   {subInfo.periodStart.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
                                 </span>
                               </div>
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                                <span style={{ color: "#ddd" }}>Prochain paiement</span>
-                                <span style={{ color: "#ddd", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }}>
+                                <span style={{ color: "var(--c-ddd)" }}>Prochain paiement</span>
+                                <span style={{ color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", fontSize: 12 }}>
                                   {subInfo.periodEnd.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
                                 </span>
                               </div>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                <span style={{ color: "#ddd" }}>Renouvellement</span>
+                                <span style={{ color: "var(--c-ddd)" }}>Renouvellement</span>
                                 <span style={{
                                   color: subInfo.daysLeft <= 3 ? "#f26522" : "#22c55e",
                                   fontFamily: "'JetBrains Mono',monospace", fontSize: 13, fontWeight: 700,
@@ -4575,15 +4584,15 @@ export default function AutoCache() {
                               </div>
                             </div>
                           ) : subInfo?.hasSubscription === false ? (
-                            <div style={{ fontSize: 13, color: "#ddd" }}>Credits via code promo.</div>
+                            <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Credits via code promo.</div>
                           ) : (
-                            <div style={{ fontSize: 13, color: "#ddd" }}>Informations indisponibles.</div>
+                            <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Informations indisponibles.</div>
                           )}
                         </div>
                       )}
                       {/* Lien abonnement pour les utilisateurs trial */}
                       {userPlan === 'trial' && (
-                        <div style={{ padding: "10px 16px", borderTop: "1px solid #1c1c1c" }}>
+                        <div style={{ padding: "10px 16px", borderTop: "1px solid var(--c-1c1c1c)" }}>
                           <button onClick={() => { setShowCreditPopup(false); setShowPlansModal(true); }}
                             style={{ width: "100%", background: "transparent", color: "#f26522", border: "1px solid #f26522", borderRadius: 4, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>
                             VOIR LES PLANS
@@ -4598,7 +4607,7 @@ export default function AutoCache() {
             {/* ── Bouton Settings + Menu déroulant ── */}
             <div ref={settingsRef} style={{ position: "relative" }}>
               <button onClick={() => setSettingsOpen(o => !o)}
-                style={{ background: settingsOpen ? "#1e1e1e" : "transparent", border: `1px solid ${settingsOpen ? "#f26522" : "#282828"}`, color: settingsOpen ? "#f26522" : "#777", padding: "5px 10px", cursor: "pointer", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace", fontSize: 14, display: "flex", alignItems: "center", gap: 5, minHeight: "unset" }}
+                style={{ background: settingsOpen ? "var(--c-1e1e1e)" : "transparent", border: `1px solid ${settingsOpen ? "#f26522" : "var(--c-282828)"}`, color: settingsOpen ? "#f26522" : "var(--c-777)", padding: "5px 10px", cursor: "pointer", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace", fontSize: 14, display: "flex", alignItems: "center", gap: 5, minHeight: "unset" }}
                 title="Paramètres"
               >
                 <span style={{ fontSize: 15 }}>⚙</span>
@@ -4607,16 +4616,35 @@ export default function AutoCache() {
               {settingsOpen && (
                 <div style={{
                   position: "fixed", top: 56, right: 0,
-                  background: "#141414", border: "1px solid #2a2a2a", borderRadius: 4,
+                  background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 4,
                   minWidth: 220, maxWidth: "92vw", boxShadow: "0 8px 32px rgba(0,0,0,0.6)", zIndex: 2000,
                   overflow: "hidden",
                 }}>
                   {/* En-tête utilisateur */}
-                  <div style={{ padding: "12px 16px", borderBottom: "1px solid #222", background: "#111" }}>
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--c-222)", background: "var(--c-111)" }}>
                     {user.user_metadata?.full_name && (
-                      <div style={{ fontSize: 13, color: "#ddd5c8", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>{user.user_metadata.full_name}</div>
+                      <div style={{ fontSize: 13, color: "var(--c-ddd5c8)", fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>{user.user_metadata.full_name}</div>
                     )}
-                    <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
+                    <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
+                  </div>
+                  {/* Apparence : bascule Jour / Nuit */}
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--c-222)" }}>
+                    <div style={{ fontSize: 10, letterSpacing: 2, color: "var(--c-888)", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Apparence</div>
+                    <div style={{ display: "flex", background: "var(--c-121212)", border: "1px solid var(--c-2a2a2a)", borderRadius: 4, overflow: "hidden" }}>
+                      {[["light", "☀", "Jour"], ["dark", "☾", "Nuit"]].map(([mode, icon, label]) => (
+                        <button key={mode} onClick={() => setTheme(mode)}
+                          style={{
+                            flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                            background: theme === mode ? "#f26522" : "transparent",
+                            color: theme === mode ? "#090909" : "var(--c-aaa)",
+                            border: "none", padding: "7px 0", cursor: "pointer",
+                            fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700,
+                            letterSpacing: 1, textTransform: "uppercase", minHeight: "unset",
+                          }}>
+                          <span style={{ fontSize: 14, lineHeight: 1 }}>{icon}</span>{label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   {/* Menu items */}
                   {[
@@ -4631,19 +4659,19 @@ export default function AutoCache() {
                       style={{
                         display: "flex", alignItems: "center", gap: 10, width: "100%",
                         padding: "10px 16px", background: "transparent", border: "none",
-                        color: "#ddd", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
+                        color: "var(--c-ddd)", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
                         fontSize: 13, fontWeight: 600, letterSpacing: 1, textAlign: "left",
-                        borderBottom: "1px solid #1a1a1a", transition: "background 0.1s",
+                        borderBottom: "1px solid var(--c-1a1a1a)", transition: "background 0.1s",
                       }}
-                      onMouseEnter={e => e.currentTarget.style.background = "#1a1a1a"}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--c-1a1a1a)"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                     >
-                      <span style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", color: "#9a9a9a" }}><SettingsIcon name={item.icon} /></span>
+                      <span style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--c-9a9a9a)" }}><SettingsIcon name={item.icon} /></span>
                       {item.label}
                     </button>
                   ))}
                   {/* Séparateur + Déconnexion */}
-                  <div style={{ height: 1, background: "#252525", margin: "2px 0" }} />
+                  <div style={{ height: 1, background: "var(--c-252525)", margin: "2px 0" }} />
                   <button onClick={() => { setSettingsOpen(false); logout(); }}
                     style={{
                       display: "flex", alignItems: "center", gap: 10, width: "100%",
@@ -4671,12 +4699,12 @@ export default function AutoCache() {
                 <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>01 — Cache plaque</div>
 
                 {/* ── Onglets Import / Générer ── */}
-                <div style={{ display: "flex", marginBottom: 14, background: "#121212", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ display: "flex", marginBottom: 14, background: "var(--c-121212)", border: "1px solid var(--c-252525)", borderRadius: 3, overflow: "hidden" }}>
                   {[["import","Mon logo"],["generate","Générer"]].map(([m, label]) => (
                     <button key={m} onClick={() => {
                       if (m === "import") { setLogo(importedLogo); setLogoOriginal(null); setLogoCropActive(false); }
                       setLogoMode(m);
-                    }} style={{ flex: 1, background: logoMode === m ? "#f26522" : "transparent", color: logoMode === m ? "#090909" : "#555", border: "none", padding: "8px 0", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>
+                    }} style={{ flex: 1, background: logoMode === m ? "#f26522" : "transparent", color: logoMode === m ? "#090909" : "var(--c-555)", border: "none", padding: "8px 0", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase" }}>
                       {label}
                     </button>
                   ))}
@@ -4684,23 +4712,23 @@ export default function AutoCache() {
 
                 {/* ── Mode : importer un fichier ── */}
                 {logoMode === "import" && (<>
-                  <div style={{ fontSize: 11, color: "#ddd", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>
+                  <div style={{ fontSize: 11, color: "var(--c-ddd)", marginBottom: 10, fontFamily: "'JetBrains Mono',monospace" }}>
                     {logo ? "✓ Logo chargé · cliquer pour changer" : "PNG avec transparence recommandé"}
                   </div>
                   {!logoCropActive && (
                     <div onDragOver={e => { e.preventDefault(); setDragOver("logo"); }} onDragLeave={() => setDragOver(null)}
                       onDrop={e => { e.preventDefault(); setDragOver(null); handleLogoFile(e.dataTransfer.files[0]); }}
                       onClick={() => logoRef.current?.click()}
-                      style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "#2a2a2a" : "#222"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "#161616" }}>
+                      style={{ border: `1px solid ${dragOver === "logo" ? "#f26522" : logo ? "var(--c-2a2a2a)" : "var(--c-222)"}`, borderRadius: 3, padding: 24, cursor: "pointer", minHeight: 130, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--c-161616)" }}>
                       {logo ? (
                         <div style={{ textAlign: "center" }}>
                           <img src={logo.preview} style={{ maxHeight: 80, maxWidth: "100%", objectFit: "contain", borderRadius: logoRadius > 0 ? `${Math.round(logoRadius * 4)}px` : 0 }} />
                           <div style={{ fontSize: 11, color: "#f26522", marginTop: 10 }}>Cliquer pour changer</div>
                         </div>
                       ) : (
-                        <div style={{ textAlign: "center", color: "#ddd" }}>
+                        <div style={{ textAlign: "center", color: "var(--c-ddd)" }}>
                           <div style={{ fontSize: 33, marginBottom: 8 }}>⬡</div>
-                          <div style={{ fontSize: 13, color: "#ddd" }}>Glisser votre logo ici</div>
+                          <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Glisser votre logo ici</div>
                         </div>
                       )}
                     </div>
@@ -4708,13 +4736,13 @@ export default function AutoCache() {
                   {logo && !logo.generated && !logoCropActive && (
                     <div style={{ marginTop: 8, textAlign: "center" }}>
                       <button onClick={() => { setLogoCropActive(true); setLogoCropBox({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 }); }}
-                        style={{ background: "#181818", color: "#f26522", border: "1px solid #3a1400", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                        style={{ background: "var(--c-181818)", color: "#f26522", border: "1px solid var(--c-3a1400)", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
                         ✂ Recadrer
                       </button>
                     </div>
                   )}
                   {logo && logoCropActive && (
-                    <div style={{ background: "#0a0a0a", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ background: "var(--c-0a0a0a)", border: "1px solid var(--c-252525)", borderRadius: 3, overflow: "hidden" }}>
                       <div ref={logoCropContainerRef}
                         onMouseMove={onLogoCropMove} onTouchMove={onLogoCropMove}
                         style={{ position: "relative", userSelect: "none", touchAction: "none" }}>
@@ -4744,11 +4772,11 @@ export default function AutoCache() {
                       </div>
                       <div style={{ display: "flex", gap: 8, padding: "10px 12px", justifyContent: "center" }}>
                         <button onClick={applyLogoCrop}
-                          style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                          style={{ background: "#2a6b2a", color: "var(--c-ddd5c8)", border: "1px solid #3a8a3a", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
                           Appliquer
                         </button>
                         <button onClick={() => { setLogoCropActive(false); setLogoCropBox({ x: 0, y: 0, w: 1, h: 1 }); }}
-                          style={{ background: "#181818", color: "#ddd", border: "1px solid #2a2a2a", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                          style={{ background: "var(--c-181818)", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
                           Annuler
                         </button>
                       </div>
@@ -4758,29 +4786,29 @@ export default function AutoCache() {
 
                 {/* ── Mode : générer texte + couleur ── */}
                 {logoMode === "generate" && (
-                  <div style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{ background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 3, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 14 }}>
 
                     {/* Texte */}
                     <div>
-                      <div style={{ fontSize: 10, color: "#ddd", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Texte du cache plaque</div>
+                      <div style={{ fontSize: 10, color: "var(--c-ddd)", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Texte du cache plaque</div>
                       <input
                         type="text" value={genText} onChange={e => setGenText(e.target.value)}
                         placeholder="Nom de votre garage"
-                        style={{ width: "100%", background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#ddd5c8", padding: "9px 10px", fontFamily: "'Rajdhani',sans-serif", fontSize: 17, fontWeight: 600, borderRadius: 2, outline: "none" }}
+                        style={{ width: "100%", background: "var(--c-1a1a1a)", border: "1px solid var(--c-2a2a2a)", color: "var(--c-ddd5c8)", padding: "9px 10px", fontFamily: "'Rajdhani',sans-serif", fontSize: 17, fontWeight: 600, borderRadius: 2, outline: "none" }}
                       />
                     </div>
 
                     {/* Police */}
                     <div>
-                      <div style={{ fontSize: 10, color: "#ddd", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 8, textTransform: "uppercase" }}>Police d'écriture</div>
+                      <div style={{ fontSize: 10, color: "var(--c-ddd)", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 8, textTransform: "uppercase" }}>Police d'écriture</div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
                         {LOGO_FONTS.map(f => (
                           <div key={f.key} onClick={() => setGenFont(f.key)}
-                            style={{ background: genFont === f.key ? "#1a1200" : "#1a1a1a", border: `1px solid ${genFont === f.key ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, padding: "8px 4px", cursor: "pointer", textAlign: "center", display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
-                            <span style={{ fontFamily: f.family, fontWeight: f.weight, fontSize: 16, color: genFont === f.key ? "#f26522" : "#aaa", lineHeight: 1 }}>
+                            style={{ background: genFont === f.key ? "#1a1200" : "var(--c-1a1a1a)", border: `1px solid ${genFont === f.key ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, padding: "8px 4px", cursor: "pointer", textAlign: "center", display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+                            <span style={{ fontFamily: f.family, fontWeight: f.weight, fontSize: 16, color: genFont === f.key ? "#f26522" : "var(--c-aaa)", lineHeight: 1 }}>
                               {(genText.trim() || "ABC").toUpperCase().slice(0, 4)}
                             </span>
-                            <span style={{ fontSize: 8, color: genFont === f.key ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase" }}>{f.label}</span>
+                            <span style={{ fontSize: 8, color: genFont === f.key ? "#f26522" : "var(--c-444)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase" }}>{f.label}</span>
                           </div>
                         ))}
                       </div>
@@ -4788,44 +4816,44 @@ export default function AutoCache() {
 
                     {/* Couleur de fond */}
                     <div>
-                      <div style={{ fontSize: 10, color: "#ddd", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur de fond</div>
+                      <div style={{ fontSize: 10, color: "var(--c-ddd)", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur de fond</div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                        {["#0d2b6b","#003399","#cc1414","#0d5c1e","#111111","#6b0d1a","#7c4700","#f26522"].map(col => (
+                        {["#0d2b6b","#003399","#cc1414","#0d5c1e","var(--c-111)","#6b0d1a","#7c4700","#f26522"].map(col => (
                           <div key={col} onClick={() => setGenBg(col)}
                             style={{ width: 26, height: 26, background: col, borderRadius: 3, cursor: "pointer", border: genBg === col ? "2px solid #f26522" : "2px solid transparent", flexShrink: 0 }} />
                         ))}
                         <input type="color" value={genBg} onChange={e => setGenBg(e.target.value)}
                           title="Couleur personnalisée"
-                          style={{ width: 26, height: 26, padding: 0, border: "1px solid #2a2a2a", borderRadius: 3, cursor: "pointer", background: "none" }} />
+                          style={{ width: 26, height: 26, padding: 0, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, cursor: "pointer", background: "none" }} />
                       </div>
                     </div>
 
                     {/* Couleur du texte */}
                     <div>
-                      <div style={{ fontSize: 10, color: "#ddd", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur du texte</div>
+                      <div style={{ fontSize: 10, color: "var(--c-ddd)", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Couleur du texte</div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         {["#ffffff","#ffcc00","#000000","#ff6600"].map(col => (
                           <div key={col} onClick={() => setGenFg(col)}
-                            style={{ width: 26, height: 26, background: col, borderRadius: 3, cursor: "pointer", border: genFg === col ? "2px solid #f26522" : "2px solid #2a2a2a", flexShrink: 0 }} />
+                            style={{ width: 26, height: 26, background: col, borderRadius: 3, cursor: "pointer", border: genFg === col ? "2px solid #f26522" : "2px solid var(--c-2a2a2a)", flexShrink: 0 }} />
                         ))}
                         <input type="color" value={genFg} onChange={e => setGenFg(e.target.value)}
                           title="Couleur personnalisée"
-                          style={{ width: 26, height: 26, padding: 0, border: "1px solid #2a2a2a", borderRadius: 3, cursor: "pointer", background: "none" }} />
+                          style={{ width: 26, height: 26, padding: 0, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, cursor: "pointer", background: "none" }} />
                       </div>
                     </div>
 
                     {/* Liseret (bordure) */}
                     <div>
-                      <div style={{ fontSize: 10, color: "#ddd", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Liseret (bordure)</div>
+                      <div style={{ fontSize: 10, color: "var(--c-ddd)", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 7, textTransform: "uppercase" }}>Liseret (bordure)</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                           {["#ffffff","#000000","#ffcc00","#c0c0c0","#f26522"].map(col => (
                             <div key={col} onClick={() => { setGenBorderColor(col); if (genBorderWidth === 0) setGenBorderWidth(3); }}
-                              style={{ width: 22, height: 22, background: col, borderRadius: 3, cursor: "pointer", border: genBorderColor === col && genBorderWidth > 0 ? "2px solid #f26522" : "2px solid #2a2a2a", flexShrink: 0 }} />
+                              style={{ width: 22, height: 22, background: col, borderRadius: 3, cursor: "pointer", border: genBorderColor === col && genBorderWidth > 0 ? "2px solid #f26522" : "2px solid var(--c-2a2a2a)", flexShrink: 0 }} />
                           ))}
                           <input type="color" value={genBorderColor} onChange={e => { setGenBorderColor(e.target.value); if (genBorderWidth === 0) setGenBorderWidth(3); }}
                             title="Couleur personnalisée"
-                            style={{ width: 22, height: 22, padding: 0, border: "1px solid #2a2a2a", borderRadius: 3, cursor: "pointer", background: "none" }} />
+                            style={{ width: 22, height: 22, padding: 0, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, cursor: "pointer", background: "none" }} />
                         </div>
                         <input
                           type="range" min="0" max="10" step="1"
@@ -4833,7 +4861,7 @@ export default function AutoCache() {
                           onChange={e => setGenBorderWidth(parseInt(e.target.value))}
                           style={{ flex: 1, accentColor: "#f26522", height: 3 }}
                         />
-                        <span style={{ fontSize: 11, color: genBorderWidth > 0 ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
+                        <span style={{ fontSize: 11, color: genBorderWidth > 0 ? "#f26522" : "var(--c-444)", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
                           {genBorderWidth === 0 ? "Off" : genBorderWidth}
                         </span>
                       </div>
@@ -4842,8 +4870,8 @@ export default function AutoCache() {
                     {/* Aperçu live */}
                     {logo?.preview && (
                       <div>
-                        <div style={{ fontSize: 10, color: "#ddd", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Aperçu</div>
-                        <img src={logo.preview} style={{ width: "100%", display: "block", border: "1px solid #2a2a2a" }} />
+                        <div style={{ fontSize: 10, color: "var(--c-ddd)", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6, textTransform: "uppercase" }}>Aperçu</div>
+                        <img src={logo.preview} style={{ width: "100%", display: "block", border: "1px solid var(--c-2a2a2a)" }} />
                       </div>
                     )}
                   </div>
@@ -4852,7 +4880,7 @@ export default function AutoCache() {
                 <input ref={logoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => handleLogoFile(e.target.files[0])} />
 
                 {/* ── Arrondi des coins (global import + génération) ── */}
-                <div style={{ marginTop: 16, background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "14px 16px" }}>
+                <div style={{ marginTop: 16, background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 3, padding: "14px 16px" }}>
                   <Slider label="Arrondi des coins" value={logoRadius} min={0} max={10} step={1} onChange={setLogoRadius} />
                 </div>
               </section>
@@ -4879,26 +4907,26 @@ export default function AutoCache() {
                   <Fragment key={label}>
                     <div
                       onClick={toggle}
-                      style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active && !locked ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${active && !locked ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, cursor: "pointer", userSelect: "none", opacity: locked ? 0.55 : 1 }}
+                      style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: active && !locked ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${active && !locked ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: 3, cursor: "pointer", userSelect: "none", opacity: locked ? 0.55 : 1 }}
                     >
-                      <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${locked ? "#555" : active ? "#f26522" : "#444"}`, background: active && !locked ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        {locked ? <span style={{ color: "#ddd", fontSize: 11 }}>🔒</span> : active && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                      <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${locked ? "var(--c-555)" : active ? "#f26522" : "var(--c-444)"}`, background: active && !locked ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        {locked ? <span style={{ color: "var(--c-ddd)", fontSize: 11 }}>🔒</span> : active && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                       </div>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: locked ? "#888" : active ? "#f26522" : "#aaa", fontFamily: "'Rajdhani',sans-serif" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: locked ? "var(--c-888)" : active ? "#f26522" : "var(--c-aaa)", fontFamily: "'Rajdhani',sans-serif" }}>
                           {icon} {label}{locked && <span style={{ fontSize: 9, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>PRO</span>}
                         </div>
-                        <div style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
+                        <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>{sub}</div>
                       </div>
                       {credit && <div style={{ fontSize: 11, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, fontWeight: 700, flexShrink: 0 }}>{credit}</div>}
                     </div>
                     {label === "Amélioration automatique" && enhancePro && (
-                      <div style={{ marginBottom: 8, background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "12px 14px" }}>
+                      <div style={{ marginBottom: 8, background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 3, padding: "12px 14px" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                          <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>
+                          <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>
                             Régler l'intensité
                           </span>
-                          <span style={{ fontSize: 12, color: enhanceProIntensity > 0 ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
+                          <span style={{ fontSize: 12, color: enhanceProIntensity > 0 ? "#f26522" : "var(--c-444)", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
                             {enhanceProIntensity === 0 ? "Off" : enhanceProIntensity}
                           </span>
                         </div>
@@ -4921,24 +4949,24 @@ export default function AutoCache() {
                     const active = outputFormat === key;
                     return (
                       <button key={key} onClick={() => setOutputFormat(key)}
-                        style={{ flex: "1 1 0", minWidth: 72, background: active ? "#f26522" : "#0a0a0a", border: `1px solid ${active ? "#f26522" : "#1c1c1c"}`, borderRadius: 3, padding: "9px 6px", cursor: "pointer", textAlign: "center" }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, color: active ? "#090909" : "#aaa", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase" }}>{f.label}</div>
-                        <div style={{ fontSize: 9, marginTop: 2, color: active ? "#3a1400" : "#666", fontFamily: "'JetBrains Mono',monospace" }}>{f.sub}</div>
+                        style={{ flex: "1 1 0", minWidth: 72, background: active ? "#f26522" : "var(--c-0a0a0a)", border: `1px solid ${active ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: 3, padding: "9px 6px", cursor: "pointer", textAlign: "center" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, color: active ? "#090909" : "var(--c-aaa)", fontFamily: "'Rajdhani',sans-serif", textTransform: "uppercase" }}>{f.label}</div>
+                        <div style={{ fontSize: 9, marginTop: 2, color: active ? "var(--c-3a1400)" : "var(--c-666)", fontFamily: "'JetBrains Mono',monospace" }}>{f.sub}</div>
                       </button>
                     );
                   })}
                 </div>
-                <div style={{ fontSize: 10, color: "#777", fontFamily: "'JetBrains Mono',monospace", marginBottom: 22, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 22, lineHeight: 1.5 }}>
                   {outputFormat === "original" ? "Conserve le ratio d'origine de chaque photo." : "Recadrage centré au format choisi · appliqué à l'aperçu et au téléchargement."}
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-                  <div style={{ fontSize: 13, letterSpacing: 3, color: adjEnabled ? "#f26522" : "#444", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
-                  <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "#1a1a1a", border: `1px solid ${adjEnabled ? "#f26522" : "#2a2a2a"}`, color: adjEnabled ? "#090909" : "#444", padding: "4px 13px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>
+                  <div style={{ fontSize: 13, letterSpacing: 3, color: adjEnabled ? "#f26522" : "var(--c-444)", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>03 — Ajustements photo</div>
+                  <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "var(--c-1a1a1a)", border: `1px solid ${adjEnabled ? "#f26522" : "var(--c-2a2a2a)"}`, color: adjEnabled ? "#090909" : "var(--c-444)", padding: "4px 13px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>
                     {adjEnabled ? "ON" : "OFF"}
                   </button>
                 </div>
-                <div style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, padding: "20px 18px", opacity: adjEnabled ? 1 : 0.35, pointerEvents: adjEnabled ? "auto" : "none" }}>
+                <div style={{ background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 3, padding: "20px 18px", opacity: adjEnabled ? 1 : 0.35, pointerEvents: adjEnabled ? "auto" : "none" }}>
                   <Slider label="Luminosité" value={adj.brightness} min={0.7} max={1.5} step={0.01} onChange={v => setAdj(p => ({...p, brightness: v}))} />
                   <Slider label="Contraste" value={adj.contrast} min={0.7} max={1.6} step={0.01} onChange={v => setAdj(p => ({...p, contrast: v}))} />
                   <Slider label="Saturation" value={adj.saturation} min={0.5} max={2.0} step={0.01} onChange={v => setAdj(p => ({...p, saturation: v}))} />
@@ -4952,11 +4980,11 @@ export default function AutoCache() {
                 <div onDragOver={e => { e.preventDefault(); setDragOver("photos"); }} onDragLeave={() => setDragOver(null)}
                   onDrop={e => { e.preventDefault(); setDragOver(null); handlePhotoFiles(e.dataTransfer.files); }}
                   onClick={() => photosRef.current?.click()}
-                  style={{ border: `1px dashed ${dragOver === "photos" ? "#f26522" : "#222"}`, borderRadius: 3, padding: "22px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#161616", marginBottom: 12 }}>
-                  <div style={{ textAlign: "center", color: "#ddd" }}>
+                  style={{ border: `1px dashed ${dragOver === "photos" ? "#f26522" : "var(--c-222)"}`, borderRadius: 3, padding: "22px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--c-161616)", marginBottom: 12 }}>
+                  <div style={{ textAlign: "center", color: "var(--c-ddd)" }}>
                     <div style={{ fontSize: 31, marginBottom: 8 }}>◈</div>
-                    <div style={{ fontSize: 13, color: "#ddd" }}>{isMobile ? "Appuyer pour sélectionner" : "Glisser les photos ici"}</div>
-                    <div style={{ fontSize: 11, marginTop: 3, color: "#aaa" }}>JPG, PNG — plusieurs fichiers acceptés</div>
+                    <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>{isMobile ? "Appuyer pour sélectionner" : "Glisser les photos ici"}</div>
+                    <div style={{ fontSize: 11, marginTop: 3, color: "var(--c-aaa)" }}>JPG, PNG — plusieurs fichiers acceptés</div>
                   </div>
                 </div>
                 <input ref={photosRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => handlePhotoFiles(e.target.files)} />
@@ -4965,15 +4993,15 @@ export default function AutoCache() {
                     <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(4, 1fr)" : "repeat(5, 1fr)", gap: 5, maxHeight: 210, overflowY: "auto", marginBottom: 10 }}>
                       {photos.map(p => (
                         <div key={p.id} style={{ position: "relative" }}>
-                          <img src={p.preview} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", borderRadius: 2, border: "1px solid #252525", display: "block" }} />
+                          <img src={p.preview} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", borderRadius: 2, border: "1px solid var(--c-252525)", display: "block" }} />
                           <button onClick={e => { e.stopPropagation(); setPhotos(prev => prev.filter(x => x.id !== p.id)); }}
                             style={{ position: "absolute", top: 2, right: 2, width: 15, height: 15, borderRadius: "50%", background: "#f26522", border: "none", color: "#090909", fontSize: 10, cursor: "pointer", fontWeight: 700 }}>×</button>
                         </div>
                       ))}
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>{photos.length} photo{photos.length > 1 ? "s" : ""}</span>
-                      <button onClick={() => setPhotos([])} style={{ background: "transparent", border: "1px solid #1e1e1e", color: "#ddd", padding: "3px 10px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>Tout effacer</button>
+                      <span style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>{photos.length} photo{photos.length > 1 ? "s" : ""}</span>
+                      <button onClick={() => setPhotos([])} style={{ background: "transparent", border: "1px solid var(--c-1e1e1e)", color: "var(--c-ddd)", padding: "3px 10px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>Tout effacer</button>
                     </div>
                   </>
                 )}
@@ -4983,48 +5011,48 @@ export default function AutoCache() {
               <section data-tutorial="showroom">
                 <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Showroom Virtuel</div>
                 <div onClick={() => { if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); }}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "#0a0a0a", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#1c1c1c"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
-                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "#444"}`, background: showroomEnabled && canUseShowroom ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "#ddd", fontSize: 11 }}>🔒</span>}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-444)"}`, background: showroomEnabled && canUseShowroom ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "var(--c-ddd)", fontSize: 11 }}>🔒</span>}
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled && canUseShowroom ? "#f26522" : "#aaa", fontFamily: "'Rajdhani',sans-serif" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-aaa)", fontFamily: "'Rajdhani',sans-serif" }}>
                       ⬡ Showroom Virtuel {!canUseShowroom && <span style={{ fontSize: 9, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginLeft: 6 }}>ABONNEMENT PRO</span>}
                     </div>
-                    <div style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>
+                    <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>
                       {canUseShowroom ? "Détourage IA · Fond de showroom · Inclus au traitement" : "Disponible avec l'abonnement Pro — cliquez pour en savoir plus"}
                     </div>
                   </div>
                 </div>
                 {showroomEnabled && (
-                  <div style={{ padding: "12px 14px", background: "#121212", border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px" }}>
+                  <div style={{ padding: "12px 14px", background: "var(--c-121212)", border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px" }}>
                     <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "rgba(242,101,34,0.06)", border: "1px solid rgba(242,101,34,0.2)", borderRadius: 3, padding: "9px 11px", marginBottom: 14 }}>
                       <span style={{ color: "#f26522", fontSize: 14, flexShrink: 0, lineHeight: 1.4 }}>⚠</span>
-                      <p style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7, margin: 0 }}>
-                        Pour un détourage optimal, utilisez une photo où le véhicule est <span style={{ color: "#ddd5c8" }}>seul dans le cadre</span>. La présence d'autres véhicules à proximité peut perturber l'analyse de l'IA et affecter la qualité du détourage.
+                      <p style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7, margin: 0 }}>
+                        Pour un détourage optimal, utilisez une photo où le véhicule est <span style={{ color: "var(--c-ddd5c8)" }}>seul dans le cadre</span>. La présence d'autres véhicules à proximité peut perturber l'analyse de l'IA et affecter la qualité du détourage.
                       </p>
                     </div>
-                    <div style={{ fontSize: 10, letterSpacing: 2, color: "#ddd", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
+                    <div style={{ fontSize: 10, letterSpacing: 2, color: "var(--c-ddd)", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 10 }}>Fond de scène</div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "stretch" }}>
                       {[0, 1, 2, 3].map(idx => {
                         const isActive = showroomSetupBg === idx;
                         return (
                           <div key={idx} onClick={e => { e.stopPropagation(); setShowroomSetupBg(idx); }}
-                            style={{ cursor: "pointer", border: `2px solid ${isActive ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, transition: "border-color 0.12s" }}>
+                            style={{ cursor: "pointer", border: `2px solid ${isActive ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, transition: "border-color 0.12s" }}>
                             <img src={SHOWROOM_THUMBS[idx]} style={{ display: "block", width: "100%", height: 39, objectFit: "cover" }} />
-                            <div style={{ background: isActive ? "#f26522" : "#1a1a1a", color: isActive ? "#090909" : "#555", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>
+                            <div style={{ background: isActive ? "#f26522" : "var(--c-1a1a1a)", color: isActive ? "#090909" : "var(--c-555)", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>
                               {SHOWROOM_LABELS[idx]}
                             </div>
                           </div>
                         );
                       })}
                       <div onClick={e => { e.stopPropagation(); showroomSetupUploadRef.current?.click(); }}
-                        style={{ cursor: "pointer", border: `2px solid ${showroomSetupBg === 'custom' ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, display: "flex", flexDirection: "column", background: "#1e1e1e", transition: "border-color 0.12s" }}>
+                        style={{ cursor: "pointer", border: `2px solid ${showroomSetupBg === 'custom' ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, overflow: "hidden", width: 70, flexShrink: 0, display: "flex", flexDirection: "column", background: "var(--c-1e1e1e)", transition: "border-color 0.12s" }}>
                         {showroomSetupCustomBg
                           ? <img src={showroomSetupCustomBg} style={{ display: "block", width: "100%", height: 39, objectFit: "cover" }} />
-                          : <div style={{ height: 39, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 21, color: "#ddd" }}>+</div>
+                          : <div style={{ height: 39, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 21, color: "var(--c-ddd)" }}>+</div>
                         }
-                        <div style={{ background: showroomSetupBg === 'custom' ? "#f26522" : "#1a1a1a", color: showroomSetupBg === 'custom' ? "#090909" : "#555", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>Custom</div>
+                        <div style={{ background: showroomSetupBg === 'custom' ? "#f26522" : "var(--c-1a1a1a)", color: showroomSetupBg === 'custom' ? "#090909" : "var(--c-555)", fontSize: 8, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>Custom</div>
                       </div>
                       <input ref={showroomSetupUploadRef} type="file" accept="image/*" style={{ display: "none" }}
                         onChange={e => {
@@ -5043,8 +5071,8 @@ export default function AutoCache() {
                         marginTop: 14,
                         display: "flex", alignItems: "center", gap: 10,
                         padding: "9px 11px",
-                        background: showroomFloorShadow ? "rgba(242,101,34,0.08)" : "#0a0a0a",
-                        border: `1px solid ${showroomFloorShadow ? "#f26522" : "#252525"}`,
+                        background: showroomFloorShadow ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)",
+                        border: `1px solid ${showroomFloorShadow ? "#f26522" : "var(--c-252525)"}`,
                         borderRadius: 3,
                         cursor: "pointer",
                         userSelect: "none",
@@ -5052,7 +5080,7 @@ export default function AutoCache() {
                     >
                       <div style={{
                         width: 14, height: 14, borderRadius: 2,
-                        border: `2px solid ${showroomFloorShadow ? "#f26522" : "#555"}`,
+                        border: `2px solid ${showroomFloorShadow ? "#f26522" : "var(--c-555)"}`,
                         background: showroomFloorShadow ? "#f26522" : "transparent",
                         flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
                       }}>
@@ -5061,13 +5089,13 @@ export default function AutoCache() {
                       <div style={{ flex: 1 }}>
                         <div style={{
                           fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase",
-                          color: showroomFloorShadow ? "#f26522" : "#aaa",
+                          color: showroomFloorShadow ? "#f26522" : "var(--c-aaa)",
                           fontFamily: "'Rajdhani',sans-serif",
                         }}>
                           ☼ Ombres au sol
                         </div>
                         <div style={{
-                          fontSize: 10, color: "#aaa",
+                          fontSize: 10, color: "var(--c-aaa)",
                           fontFamily: "'JetBrains Mono',monospace",
                           marginTop: 2,
                         }}>
@@ -5079,17 +5107,17 @@ export default function AutoCache() {
                     </div>
 
                     {/* Logo / Texte mural */}
-                    <div style={{ marginTop: 14, borderTop: "1px solid #252525", paddingTop: 12 }}>
-                      <div style={{ fontSize: 10, letterSpacing: 2, color: "#ddd", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Enseigne murale</div>
+                    <div style={{ marginTop: 14, borderTop: "1px solid var(--c-252525)", paddingTop: 12 }}>
+                      <div style={{ fontSize: 10, letterSpacing: 2, color: "var(--c-ddd)", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Enseigne murale</div>
 
                       {/* Tabs : Aucun / Image / Texte */}
                       <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
                         {[["none","Aucune"],["image","Importer logo"],["text","Générer texte"]].map(([k,label]) => (
                           <button key={k} onClick={() => setWallLogoMode(k)}
                             style={{ flex: 1, padding: "5px 0", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", borderRadius: 2,
-                              background: wallLogoMode === k ? "#f26522" : "#161616",
-                              color: wallLogoMode === k ? "#090909" : "#777",
-                              border: `1px solid ${wallLogoMode === k ? "#f26522" : "#2a2a2a"}`,
+                              background: wallLogoMode === k ? "#f26522" : "var(--c-161616)",
+                              color: wallLogoMode === k ? "#090909" : "var(--c-777)",
+                              border: `1px solid ${wallLogoMode === k ? "#f26522" : "var(--c-2a2a2a)"}`,
                             }}>{label}</button>
                         ))}
                       </div>
@@ -5098,10 +5126,10 @@ export default function AutoCache() {
                       {wallLogoMode === "image" && (
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <div onClick={() => wallLogoUploadRef.current?.click()}
-                            style={{ width: 70, height: 39, border: `1px dashed ${wallLogo ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "#161616", overflow: "hidden", flexShrink: 0 }}>
+                            style={{ width: 70, height: 39, border: `1px dashed ${wallLogo ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--c-161616)", overflow: "hidden", flexShrink: 0 }}>
                             {wallLogo
                               ? <img src={wallLogo} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-                              : <span style={{ fontSize: 19, color: "#ddd" }}>+</span>
+                              : <span style={{ fontSize: 19, color: "var(--c-ddd)" }}>+</span>
                             }
                           </div>
                           <input ref={wallLogoUploadRef} type="file" accept="image/*" style={{ display: "none" }}
@@ -5114,13 +5142,13 @@ export default function AutoCache() {
                             }} />
                           {wallLogo && (<>
                             <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: 9, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
+                              <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
                               <input type="range" min="0.05" max="0.40" step="0.01" value={wallLogoScale}
                                 onChange={e => setWallLogoScale(parseFloat(e.target.value))}
                                 style={{ width: "100%", accentColor: "#f26522", height: 3 }} />
                             </div>
                             <button onClick={() => setWallLogo(null)}
-                              style={{ background: "transparent", border: "1px solid #2a2a2a", color: "#ddd", width: 22, height: 22, borderRadius: 3, cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+                              style={{ background: "transparent", border: "1px solid var(--c-2a2a2a)", color: "var(--c-ddd)", width: 22, height: 22, borderRadius: 3, cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
                           </>)}
                         </div>
                       )}
@@ -5130,10 +5158,10 @@ export default function AutoCache() {
                         <div>
                           <input type="text" value={wallText} onChange={e => setWallText(e.target.value)}
                             placeholder="Nom de l'enseigne"
-                            style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", background: "#161616", border: "1px solid #2a2a2a", borderRadius: 3, color: "#ddd5c8", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, letterSpacing: 1, marginBottom: 8 }} />
+                            style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, letterSpacing: 1, marginBottom: 8 }} />
                           {/* Aperçu */}
                           {wallText.trim() && (
-                            <div style={{ background: "#111", border: "1px solid #222", borderRadius: 3, padding: "10px 14px", marginBottom: 8, textAlign: "center", overflow: "hidden" }}>
+                            <div style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 3, padding: "10px 14px", marginBottom: 8, textAlign: "center", overflow: "hidden" }}>
                               <span style={{
                                 fontFamily: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).family,
                                 fontWeight: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).weight,
@@ -5146,65 +5174,65 @@ export default function AutoCache() {
                           <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
                             {/* Couleur */}
                             <div>
-                              <div style={{ fontSize: 9, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>COULEUR</div>
+                              <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>COULEUR</div>
                               <input type="color" value={wallTextColor} onChange={e => setWallTextColor(e.target.value)}
-                                style={{ width: 34, height: 26, border: "1px solid #2a2a2a", borderRadius: 3, background: "transparent", cursor: "pointer" }} />
+                                style={{ width: 34, height: 26, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer" }} />
                             </div>
                             {/* Taille */}
                             <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: 9, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
+                              <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
                               <input type="range" min="0.05" max="0.40" step="0.01" value={wallLogoScale}
                                 onChange={e => setWallLogoScale(parseFloat(e.target.value))}
                                 style={{ width: "100%", accentColor: "#f26522", height: 3 }} />
                             </div>
                           </div>
                           {/* Polices */}
-                          <div style={{ fontSize: 9, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>POLICE</div>
+                          <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>POLICE</div>
                           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
                             {WALL_FONTS.map(f => (
                               <button key={f.key} onClick={() => setWallTextFont(f.key)}
                                 style={{
                                   padding: "4px 8px", fontSize: 11, cursor: "pointer", borderRadius: 2,
                                   fontFamily: f.family, fontWeight: f.weight,
-                                  background: wallTextFont === f.key ? "#f26522" : "#161616",
+                                  background: wallTextFont === f.key ? "#f26522" : "var(--c-161616)",
                                   color: wallTextFont === f.key ? "#090909" : "#999",
-                                  border: `1px solid ${wallTextFont === f.key ? "#f26522" : "#2a2a2a"}`,
+                                  border: `1px solid ${wallTextFont === f.key ? "#f26522" : "var(--c-2a2a2a)"}`,
                                 }}>{f.label}</button>
                             ))}
                           </div>
                           {/* Liseré */}
                           <div style={{ marginBottom: 8 }}>
-                            <div style={{ fontSize: 9, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>LISERÉ</div>
+                            <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>LISERÉ</div>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <input type="color" value={wallTextStrokeColor}
                                 onChange={e => { setWallTextStrokeColor(e.target.value); if (wallTextStrokeWidth === 0) setWallTextStrokeWidth(2); }}
-                                style={{ width: 26, height: 26, padding: 0, border: `1px solid ${wallTextStrokeWidth > 0 ? "#f26522" : "#2a2a2a"}`, borderRadius: 3, cursor: "pointer", background: "none" }} />
+                                style={{ width: 26, height: 26, padding: 0, border: `1px solid ${wallTextStrokeWidth > 0 ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, cursor: "pointer", background: "none" }} />
                               <input type="range" min="0" max="10" step="1" value={wallTextStrokeWidth}
                                 onChange={e => setWallTextStrokeWidth(parseInt(e.target.value))}
                                 style={{ flex: 1, accentColor: "#f26522", height: 3 }} />
-                              <span style={{ fontSize: 11, color: wallTextStrokeWidth > 0 ? "#f26522" : "#444", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
+                              <span style={{ fontSize: 11, color: wallTextStrokeWidth > 0 ? "#f26522" : "var(--c-444)", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
                                 {wallTextStrokeWidth === 0 ? "Off" : wallTextStrokeWidth}
                               </span>
                             </div>
                           </div>
                           {/* Soulignement */}
                           <div>
-                            <div style={{ fontSize: 9, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>SOULIGNEMENT</div>
+                            <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>SOULIGNEMENT</div>
                             <button onClick={() => setWallTextUnderline(v => !v)}
                               style={{
                                 padding: "4px 12px", fontSize: 11, cursor: "pointer", borderRadius: 2,
                                 fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase",
                                 textDecoration: "underline",
-                                background: wallTextUnderline ? "#f26522" : "#161616",
-                                color: wallTextUnderline ? "#090909" : "#777",
-                                border: `1px solid ${wallTextUnderline ? "#f26522" : "#2a2a2a"}`,
+                                background: wallTextUnderline ? "#f26522" : "var(--c-161616)",
+                                color: wallTextUnderline ? "#090909" : "var(--c-777)",
+                                border: `1px solid ${wallTextUnderline ? "#f26522" : "var(--c-2a2a2a)"}`,
                               }}>Souligner</button>
                           </div>
                         </div>
                       )}
 
                       {(wallLogoMode === "image" && wallLogo) || (wallLogoMode === "text" && wallText.trim()) ? (
-                        <div style={{ fontSize: 9, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 8 }}>
+                        <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginTop: 8 }}>
                           Positionnez l'enseigne en la glissant sur l'image dans les résultats
                         </div>
                       ) : null}
@@ -5214,18 +5242,18 @@ export default function AutoCache() {
               </section>
 
               <section data-tutorial="process">
-                <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "#1a1a1a", color: canStart ? "#090909" : "#444", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 16, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
+                <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "var(--c-1a1a1a)", color: canStart ? "#090909" : "var(--c-444)", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "'Rajdhani',sans-serif", fontSize: 16, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
                   {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}${showroomEnabled ? " + Showroom" : ""}`}
                 </button>
                 {processing && (
                   <div style={{ marginTop: 12 }}>
-                    <div style={{ height: 2, background: "#1e1e1e", borderRadius: 1, overflow: "hidden" }}>
+                    <div style={{ height: 2, background: "var(--c-1e1e1e)", borderRadius: 1, overflow: "hidden" }}>
                       <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
                     </div>
-                    <div style={{ marginTop: 5, fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", textAlign: "right" }}>{pct}%</div>
+                    <div style={{ marginTop: 5, fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", textAlign: "right" }}>{pct}%</div>
                   </div>
                 )}
-                {!logo && <div style={{ marginTop: 10, fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>⚠ Chargez votre logo pour continuer</div>}
+                {!logo && <div style={{ marginTop: 10, fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>⚠ Chargez votre logo pour continuer</div>}
               </section>
             </div>
           </div>
@@ -5234,7 +5262,7 @@ export default function AutoCache() {
         {tab === "results" && (
           <div style={{ maxWidth: 1200, margin: "0 auto", padding: isMobile ? "16px 12px" : "32px 28px" }}>
             {results.length === 0 ? (
-              <div style={{ textAlign: "center", padding: "80px 0", color: "#ddd" }}>
+              <div style={{ textAlign: "center", padding: "80px 0", color: "var(--c-ddd)" }}>
                 <div style={{ fontSize: 49, marginBottom: 16 }}>◈</div>
                 <div style={{ fontSize: 15, letterSpacing: 2, textTransform: "uppercase" }}>Aucun résultat</div>
               </div>
@@ -5243,7 +5271,7 @@ export default function AutoCache() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
                   <div>
                     <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>{results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""}</div>
-                    <div style={{ marginTop: 4, fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>
+                    <div style={{ marginTop: 4, fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>
                       {results.filter(r => r.plateFound).length} détectée{results.filter(r => r.plateFound).length > 1 ? "s" : ""} · {results.filter(r => !r.plateFound).length} non détectée{results.filter(r => !r.plateFound).length > 1 ? "s" : ""}
                     </div>
                   </div>
@@ -5252,7 +5280,7 @@ export default function AutoCache() {
                       {results.length > 0 && (
                         <button onClick={openEmailModal}
                           title="Envoyer toutes les photos traitées par email"
-                          style={{ background: "transparent", color: "#ddd", border: "1px solid #2a2a2a", padding: "9px 16px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
+                          style={{ background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", padding: "9px 16px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
                           ✉ Envoyer par mail
                         </button>
                       )}
@@ -5264,9 +5292,9 @@ export default function AutoCache() {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${isMobile ? 150 : 260}px, 1fr))`, gap: isMobile ? 10 : 14 }}>
                   {results.map((r, i) => (
-                    <div key={i} style={{ background: "#161616", border: "1px solid #252525", borderRadius: 3, overflow: "hidden" }}>
+                    <div key={i} style={{ background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
-                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: OUTPUT_FORMATS[outputFormat]?.css || "4 / 3", objectFit: outputFormat === "original" ? "contain" : "cover", background: "#1e1e1e", display: "block" }} />
+                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: OUTPUT_FORMATS[outputFormat]?.css || "4 / 3", objectFit: outputFormat === "original" ? "contain" : "cover", background: "var(--c-1e1e1e)", display: "block" }} />
                         {!r.showroomDataURL && window.location.search.includes('plateDebug') && r.yoloBbox && r.imgW && (
                           <svg
                             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
@@ -5425,10 +5453,10 @@ export default function AutoCache() {
                             <span style={{ background: "rgba(242,101,34,0.85)", color: "#fff", fontSize: 9, padding: "3px 7px", borderRadius: 2, fontFamily: "'JetBrains Mono',monospace" }}>✂ ROGNÉ</span>
                           )}
                         </div>
-                        <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: "3px 7px", fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>🔍 Agrandir</div>
+                        <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.6)", borderRadius: 2, padding: "3px 7px", fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>🔍 Agrandir</div>
                       </div>
-                      <div style={{ padding: "9px 11px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #161616", gap: 6 }}>
-                        <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{r.name}</div>
+                      <div style={{ padding: "9px 11px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--c-161616)", gap: 6 }}>
+                        <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{r.name}</div>
                         {!r.plateFound && (
                           <button
                             onClick={e => {
@@ -5444,7 +5472,7 @@ export default function AutoCache() {
                             style={{ background: "#f26522", border: "none", color: "#090909", padding: "4px 9px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, whiteSpace: "nowrap", flexShrink: 0 }}
                           >+ Cache plaque</button>
                         )}
-                        <button onClick={() => downloadOne(r)} style={{ background: "transparent", border: "1px solid #2a2a2a", color: "#f26522", padding: "4px 11px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, flexShrink: 0 }}>DL</button>
+                        <button onClick={() => downloadOne(r)} style={{ background: "transparent", border: "1px solid var(--c-2a2a2a)", color: "#f26522", padding: "4px 11px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, flexShrink: 0 }}>DL</button>
                       </div>
                     </div>
                   ))}
@@ -5523,7 +5551,7 @@ export default function AutoCache() {
           {isMobile && (
             <button
               onClick={e => { e.stopPropagation(); closeLightbox(); }}
-              style={{ position: "fixed", top: 10, right: 10, zIndex: 1010, width: 36, height: 36, borderRadius: "50%", background: "rgba(20,20,20,0.92)", border: "1px solid #3a3a3a", color: "#ddd", fontSize: 19, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}
+              style={{ position: "fixed", top: 10, right: 10, zIndex: 1010, width: 36, height: 36, borderRadius: "50%", background: "rgba(20,20,20,0.92)", border: "1px solid #3a3a3a", color: "var(--c-ddd)", fontSize: 19, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}
             >✕</button>
           )}
           {/* ── Bouton Terminé fixe en bas (mobile + adjust mode) ── */}
@@ -5535,7 +5563,7 @@ export default function AutoCache() {
           )}
           {/* ── Barre du haut ── */}
           <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: isMobile ? "0 44px 0 2px" : "0 2px", gap: 6 }}>
-            {!isMobile && <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>}
+            {!isMobile && <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "40%" }}>{lightbox.name}</div>}
             <div style={{ display: "flex", gap: isMobile ? 6 : 8, alignItems: "center", overflowX: isMobile ? "auto" : "visible", width: isMobile ? "100%" : "auto", justifyContent: isMobile ? "flex-start" : "flex-end", paddingBottom: isMobile ? 4 : 0 }}>
 
               {/* Bouton Rogner toggle */}
@@ -5551,14 +5579,14 @@ export default function AutoCache() {
                   });
                   setAdjustMode(false); setAdjustDrag(null);
                 }}
-                style={{ background: cropMode ? "#f26522" : "#181818", color: cropMode ? "#090909" : "#aaa", border: `1px solid ${cropMode ? "#f26522" : "#2a2a2a"}`, padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                style={{ background: cropMode ? "#f26522" : "var(--c-181818)", color: cropMode ? "#090909" : "var(--c-aaa)", border: `1px solid ${cropMode ? "#f26522" : "var(--c-2a2a2a)"}`, padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
               >✂ {isMobile ? "" : "Rogner"}</button>
 
               {/* Bouton Ajuster — visible seulement si plaque détectée */}
               {lightbox.plateFound && lightbox.corners && (
                 <button
                   onClick={e => { e.stopPropagation(); const nm = !adjustMode; if (nm) adjustCornersRef.current = lightbox.corners; setAdjustMode(nm); setManualPlateMode(false); setCropMode(false); setCropDrag(null); setAdjustCorners(lightbox.corners); }}
-                  style={{ background: adjustMode ? "#e8a020" : "#181818", color: adjustMode ? "#090909" : "#e8a020", border: `1px solid ${adjustMode ? "#e8a020" : "#3a2800"}`, padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                  style={{ background: adjustMode ? "#e8a020" : "var(--c-181818)", color: adjustMode ? "#090909" : "#e8a020", border: `1px solid ${adjustMode ? "#e8a020" : "#3a2800"}`, padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
                 >⊹ Ajuster</button>
               )}
 
@@ -5574,7 +5602,7 @@ export default function AutoCache() {
                     setManualPlateMode(true);
                     setCropMode(false); setCropDrag(null);
                   }}
-                  style={{ background: "#181818", color: "#f26522", border: "1px solid #3a1400", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                  style={{ background: "var(--c-181818)", color: "#f26522", border: "1px solid var(--c-3a1400)", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
                 >⊕ {isMobile ? "Cache plaque" : "Ajouter cache plaque"}</button>
               )}
 
@@ -5587,7 +5615,7 @@ export default function AutoCache() {
               ) : cropMode ? (<>
                 <button
                   onClick={e => { e.stopPropagation(); saveCrop(); }}
-                  style={{ background: "#2a6b2a", color: "#ddd5c8", border: "1px solid #3a8a3a", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                  style={{ background: "#2a6b2a", color: "var(--c-ddd5c8)", border: "1px solid #3a8a3a", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
                 >💾 {isMobile ? "" : "Sauvegarder"}</button>
                 <button
                   onClick={e => { e.stopPropagation(); downloadCropped(); }}
@@ -5600,7 +5628,7 @@ export default function AutoCache() {
                 >⬇ {isMobile ? "DL" : "Télécharger"}</button>
               )}
 
-              {!isMobile && <button onClick={closeLightbox} style={{ background: "#1e1e1e", color: "#ddd", border: "1px solid #2a2a2a", padding: "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 15, borderRadius: 2, minHeight: "unset" }}>✕</button>}
+              {!isMobile && <button onClick={closeLightbox} style={{ background: "var(--c-1e1e1e)", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", padding: "7px 14px", cursor: "pointer", fontFamily: "'JetBrains Mono',monospace", fontSize: 15, borderRadius: 2, minHeight: "unset" }}>✕</button>}
             </div>
           </div>
 
@@ -5614,7 +5642,7 @@ export default function AutoCache() {
             onDoubleClick={e => { e.stopPropagation(); setLbZoom(1); setLbPan({ x: 0, y: 0 }); }}
             style={{
               position: "relative", display: "inline-block", maxWidth: "100%",
-              borderRadius: 3, border: "1px solid #222", overflow: "hidden", lineHeight: 0,
+              borderRadius: 3, border: "1px solid var(--c-222)", overflow: "hidden", lineHeight: 0,
               touchAction: "none",
               cursor: lbZoom > 1 ? (lbPanDrag ? "grabbing" : "grab") : "default",
             }}
@@ -6140,9 +6168,9 @@ export default function AutoCache() {
 
           {/* ── Jauge d'inclinaison (mode Rogner) ── */}
           {cropMode && (
-            <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: "min(1100px, 100vw - 32px)", marginTop: 10, padding: "10px 16px 8px", background: "#161616", border: "1px solid #222", borderRadius: 3 }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: "min(1100px, 100vw - 32px)", marginTop: 10, padding: "10px 16px 8px", background: "var(--c-161616)", border: "1px solid var(--c-222)", borderRadius: 3 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-                <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>Inclinaison</span>
+                <span style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>Inclinaison</span>
                 <span style={{ fontSize: 12, color: "#f26522", fontFamily: "'JetBrains Mono',monospace" }}>
                   {cropAngle === 180 ? "0°" : `${cropAngle > 180 ? "+" : ""}${cropAngle - 180}°`}
                 </span>
@@ -6156,7 +6184,7 @@ export default function AutoCache() {
                 }}
                 style={{ width: "100%", accentColor: "#f26522", cursor: "pointer" }}
               />
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>
                 <span>−180°</span><span>0°</span><span>+180°</span>
               </div>
             </div>
@@ -6204,7 +6232,7 @@ export default function AutoCache() {
               style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 52, width: "min(500px, 90vw)" }}
             >
               <span style={{ fontSize: 17, userSelect: "none" }}>🔍</span>
-              <span style={{ fontSize: 11, color: "#ddd", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", userSelect: "none", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 11, color: "var(--c-ddd)", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", userSelect: "none", whiteSpace: "nowrap" }}>
                 Agrandir la taille
               </span>
               <input
@@ -6217,7 +6245,7 @@ export default function AutoCache() {
               <span style={{ fontSize: 11, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", minWidth: 34, textAlign: "right" }}>
                 ×{showroomZoom.toFixed(2)}
               </span>
-              {showroomNudging && <span style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace" }}>…</span>}
+              {showroomNudging && <span style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace" }}>…</span>}
             </div>
           )}
 
@@ -6229,7 +6257,7 @@ export default function AutoCache() {
               title="Fond la voiture dans le décor en abaissant luminosité, contraste et saturation"
             >
               <span style={{ fontSize: 17, userSelect: "none" }}>🎨</span>
-              <span style={{ fontSize: 11, color: "#ddd", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", userSelect: "none", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 11, color: "var(--c-ddd)", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", userSelect: "none", whiteSpace: "nowrap" }}>
                 Fondre le véhicule au décor
               </span>
               <input
@@ -6252,7 +6280,7 @@ export default function AutoCache() {
                 onClick={() => setShowMaskEditor(true)}
                 style={{
                   padding: '6px 16px', background: 'rgba(30,30,30,0.85)', color: '#dde0e5',
-                  border: '1px solid #444', borderRadius: 6, cursor: 'pointer', fontSize: 12,
+                  border: '1px solid var(--c-444)', borderRadius: 6, cursor: 'pointer', fontSize: 12,
                   fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5,
                   transition: 'all 0.15s',
                 }}
@@ -6339,9 +6367,9 @@ export default function AutoCache() {
           {lightbox.cutoutDataURL && lightbox.showroomDataURL && !cropMode && !adjustMode && getShowroomDebugMode() === 'shadowControls' && (
             <div
               onClick={e => e.stopPropagation()}
-              style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, width: "min(500px, 90vw)", background: "rgba(10,10,10,0.85)", border: "1px solid #222", borderRadius: 4, padding: "10px 14px" }}
+              style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, width: "min(500px, 90vw)", background: "rgba(10,10,10,0.85)", border: "1px solid var(--c-222)", borderRadius: 4, padding: "10px 14px" }}
             >
-              <div style={{ fontSize: 9, letterSpacing: 2, color: "#ddd", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 2 }}>Ombre</div>
+              <div style={{ fontSize: 9, letterSpacing: 2, color: "var(--c-ddd)", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 2 }}>Ombre</div>
               {[
                 { label: "Opacité", param: "opacity", value: shadowOpacity, min: 0, max: 1, step: 0.05 },
                 { label: "Flou", param: "blur", value: shadowBlur, min: 0, max: 40, step: 1 },
@@ -6349,7 +6377,7 @@ export default function AutoCache() {
                 { label: "Étendue", param: "spread", value: shadowSpread, min: 0.5, max: 2.0, step: 0.05 },
               ].map(({ label, param, value, min, max, step }) => (
                 <div key={param} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", minWidth: 64 }}>{label}</span>
+                  <span style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", minWidth: 64 }}>{label}</span>
                   <input type="range" min={min} max={max} step={step} value={value}
                     onChange={e => onShadowParamChange(param, parseFloat(e.target.value))}
                     style={{ flex: 1, accentColor: "#f26522", height: 3, cursor: "pointer", touchAction: "pan-x" }}
@@ -6363,7 +6391,7 @@ export default function AutoCache() {
           )}
 
           {/* ── Pied ── */}
-          <div style={{ marginTop: 8, fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
+          <div style={{ marginTop: 8, fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", textAlign: "center" }}>
             {adjustMode
               ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
               : cropMode
@@ -6382,10 +6410,10 @@ export default function AutoCache() {
         <div onClick={() => setShowContactModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "92%", maxWidth: 420, fontFamily: "'Rajdhani',sans-serif" }}>
-            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 6, width: "92%", maxWidth: 420, fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--c-1c1c1c)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Nous contacter</div>
-              <button onClick={() => setShowContactModal(false)} style={{ background: "none", border: "none", color: "#ddd", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
+              <button onClick={() => setShowContactModal(false)} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
             </div>
             <div style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
               {[
@@ -6393,11 +6421,11 @@ export default function AutoCache() {
                 { icon: "📞", label: "Téléphone", value: "07 56 98 17 29", href: "tel:+33756981729" },
               ].map(({ icon, label, value, href }) => (
                 <a key={label} href={href}
-                  style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: "#0a0a0a", border: "1px solid #1c1c1c", borderRadius: 4, textDecoration: "none", cursor: "pointer" }}>
+                  style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: "var(--c-0a0a0a)", border: "1px solid var(--c-1c1c1c)", borderRadius: 4, textDecoration: "none", cursor: "pointer" }}>
                   <span style={{ fontSize: 21 }}>{icon}</span>
                   <div>
-                    <div style={{ fontSize: 11, color: "#ddd", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 3 }}>{label}</div>
-                    <div style={{ fontSize: 16, color: "#ddd5c8", fontWeight: 700, letterSpacing: 0.5 }}>{value}</div>
+                    <div style={{ fontSize: 11, color: "var(--c-ddd)", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 3 }}>{label}</div>
+                    <div style={{ fontSize: 16, color: "var(--c-ddd5c8)", fontWeight: 700, letterSpacing: 0.5 }}>{value}</div>
                   </div>
                 </a>
               ))}
@@ -6411,30 +6439,30 @@ export default function AutoCache() {
         <div onClick={() => { if (!emailSending) setShowEmailModal(false); }}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "92%", maxWidth: 440, fontFamily: "'Rajdhani',sans-serif" }}>
-            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 6, width: "92%", maxWidth: 440, fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--c-1c1c1c)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Envoyer par mail</div>
-              <button onClick={() => { if (!emailSending) setShowEmailModal(false); }} style={{ background: "none", border: "none", color: "#ddd", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
+              <button onClick={() => { if (!emailSending) setShowEmailModal(false); }} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
             </div>
             <div style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ fontSize: 12, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
+              <div style={{ fontSize: 12, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
                 Les {results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""} seront envoyées en pièces jointes à l'adresse ci-dessous{outputFormat !== "original" ? ` (format ${OUTPUT_FORMATS[outputFormat].label})` : ""}.
               </div>
-              <div style={{ fontSize: 11, color: "#8a8a8a", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6, background: "#0a0a0a", border: "1px solid #1c1c1c", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, color: "#8a8a8a", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6, background: "var(--c-0a0a0a)", border: "1px solid var(--c-1c1c1c)", borderRadius: 4, padding: "10px 12px" }}>
                 ⓘ Les photos peuvent être légèrement compressées pour l'envoi par mail.<br />
                 Si vous ne recevez rien, pensez à vérifier le dossier <span style={{ color: "#f26522" }}>courrier indésirable (spam)</span>.
               </div>
               <div>
-                <label style={{ fontSize: 10, color: "#888", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Adresse email</label>
+                <label style={{ fontSize: 10, color: "var(--c-888)", letterSpacing: 2, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>Adresse email</label>
                 <input
                   type="email"
                   value={emailTo}
                   disabled={emailSending}
                   onChange={e => setEmailTo(e.target.value)}
                   placeholder="client@exemple.com"
-                  style={{ width: "100%", marginTop: 6, boxSizing: "border-box", background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 4, color: "#ddd5c8", fontSize: 15, padding: "11px 13px", fontFamily: "'Rajdhani',sans-serif", outline: "none" }}
+                  style={{ width: "100%", marginTop: 6, boxSizing: "border-box", background: "var(--c-0a0a0a)", border: "1px solid var(--c-2a2a2a)", borderRadius: 4, color: "var(--c-ddd5c8)", fontSize: 15, padding: "11px 13px", fontFamily: "'Rajdhani',sans-serif", outline: "none" }}
                 />
-                <div style={{ fontSize: 10, color: "#666", fontFamily: "'JetBrains Mono',monospace", marginTop: 6 }}>Mémorisée comme adresse par défaut du compte.</div>
+                <div style={{ fontSize: 10, color: "var(--c-666)", fontFamily: "'JetBrains Mono',monospace", marginTop: 6 }}>Mémorisée comme adresse par défaut du compte.</div>
               </div>
               {emailStatus && (
                 <div style={{ fontSize: 12, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.5,
@@ -6443,7 +6471,7 @@ export default function AutoCache() {
                 </div>
               )}
               <button onClick={sendPhotosByEmail} disabled={emailSending}
-                style={{ width: "100%", background: emailSending ? "#3a1a0a" : "#f26522", color: emailSending ? "#aaa" : "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: emailSending ? "default" : "pointer" }}>
+                style={{ width: "100%", background: emailSending ? "#3a1a0a" : "#f26522", color: emailSending ? "var(--c-aaa)" : "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: emailSending ? "default" : "pointer" }}>
                 {emailSending ? "Envoi en cours…" : "Envoyer"}
               </button>
             </div>
@@ -6456,12 +6484,12 @@ export default function AutoCache() {
         <div onClick={() => setShowMiniGame(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#111", border: "1px solid #222", borderRadius: 6, padding: "20px 24px 24px", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 6, padding: "20px 24px 24px", fontFamily: "'Rajdhani',sans-serif" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
               <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>
                 Mini-jeu
               </div>
-              <button onClick={() => setShowMiniGame(false)} style={{ background: "none", border: "none", color: "#ddd", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
+              <button onClick={() => setShowMiniGame(false)} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
             </div>
             <LoadingGame />
           </div>
@@ -6489,27 +6517,27 @@ export default function AutoCache() {
           <div onClick={() => setShowProfileModal(false)}
             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
             <div onClick={e => e.stopPropagation()}
-              style={{ background: "#111", border: "1px solid #222", borderRadius: 6, width: "92%", maxWidth: 480, fontFamily: "'Rajdhani',sans-serif" }}>
+              style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 6, width: "92%", maxWidth: 480, fontFamily: "'Rajdhani',sans-serif" }}>
               {/* Header */}
-              <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #1c1c1c", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--c-1c1c1c)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
                   <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>Mes informations</div>
-                  <div style={{ fontSize: 14, color: "#ddd" }}>Données personnelles associées à votre compte</div>
+                  <div style={{ fontSize: 14, color: "var(--c-ddd)" }}>Données personnelles associées à votre compte</div>
                 </div>
-                <button onClick={() => setShowProfileModal(false)} style={{ background: "none", border: "none", color: "#ddd", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
+                <button onClick={() => setShowProfileModal(false)} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
               </div>
               {/* Rows */}
               <div style={{ padding: "8px 0 16px" }}>
                 {rows.map(({ label, value }) => (
-                  <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 24px", borderBottom: "1px solid #161616" }}>
-                    <span style={{ fontSize: 13, color: "#ddd", letterSpacing: 1, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>{label}</span>
-                    <span style={{ fontSize: 15, color: value === "—" ? "#333" : "#ddd5c8", fontWeight: 600, maxWidth: 260, textAlign: "right", wordBreak: "break-all" }}>{value}</span>
+                  <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 24px", borderBottom: "1px solid var(--c-161616)" }}>
+                    <span style={{ fontSize: 13, color: "var(--c-ddd)", letterSpacing: 1, textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace" }}>{label}</span>
+                    <span style={{ fontSize: 15, color: value === "—" ? "var(--c-333)" : "var(--c-ddd5c8)", fontWeight: 600, maxWidth: 260, textAlign: "right", wordBreak: "break-all" }}>{value}</span>
                   </div>
                 ))}
               </div>
               {/* Footer note */}
-              <div style={{ padding: "12px 24px", borderTop: "1px solid #1c1c1c" }}>
-                <div style={{ fontSize: 12, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
+              <div style={{ padding: "12px 24px", borderTop: "1px solid var(--c-1c1c1c)" }}>
+                <div style={{ fontSize: 12, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.6 }}>
                   Pour modifier vos informations, contactez-nous à <span style={{ color: "#f26522" }}>contact@autocache.fr</span>
                 </div>
               </div>
@@ -6523,14 +6551,14 @@ export default function AutoCache() {
         <div onClick={() => setShowPromoModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 6, padding: isMobile ? "24px 20px" : "36px 40px", maxWidth: 400, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
-            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 6, textTransform: "uppercase" }}>Code Promo</div>
-            <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginBottom: 20 }}>Entrez votre code pour débloquer des photos supplémentaires.</div>
+            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: isMobile ? "24px 20px" : "36px 40px", maxWidth: 400, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: 2, color: "var(--c-e0dbd4)", marginBottom: 6, textTransform: "uppercase" }}>Code Promo</div>
+            <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 20 }}>Entrez votre code pour débloquer des photos supplémentaires.</div>
             <input
               value={promoCode} onChange={e => { setPromoCode(e.target.value); setPromoStatus(null); setPromoMsg(""); }}
               onKeyDown={e => e.key === "Enter" && promoCode.trim() && promoStatus !== "loading" && submitPromo()}
               placeholder="Votre code promo"
-              style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px", background: "#1a1a1a", border: `1px solid ${promoStatus === "error" ? "#c0392b" : promoStatus === "success" ? "#27ae60" : "#2a2a2a"}`, borderRadius: 3, color: "#ddd5c8", fontFamily: "'JetBrains Mono',monospace", fontSize: 16, letterSpacing: 3, textTransform: "uppercase", outline: "none", marginBottom: 10 }}
+              style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px", background: "var(--c-1a1a1a)", border: `1px solid ${promoStatus === "error" ? "#c0392b" : promoStatus === "success" ? "#27ae60" : "var(--c-2a2a2a)"}`, borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "'JetBrains Mono',monospace", fontSize: 16, letterSpacing: 3, textTransform: "uppercase", outline: "none", marginBottom: 10 }}
             />
             {promoMsg && (
               <div style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: promoStatus === "success" ? "#27ae60" : "#c0392b", marginBottom: 14, letterSpacing: 1 }}>
@@ -6540,11 +6568,11 @@ export default function AutoCache() {
             <button
               onClick={submitPromo}
               disabled={!promoCode.trim() || promoStatus === "loading" || promoStatus === "success"}
-              style={{ width: "100%", background: promoStatus === "success" ? "#27ae60" : (!promoCode.trim() || promoStatus === "loading") ? "#1a1a1a" : "#f26522", color: promoStatus === "success" ? "#fff" : (!promoCode.trim() || promoStatus === "loading") ? "#444" : "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: promoStatus === "loading" || promoStatus === "success" ? "default" : "pointer", marginBottom: 10 }}>
+              style={{ width: "100%", background: promoStatus === "success" ? "#27ae60" : (!promoCode.trim() || promoStatus === "loading") ? "var(--c-1a1a1a)" : "#f26522", color: promoStatus === "success" ? "#fff" : (!promoCode.trim() || promoStatus === "loading") ? "var(--c-444)" : "#090909", border: "none", padding: "13px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: promoStatus === "loading" || promoStatus === "success" ? "default" : "pointer", marginBottom: 10 }}>
               {promoStatus === "loading" ? "Vérification..." : promoStatus === "success" ? "Code activé ✓" : "Activer"}
             </button>
             <button onClick={() => setShowPromoModal(false)}
-              style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
               Fermer
             </button>
           </div>
@@ -6556,14 +6584,14 @@ export default function AutoCache() {
         <div onClick={() => setShowPlansModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: isPaid ? 480 : 880, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: isPaid ? 480 : 980, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
 
             {!isPaid ? (
               /* ── Vue choix de formule (utilisateurs en essai) ── */
               <>
                 <div style={{ textAlign: "center", marginBottom: 28 }}>
-                  <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Notre Abonnement</div>
-                  <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
+                  <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "var(--c-e0dbd4)", textTransform: "uppercase" }}>Notre Abonnement</div>
+                  <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
                     Un seul abonnement, 3 formules au choix · Plan actuel : <span style={{ color: "#f26522" }}>Essai gratuit</span>
                   </div>
                 </div>
@@ -6571,7 +6599,7 @@ export default function AutoCache() {
                 {renderFormulesGrid()}
 
                 <button onClick={() => setShowPlansModal(false)}
-                  style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+                  style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
                   Fermer
                 </button>
               </>
@@ -6580,8 +6608,8 @@ export default function AutoCache() {
               <>
                 {/* En-tête */}
                 <div style={{ textAlign: "center", marginBottom: 32 }}>
-                  <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase" }}>Mon Abonnement</div>
-                  <div style={{ fontSize: 11, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
+                  <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "var(--c-e0dbd4)", textTransform: "uppercase" }}>Mon Abonnement</div>
+                  <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
                     Formule active : <span style={{ color: "#f26522", fontWeight: 700 }}>
                       {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </span>
@@ -6594,14 +6622,14 @@ export default function AutoCache() {
                     <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: 2, color: "#f26522", textTransform: "uppercase" }}>
                       {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </div>
-                    <div style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", marginTop: 4, letterSpacing: 1 }}>
+                    <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginTop: 4, letterSpacing: 1 }}>
                       400 photos / mois · Toutes les fonctionnalités incluses
                     </div>
                   </div>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
                 </div>
 
-                <div style={{ fontSize: 10, color: "#777", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 16 }}>
+                <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 16 }}>
                   Pour changer de formule (hebdo / mensuel / annuel) ou mettre à jour votre paiement, ouvrez votre espace de facturation ci-dessous.
                 </div>
 
@@ -6633,7 +6661,7 @@ export default function AutoCache() {
                       <button
                         disabled={!!portalLoading}
                         onClick={() => openPortal("invoices")}
-                        style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #333", padding: "12px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: !!portalLoading ? "wait" : "pointer", marginBottom: 10 }}>
+                        style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-333)", padding: "12px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: !!portalLoading ? "wait" : "pointer", marginBottom: 10 }}>
                         {portalLoading === "invoices" ? "Ouverture..." : "Factures & Historique"}
                       </button>
 
@@ -6644,15 +6672,15 @@ export default function AutoCache() {
                       )}
 
                       <button onClick={() => { setShowPlansModal(false); setPortalError(""); }}
-                        style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #1e1e1e", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 24 }}>
+                        style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-1e1e1e)", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 24 }}>
                         Fermer
                       </button>
 
-                      <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 18, textAlign: "center" }}>
+                      <div style={{ borderTop: "1px solid var(--c-1a1a1a)", paddingTop: 18, textAlign: "center" }}>
                         <button
                           disabled={!!portalLoading}
                           onClick={() => openPortal("cancel")}
-                          style={{ background: "transparent", color: "#ddd", border: "none", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", cursor: !!portalLoading ? "wait" : "pointer", textDecoration: "underline" }}>
+                          style={{ background: "transparent", color: "var(--c-ddd)", border: "none", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", cursor: !!portalLoading ? "wait" : "pointer", textDecoration: "underline" }}>
                           {portalLoading === "cancel" ? "Ouverture..." : "Résilier l'abonnement"}
                         </button>
                       </div>
@@ -6670,11 +6698,11 @@ export default function AutoCache() {
         <div onClick={() => setShowUpgradeProModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #f26522", borderRadius: 6, padding: isMobile ? "24px 16px" : "36px 40px", maxWidth: 420, width: "92%", textAlign: "center", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "var(--c-141414)", border: "1px solid #f26522", borderRadius: 6, padding: isMobile ? "24px 16px" : "36px 40px", maxWidth: 420, width: "92%", textAlign: "center", fontFamily: "'Rajdhani',sans-serif" }}>
             <div style={{ fontSize: 33, marginBottom: 12 }}>⬡</div>
-            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: 2, color: "#e0dbd4", marginBottom: 4, textTransform: "uppercase" }}>Showroom Virtuel</div>
+            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: 2, color: "var(--c-e0dbd4)", marginBottom: 4, textTransform: "uppercase" }}>Showroom Virtuel</div>
             <div style={{ fontSize: 12, color: "#f26522", letterSpacing: 2, fontFamily: "'JetBrains Mono',monospace", marginBottom: 16, textTransform: "uppercase" }}>Abonnement requis</div>
-            <div style={{ fontSize: 14, color: "#ddd", lineHeight: 1.7, marginBottom: 28, fontFamily: "'JetBrains Mono',monospace" }}>
+            <div style={{ fontSize: 14, color: "var(--c-ddd)", lineHeight: 1.7, marginBottom: 28, fontFamily: "'JetBrains Mono',monospace" }}>
               Le mode Showroom Virtuel — détourage IA et fonds de showroom — est inclus dans <span style={{ color: "#f26522", fontWeight: 700 }}>l'abonnement</span>.<br /><br />
               Choisissez la formule qui vous convient.
             </div>
@@ -6683,7 +6711,7 @@ export default function AutoCache() {
               Voir les formules
             </button>
             <button onClick={() => setShowUpgradeProModal(false)}
-              style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #2a2a2a", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
               Fermer
             </button>
           </div>
@@ -6694,13 +6722,13 @@ export default function AutoCache() {
       {showUpgradeModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "#141414", border: "1px solid #2a2a2a", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: 880, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: 980, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
 
             {/* En-tête */}
             <div style={{ textAlign: "center", marginBottom: 28 }}>
               <div style={{ fontSize: 14, color: "#c0392b", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>Essai gratuit terminé</div>
-              <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "#e0dbd4", textTransform: "uppercase", marginBottom: 10 }}>Continuez à sublimer vos photos</div>
-              <div style={{ fontSize: 12, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7 }}>
+              <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "var(--c-e0dbd4)", textTransform: "uppercase", marginBottom: 10 }}>Continuez à sublimer vos photos</div>
+              <div style={{ fontSize: 12, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", lineHeight: 1.7 }}>
                 Vous avez utilisé vos <span style={{ color: "#f26522" }}>30 photos d'essai</span>.<br />
                 Choisissez votre formule pour continuer à traiter vos photos.
               </div>
@@ -6710,7 +6738,7 @@ export default function AutoCache() {
             {renderFormulesGrid()}
 
             <button onClick={() => setShowUpgradeModal(false)}
-              style={{ width: "100%", background: "transparent", color: "#ddd", border: "1px solid #222", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-222)", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
               Fermer
             </button>
           </div>
@@ -6724,7 +6752,7 @@ export default function AutoCache() {
           <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
             Traitement {progress.n} / {progress.total}
           </div>
-          <div style={{ width: 200, height: 2, background: "#1e1e1e", borderRadius: 1, overflow: "hidden" }}>
+          <div style={{ width: 200, height: 2, background: "var(--c-1e1e1e)", borderRadius: 1, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
           </div>
           {/* Mini-jeu d'esquive pour patienter pendant le traitement.
