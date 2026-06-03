@@ -103,6 +103,79 @@ const WALL_FONTS = [
   { key: "playfair",    family: "'Playfair Display', serif",           label: "Playfair",   weight: "700" },
 ];
 
+// Compose une enseigne (logo + titre + sous-titre) sur un PNG transparent.
+// Renvoie { url, ratio } (ratio = hauteur/largeur de la zone réellement occupée).
+function makeSignDataURL({ logoImg = null, title = "", titleColor = "#ffffff", fontKey = "rajdhani", subtitle = "", subtitleColor = "#ffffff" }) {
+  const f = WALL_FONTS.find(x => x.key === fontKey) ?? WALL_FONTS[0];
+  const meas = document.createElement("canvas").getContext("2d");
+  meas.textBaseline = "middle";
+
+  const hasTitle = !!title.trim();
+  const hasSub   = !!subtitle.trim();
+  const titleSize = 200;
+  const subSize   = 84;
+  const PAD = 40;
+
+  meas.font = `${f.weight} ${titleSize}px ${f.family}`;
+  const titleW = hasTitle ? meas.measureText(title).width : 0;
+  meas.font = `${f.weight} ${subSize}px ${f.family}`;
+  const subW = hasSub ? meas.measureText(subtitle).width : 0;
+
+  let logoW = 0, logoH = 0;
+  if (logoImg) {
+    logoH = hasTitle ? titleSize * 1.15 : 230;
+    const ar = (logoImg.naturalWidth || logoImg.width) / (logoImg.naturalHeight || logoImg.height);
+    logoW = logoH * ar;
+  }
+  const gap = (logoImg && hasTitle) ? 60 : 0;
+  const rowW = logoW + gap + titleW;
+  const rowH = Math.max(logoH, hasTitle ? titleSize : 0);
+  const subGap = (hasSub && rowH) ? 50 : 0;
+  const contentW = Math.max(rowW, subW);
+  const contentH = rowH + subGap + (hasSub ? subSize : 0);
+  if (contentW < 1 || contentH < 1) return { url: null, ratio: 0.4 };
+
+  const c = document.createElement("canvas");
+  c.width = Math.ceil(contentW + PAD * 2);
+  c.height = Math.ceil(contentH + PAD * 2);
+  const ctx = c.getContext("2d");
+  ctx.textBaseline = "middle";
+
+  const rowCY = PAD + rowH / 2;
+  let x = (c.width - rowW) / 2;
+  if (logoImg) { ctx.drawImage(logoImg, x, rowCY - logoH / 2, logoW, logoH); x += logoW + gap; }
+  if (hasTitle) {
+    ctx.font = `${f.weight} ${titleSize}px ${f.family}`;
+    ctx.fillStyle = titleColor;
+    ctx.textAlign = "left";
+    ctx.fillText(title, x, rowCY);
+  }
+  if (hasSub) {
+    ctx.font = `${f.weight} ${subSize}px ${f.family}`;
+    ctx.fillStyle = subtitleColor;
+    ctx.textAlign = "center";
+    ctx.fillText(subtitle, c.width / 2, PAD + rowH + subGap + subSize / 2);
+  }
+  return { url: c.toDataURL("image/png"), ratio: c.height / c.width };
+}
+
+// Superpose une enseigne (PNG transparent) en bandeau haut d'une image.
+async function overlaySignOnImage(baseUrl, signUrl) {
+  if (!signUrl) return baseUrl;
+  const [base, sign] = await Promise.all([loadImg(baseUrl), loadImg(signUrl)]);
+  const W = base.naturalWidth || base.width, H = base.naturalHeight || base.height;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(base, 0, 0, W, H);
+  // Bandeau : largeur 64% de l'image, centré, bord supérieur à 6% de la hauteur
+  const sw = W * 0.64;
+  const sh = sw * ((sign.naturalHeight || sign.height) / (sign.naturalWidth || sign.width));
+  ctx.drawImage(sign, (W - sw) / 2, H * 0.06, sw, sh);
+  return c.toDataURL("image/jpeg", 0.95);
+}
+
 // Génère un PNG transparent avec le texte mural (haute résolution)
 function makeWallTextDataURL(text, color, fontKey = "rajdhani", strokeColor = null, strokeWidth = 0, underline = false) {
   const f = WALL_FONTS.find(f => f.key === fontKey) ?? WALL_FONTS[0];
@@ -3181,6 +3254,17 @@ export default function AutoCache() {
   const [wallTextStrokeColor, setWallTextStrokeColor] = useState("#000000");
   const [wallTextStrokeWidth, setWallTextStrokeWidth] = useState(0); // 0 = désactivé
   const [wallTextUnderline, setWallTextUnderline]     = useState(false);
+  // ── Enseigne murale & logo (option indépendante du showroom) ─────────────
+  const [signEnabled,       setSignEnabled]       = useState(false);
+  const [signTitle,         setSignTitle]         = useState("");
+  const [signTitleColor,    setSignTitleColor]    = useState("#ffffff");
+  const [signFont,          setSignFont]          = useState("rajdhani");
+  const [signSubtitle,      setSignSubtitle]      = useState("");
+  const [signSubtitleColor, setSignSubtitleColor] = useState("#ffffff");
+  const [signLogo,          setSignLogo]          = useState(null); // data URL
+  const [signScope,         setSignScope]         = useState("all"); // "all" | "selected"
+  const [signSelectedIds,   setSignSelectedIds]   = useState(() => new Set());
+  const signLogoInputRef = useRef(null);
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
   const [showroomZoom,    setShowroomZoom]    = useState(DEFAULT_SHOWROOM_ZOOM);
@@ -3478,17 +3562,23 @@ export default function AutoCache() {
       logoImg = flatCanvas;
     }
     const bgColor = logo.bgColor || "#ffffff";
-    // Résoudre le wall logo final (image importée OU texte généré)
-    let resolvedWallLogo = null;
-    if (wallLogoMode === "image" && wallLogo) {
-      resolvedWallLogo = wallLogo;
-    } else if (wallLogoMode === "text" && wallText.trim()) {
-      resolvedWallLogo = makeWallTextDataURL(wallText, wallTextColor, wallTextFont, wallTextStrokeWidth > 0 ? wallTextStrokeColor : null, wallTextStrokeWidth, wallTextUnderline);
-    }
-    // Pré-calculer le ratio h/w du wall logo pour le positionnement
-    let wallLogoRatio = 0.4; // fallback
-    if (resolvedWallLogo) {
-      try { const wli = await loadImg(resolvedWallLogo); wallLogoRatio = wli.naturalHeight / wli.naturalWidth; } catch(e) {}
+    // L'enseigne murale a été déplacée dans son propre bloc (voir signImageUrl) :
+    // plus de logo mural dessiné sur le décor showroom.
+    const resolvedWallLogo = null;
+    const wallLogoRatio = 0.4;
+    // ── Enseigne murale & logo : bannière (logo + enseigne + sous-titre) ──
+    let signImageUrl = null;
+    if (signEnabled && (signTitle.trim() || signSubtitle.trim() || signLogo)) {
+      let signLogoImg = null;
+      if (signLogo) { try { signLogoImg = await loadImg(signLogo); } catch (_) {} }
+      signImageUrl = makeSignDataURL({
+        logoImg: signLogoImg,
+        title: signTitle.trim(),
+        titleColor: signTitleColor,
+        fontKey: signFont,
+        subtitle: signSubtitle.trim(),
+        subtitleColor: signSubtitleColor,
+      }).url;
     }
     const all = [];
     const showroomBgDataUrl = showroomEnabled
@@ -3688,6 +3778,18 @@ export default function AutoCache() {
           console.error('Showroom processing error:', e);
           setError('Showroom : ' + (e?.message || String(e)));
         }
+      }
+      // ── Applique l'enseigne sur la sortie finale (avec ou sans showroom) ──
+      const applySign = signImageUrl && (signScope === "all" || signSelectedIds.has(photosToProcess[i].id));
+      if (applySign) {
+        entry.signImageUrl = signImageUrl; // conservé pour ré-appliquer après ré-édition
+        try {
+          if (entry.showroomDataURL) {
+            entry.showroomDataURL = await overlaySignOnImage(entry.showroomDataURL, signImageUrl);
+          } else {
+            entry.processed = await overlaySignOnImage(entry.processed, signImageUrl);
+          }
+        } catch (e) { console.error('Sign overlay error:', e); }
       }
       all.push(entry);
       setResults([...all]);
@@ -4012,7 +4114,9 @@ export default function AutoCache() {
             nd.x, nd.y, zm, true, wOpts, prev.shadowMatteDataURL, bl,
             prev.carBoundsCache
           );
-          const updated = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl };
+          // Ré-applique l'enseigne (le compositing repart du décor sans elle)
+          const finalShowroom = prev.signImageUrl ? await overlaySignOnImage(sr.dataURL, prev.signImageUrl) : sr.dataURL;
+          const updated = { ...prev, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
         }
@@ -4414,7 +4518,7 @@ export default function AutoCache() {
   // Sauvegarde le résultat après le relâchement d'un coin (souris OU tactile).
   // Utilise adjustDragRef/adjustCornersRef (refs) pour rester fiable sur mobile,
   // où l'événement souris synthétique d'iOS peut être supprimé par preventDefault.
-  const commitAdjust = () => {
+  const commitAdjust = async () => {
     if (!adjustDragRef.current || !adjustCornersRef.current) return;
     const canvas = adjustCanvasRef.current;
     if (!canvas) return;
@@ -4428,16 +4532,19 @@ export default function AutoCache() {
     fctx.drawImage(canvas, 0, 0);
     const ov = adjustOverlayCanvasRef.current; if (ov) fctx.drawImage(ov, 0, 0);
     const flatURL = flat.toDataURL('image/jpeg', 0.97);
+    const sign = lightbox.signImageUrl || null; // ré-applique l'enseigne si présente
     if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
       // Mode showroom : fond+voiture+cache plaque aplatis à qualité native
       const t = adjustShowroomTransformRef.current;
       const photoCorners   = cornersFromShowroom(latestCorners, t);
-      const updated = { ...lightbox, corners: photoCorners, showroomDataURL: flatURL };
+      const url = await overlaySignOnImage(flatURL, sign);
+      const updated = { ...lightbox, corners: photoCorners, showroomDataURL: url };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
     } else {
       // Mode normal : sauvegarde la photo avec le cache plaque
-      const updated = { ...lightbox, processed: flatURL, corners: latestCorners, ...(manualPlateMode ? { plateFound: true } : {}) };
+      const url = await overlaySignOnImage(flatURL, sign);
+      const updated = { ...lightbox, processed: url, corners: latestCorners, ...(manualPlateMode ? { plateFound: true } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       // Régénère le showroom avec les nouveaux coins si showroom actif
@@ -4445,15 +4552,15 @@ export default function AutoCache() {
         const snap = { ...lightbox, corners: latestCorners };
         const nudge = showroomNudge;
         const zoom  = showroomZoom;
-        const wOpts2 = snap.wallLogoSrc ? { src: snap.wallLogoSrc, scale: snap.wallLogoScale, opacity: snap.wallLogoOpacity, x: snap.wallLogoPos?.x ?? 0.5, y: snap.wallLogoPos?.y ?? 0.25 } : null;
-        loadImg(snap.logoPreview).then(logoImgEl =>
-          compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
-            logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, wOpts2, snap.shadowMatteDataURL, showroomBlend)
-        ).then(sr => {
-          const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
+        try {
+          const logoImgEl = await loadImg(snap.logoPreview);
+          const sr = await compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
+            logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, null, snap.shadowMatteDataURL, showroomBlend);
+          const finalShowroom = await overlaySignOnImage(sr.dataURL, sign);
+          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
           setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
           setLightbox(prev => prev?.name === snap.name ? withSR : prev);
-        }).catch(e => console.error('showroom regen (adjust):', e));
+        } catch (e) { console.error('showroom regen (adjust):', e); }
       }
     }
   };
@@ -5216,9 +5323,101 @@ export default function AutoCache() {
                 )}
               </section>
 
-              {/* ── 03 — Showroom Virtuel ── */}
+              {/* ── 03 — Enseigne murale & logo ── */}
+              <section>
+                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Enseigne murale &amp; logo</div>
+                <div onClick={() => setSignEnabled(v => !v)}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: signEnabled ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${signEnabled ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: signEnabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${signEnabled ? "#f26522" : "#444"}`, background: signEnabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {signEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: signEnabled ? "#f26522" : "var(--c-aaa)", fontFamily: "'Rajdhani',sans-serif" }}>Ajouter une enseigne</div>
+                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Logo + enseigne + sous-titre · avec ou sans showroom</div>
+                  </div>
+                </div>
+                {signEnabled && (() => {
+                  const sf = WALL_FONTS.find(x => x.key === signFont) ?? WALL_FONTS[0];
+                  const hasContent = signTitle.trim() || signSubtitle.trim() || signLogo;
+                  return (
+                  <div style={{ border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px", padding: 14, background: "var(--c-0a0a0a)" }}>
+                    {/* Logo */}
+                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>LOGO (OPTIONNEL)</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                      <div onClick={() => signLogoInputRef.current?.click()}
+                        style={{ width: 72, height: 46, border: `1px dashed ${signLogo ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--c-161616)", overflow: "hidden", flexShrink: 0 }}>
+                        {signLogo ? <img src={signLogo} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /> : <span style={{ fontSize: 19, color: "var(--c-ddd)" }}>+</span>}
+                      </div>
+                      <input ref={signLogoInputRef} type="file" accept="image/*" style={{ display: "none" }}
+                        onChange={e => { const f = e.target.files?.[0]; if (!f) return; const rd = new FileReader(); rd.onload = ev => setSignLogo(ev.target.result); rd.readAsDataURL(f); e.target.value = ''; }} />
+                      {signLogo && <button onClick={() => setSignLogo(null)} style={{ background: "transparent", border: "1px solid var(--c-2a2a2a)", color: "var(--c-ddd)", padding: "6px 11px", borderRadius: 3, cursor: "pointer", fontSize: 10, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase" }}>Retirer</button>}
+                    </div>
+                    {/* Enseigne */}
+                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>ENSEIGNE</div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                      <input type="text" value={signTitle} onChange={e => setSignTitle(e.target.value)} placeholder="Ex : VOLVO SELEKT"
+                        style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "'Rajdhani',sans-serif", fontSize: 14 }} />
+                      <input type="color" value={signTitleColor} onChange={e => setSignTitleColor(e.target.value)}
+                        style={{ width: 34, height: 34, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer", flexShrink: 0 }} />
+                    </div>
+                    {/* Sous-titre */}
+                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>SOUS-TITRE</div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                      <input type="text" value={signSubtitle} onChange={e => setSignSubtitle(e.target.value)} placeholder="Ex : Véhicules d'occasion certifiés"
+                        style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "'Rajdhani',sans-serif", fontSize: 14 }} />
+                      <input type="color" value={signSubtitleColor} onChange={e => setSignSubtitleColor(e.target.value)}
+                        style={{ width: 34, height: 34, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer", flexShrink: 0 }} />
+                    </div>
+                    {/* Police */}
+                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>POLICE</div>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
+                      {WALL_FONTS.map(f => (
+                        <button key={f.key} onClick={() => setSignFont(f.key)}
+                          style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", borderRadius: 2, fontFamily: f.family, fontWeight: f.weight, background: signFont === f.key ? "#f26522" : "var(--c-161616)", color: signFont === f.key ? "#090909" : "#999", border: `1px solid ${signFont === f.key ? "#f26522" : "var(--c-2a2a2a)"}` }}>{f.label}</button>
+                      ))}
+                    </div>
+                    {/* Aperçu */}
+                    {hasContent && (
+                      <div style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 3, padding: 14, marginBottom: 14, textAlign: "center" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
+                          {signLogo && <img src={signLogo} style={{ height: 30, objectFit: "contain" }} />}
+                          {signTitle.trim() && <span style={{ fontFamily: sf.family, fontWeight: sf.weight, fontSize: 22, color: signTitleColor, letterSpacing: 1 }}>{signTitle}</span>}
+                        </div>
+                        {signSubtitle.trim() && <div style={{ fontFamily: sf.family, fontWeight: sf.weight, fontSize: 12, color: signSubtitleColor, marginTop: 5 }}>{signSubtitle}</div>}
+                      </div>
+                    )}
+                    {/* Portée */}
+                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>APPLIQUER À</div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: signScope === "selected" ? 10 : 0 }}>
+                      {[["all", "Toutes les photos"], ["selected", "Photos sélectionnées"]].map(([k, label]) => (
+                        <button key={k} onClick={() => setSignScope(k)}
+                          style={{ flex: 1, padding: "7px 0", fontSize: 10, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", borderRadius: 2, background: signScope === k ? "#f26522" : "var(--c-161616)", color: signScope === k ? "#090909" : "var(--c-777)", border: `1px solid ${signScope === k ? "#f26522" : "var(--c-2a2a2a)"}` }}>{label}</button>
+                      ))}
+                    </div>
+                    {signScope === "selected" && (
+                      photos.length === 0
+                        ? <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "'JetBrains Mono',monospace" }}>Importez des photos pour les sélectionner.</div>
+                        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(60px, 1fr))", gap: 6 }}>
+                            {photos.map(p => {
+                              const sel = signSelectedIds.has(p.id);
+                              return (
+                                <div key={p.id} onClick={() => setSignSelectedIds(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
+                                  style={{ position: "relative", paddingTop: "70%", borderRadius: 3, overflow: "hidden", cursor: "pointer", border: `2px solid ${sel ? "#f26522" : "transparent"}` }}>
+                                  <img src={p.preview} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: sel ? 1 : 0.45 }} />
+                                  {sel && <div style={{ position: "absolute", top: 3, right: 3, width: 16, height: 16, borderRadius: "50%", background: "#f26522", color: "#090909", fontSize: 11, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                    )}
+                  </div>
+                  );
+                })()}
+              </section>
+
+              {/* ── 04 — Showroom Virtuel ── */}
               <section data-tutorial="showroom">
-                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Showroom Virtuel</div>
+                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>04 — Showroom Virtuel</div>
                 <div onClick={() => { if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); }}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
                   <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-444)"}`, background: showroomEnabled && canUseShowroom ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -5315,137 +5514,6 @@ export default function AutoCache() {
                       </div>
                     </div>
 
-                    {/* Logo / Texte mural */}
-                    <div style={{ marginTop: 14, borderTop: "1px solid var(--c-252525)", paddingTop: 12 }}>
-                      <div style={{ fontSize: 10, letterSpacing: 2, color: "var(--c-ddd)", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Enseigne murale</div>
-
-                      {/* Tabs : Aucun / Image / Texte */}
-                      <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
-                        {[["none","Aucune"],["image","Importer logo"],["text","Générer texte"]].map(([k,label]) => (
-                          <button key={k} onClick={() => setWallLogoMode(k)}
-                            style={{ flex: 1, padding: "5px 0", fontSize: 9, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", borderRadius: 2,
-                              background: wallLogoMode === k ? "#f26522" : "var(--c-161616)",
-                              color: wallLogoMode === k ? "#090909" : "var(--c-777)",
-                              border: `1px solid ${wallLogoMode === k ? "#f26522" : "var(--c-2a2a2a)"}`,
-                            }}>{label}</button>
-                        ))}
-                      </div>
-
-                      {/* Mode Image */}
-                      {wallLogoMode === "image" && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div onClick={() => wallLogoUploadRef.current?.click()}
-                            style={{ width: 70, height: 39, border: `1px dashed ${wallLogo ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--c-161616)", overflow: "hidden", flexShrink: 0 }}>
-                            {wallLogo
-                              ? <img src={wallLogo} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-                              : <span style={{ fontSize: 19, color: "var(--c-ddd)" }}>+</span>
-                            }
-                          </div>
-                          <input ref={wallLogoUploadRef} type="file" accept="image/*" style={{ display: "none" }}
-                            onChange={e => {
-                              const f = e.target.files?.[0]; if (!f) return;
-                              const reader = new FileReader();
-                              reader.onload = ev => setWallLogo(ev.target.result);
-                              reader.readAsDataURL(f);
-                              e.target.value = '';
-                            }} />
-                          {wallLogo && (<>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
-                              <input type="range" min="0.05" max="0.40" step="0.01" value={wallLogoScale}
-                                onChange={e => setWallLogoScale(parseFloat(e.target.value))}
-                                style={{ width: "100%", accentColor: "#f26522", height: 3 }} />
-                            </div>
-                            <button onClick={() => setWallLogo(null)}
-                              style={{ background: "transparent", border: "1px solid var(--c-2a2a2a)", color: "var(--c-ddd)", width: 22, height: 22, borderRadius: 3, cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-                          </>)}
-                        </div>
-                      )}
-
-                      {/* Mode Texte */}
-                      {wallLogoMode === "text" && (
-                        <div>
-                          <input type="text" value={wallText} onChange={e => setWallText(e.target.value)}
-                            placeholder="Nom de l'enseigne"
-                            style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, letterSpacing: 1, marginBottom: 8 }} />
-                          {/* Aperçu */}
-                          {wallText.trim() && (
-                            <div style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 3, padding: "10px 14px", marginBottom: 8, textAlign: "center", overflow: "hidden" }}>
-                              <span style={{
-                                fontFamily: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).family,
-                                fontWeight: (WALL_FONTS.find(f => f.key === wallTextFont) ?? WALL_FONTS[0]).weight,
-                                fontSize: 23, color: wallTextColor, letterSpacing: 3,
-                                WebkitTextStroke: wallTextStrokeWidth > 0 ? `${wallTextStrokeWidth * 0.4}px ${wallTextStrokeColor}` : undefined,
-                                textDecoration: wallTextUnderline ? "underline" : "none",
-                              }}>{wallText.trim()}</span>
-                            </div>
-                          )}
-                          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
-                            {/* Couleur */}
-                            <div>
-                              <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>COULEUR</div>
-                              <input type="color" value={wallTextColor} onChange={e => setWallTextColor(e.target.value)}
-                                style={{ width: 34, height: 26, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer" }} />
-                            </div>
-                            {/* Taille */}
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>TAILLE</div>
-                              <input type="range" min="0.05" max="0.40" step="0.01" value={wallLogoScale}
-                                onChange={e => setWallLogoScale(parseFloat(e.target.value))}
-                                style={{ width: "100%", accentColor: "#f26522", height: 3 }} />
-                            </div>
-                          </div>
-                          {/* Polices */}
-                          <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>POLICE</div>
-                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
-                            {WALL_FONTS.map(f => (
-                              <button key={f.key} onClick={() => setWallTextFont(f.key)}
-                                style={{
-                                  padding: "4px 8px", fontSize: 11, cursor: "pointer", borderRadius: 2,
-                                  fontFamily: f.family, fontWeight: f.weight,
-                                  background: wallTextFont === f.key ? "#f26522" : "var(--c-161616)",
-                                  color: wallTextFont === f.key ? "#090909" : "#999",
-                                  border: `1px solid ${wallTextFont === f.key ? "#f26522" : "var(--c-2a2a2a)"}`,
-                                }}>{f.label}</button>
-                            ))}
-                          </div>
-                          {/* Liseré */}
-                          <div style={{ marginBottom: 8 }}>
-                            <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>LISERÉ</div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <input type="color" value={wallTextStrokeColor}
-                                onChange={e => { setWallTextStrokeColor(e.target.value); if (wallTextStrokeWidth === 0) setWallTextStrokeWidth(2); }}
-                                style={{ width: 26, height: 26, padding: 0, border: `1px solid ${wallTextStrokeWidth > 0 ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, cursor: "pointer", background: "none" }} />
-                              <input type="range" min="0" max="10" step="1" value={wallTextStrokeWidth}
-                                onChange={e => setWallTextStrokeWidth(parseInt(e.target.value))}
-                                style={{ flex: 1, accentColor: "#f26522", height: 3 }} />
-                              <span style={{ fontSize: 11, color: wallTextStrokeWidth > 0 ? "#f26522" : "var(--c-444)", fontFamily: "'JetBrains Mono',monospace", minWidth: 20, textAlign: "right" }}>
-                                {wallTextStrokeWidth === 0 ? "Off" : wallTextStrokeWidth}
-                              </span>
-                            </div>
-                          </div>
-                          {/* Soulignement */}
-                          <div>
-                            <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>SOULIGNEMENT</div>
-                            <button onClick={() => setWallTextUnderline(v => !v)}
-                              style={{
-                                padding: "4px 12px", fontSize: 11, cursor: "pointer", borderRadius: 2,
-                                fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase",
-                                textDecoration: "underline",
-                                background: wallTextUnderline ? "#f26522" : "var(--c-161616)",
-                                color: wallTextUnderline ? "#090909" : "var(--c-777)",
-                                border: `1px solid ${wallTextUnderline ? "#f26522" : "var(--c-2a2a2a)"}`,
-                              }}>Souligner</button>
-                          </div>
-                        </div>
-                      )}
-
-                      {(wallLogoMode === "image" && wallLogo) || (wallLogoMode === "text" && wallText.trim()) ? (
-                        <div style={{ fontSize: 9, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginTop: 8 }}>
-                          Positionnez l'enseigne en la glissant sur l'image dans les résultats
-                        </div>
-                      ) : null}
-                    </div>
                   </div>
                 )}
               </section>
