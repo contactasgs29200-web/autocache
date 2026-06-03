@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@700&family=Cormorant+Garamond:wght@600&family=Bebas+Neue&family=Montserrat:wght@700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
     <style>
-      /* ── Thème NUIT (couleurs actuelles, par défaut) ── */
+      /* ── Thème NUIT (palette de base, activée via data-theme="dark") ── */
       :root{
         --c-1c1c1c:#1c1c1c; --c-161616:#161616; --c-141414:#141414; --c-121212:#121212;
         --c-0e0e0e:#0e0e0e; --c-181818:#181818; --c-0a0a0a:#0a0a0a; --c-111:#111111;
@@ -32,8 +32,8 @@
       html,body{ background:var(--c-1c1c1c); }
     </style>
     <script>
-      /* Applique le thème enregistré avant le premier rendu (évite un flash de couleur) */
-      try { document.documentElement.setAttribute("data-theme", localStorage.getItem("ac_theme") || "dark"); } catch (e) {}
+      /* Applique le thème enregistré avant le premier rendu (évite un flash de couleur). Mode jour par défaut. */
+      try { document.documentElement.setAttribute("data-theme", localStorage.getItem("ac_theme") || "light"); } catch (e) {}
     </script>
   </head>
   <body>

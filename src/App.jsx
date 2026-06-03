@@ -3061,8 +3061,8 @@ export default function AutoCache() {
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
   const [settingsOpen, setSettingsOpen] = useState(false); // menu settings en haut à droite
   const settingsRef = useRef(null); // ref pour fermer au clic extérieur
-  // Thème de l'interface : "dark" (nuit, couleurs actuelles) ou "light" (jour)
-  const [theme, setTheme] = useState(() => (typeof localStorage !== "undefined" && localStorage.getItem("ac_theme")) || "dark");
+  // Thème de l'interface : "light" (jour, par défaut) ou "dark" (nuit)
+  const [theme, setTheme] = useState(() => (typeof localStorage !== "undefined" && localStorage.getItem("ac_theme")) || "light");
   const logoRef        = useRef();
   const logoCropContainerRef = useRef(null);
   const photosRef      = useRef();

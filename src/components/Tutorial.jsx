@@ -259,7 +259,20 @@ export default function Tutorial({ onClose, isMobile }) {
   const [tooltipStyle, setTooltipStyle] = useState({});
   const [animating, setAnimating] = useState(true);
   const [vpSize, setVpSize] = useState({ w: window.innerWidth, h: window.innerHeight });
+  const [isLight, setIsLight] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "light"
+  );
   const tooltipRef = useRef(null);
+
+  /* ── Suit le thème jour/nuit pour adapter le didacticiel ── */
+  useEffect(() => {
+    const el = document.documentElement;
+    const update = () => setIsLight(el.getAttribute("data-theme") === "light");
+    update();
+    const obs = new MutationObserver(update);
+    obs.observe(el, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => obs.disconnect();
+  }, []);
 
   const current = STEPS[step];
   const isFirst = step === 0;
@@ -441,7 +454,7 @@ export default function Tutorial({ onClose, isMobile }) {
       {/* ── Top progress bar (always visible) ── */}
       <div style={{
         position: "fixed", top: 0, left: 0, right: 0, height: 3,
-        background: "rgba(255,255,255,0.06)", zIndex: 10002, pointerEvents: "none",
+        background: isLight ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.06)", zIndex: 10002, pointerEvents: "none",
       }}>
         <div style={{
           height: "100%",
@@ -467,12 +480,12 @@ export default function Tutorial({ onClose, isMobile }) {
                 transform: "translate(-50%, -50%)",
                 width: isMobile ? Math.min(360, window.innerWidth - 32) : 420,
               }),
-          background: "rgba(20,20,20,0.96)",
+          background: isLight ? "rgba(255,255,255,0.97)" : "rgba(20,20,20,0.96)",
           backdropFilter: "blur(8px)",
           WebkitBackdropFilter: "blur(8px)",
           border: "1px solid var(--c-2a2a2a)",
           borderRadius: 8,
-          boxShadow: "0 16px 60px rgba(0,0,0,0.8)",
+          boxShadow: isLight ? "0 16px 60px rgba(0,0,0,0.22)" : "0 16px 60px rgba(0,0,0,0.8)",
           fontFamily: "'Rajdhani', sans-serif",
           overflow: "hidden",
           opacity: animating ? 0 : 1,
