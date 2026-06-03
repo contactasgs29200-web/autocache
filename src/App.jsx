@@ -3079,6 +3079,10 @@ export default function AutoCache() {
   const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
   const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
   const adjustDragRef    = useRef(null); // sync immédiat avec setAdjustDrag (évite état périmé sur touch)
+  // ── Loupe tactile (smartphone) : bulle zoomée sur le coin en cours de glissement ──
+  const [loupeActive, setLoupeActive] = useState(false);
+  const loupeCanvasRef = useRef(null);
+  const loupeWrapRef   = useRef(null);
 
   // ── Showroom Setup (page principale) ──────────────────────────────────────
   const [showroomEnabled,      setShowroomEnabled]      = useState(false);
@@ -4191,6 +4195,7 @@ export default function AutoCache() {
     const drag = { corner, startMx: clientX, startMy: clientY, startCorners: { tl: { ...sc.tl }, tr: { ...sc.tr }, br: { ...sc.br }, bl: { ...sc.bl } } };
     adjustDragRef.current = drag;
     setAdjustDrag(drag);
+    if (isMobile && corner !== 'center') { setLoupeActive(true); updateLoupe(clientX, clientY, corner); }
   };
   const startAdjustDrag = (e, corner) => {
     e.preventDefault(); e.stopPropagation();
@@ -4214,6 +4219,49 @@ export default function AutoCache() {
       const bgColor = adjustLogoBgRef.current || '#ffffff';
       drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'bbox_stable');
     }
+  };
+
+  // ── Loupe tactile : dessine une bulle zoomée centrée sur le coin glissé ──
+  const LOUPE_CSS = 116;
+  const updateLoupe = (clientX, clientY, corner) => {
+    if (!isMobile) return;
+    const src   = adjustCanvasRef.current;
+    const loupe = loupeCanvasRef.current;
+    const wrap  = loupeWrapRef.current;
+    if (!src || !loupe || !wrap) return;
+    const pt = (adjustCornersRef.current || {})[corner];
+    if (!pt) return;
+    const rect = src.getBoundingClientRect();
+    const displayScale = rect.width / src.width; // px écran par px natif
+    if (!displayScale) return;
+    const ZOOM = 2.6;
+    const srcSize = LOUPE_CSS / (ZOOM * displayScale); // zone source en px natifs
+    const cx = pt.x * src.width;
+    const cy = pt.y * src.height;
+    const dpr = 2;
+    const dim = LOUPE_CSS * dpr;
+    if (loupe.width !== dim) { loupe.width = dim; loupe.height = dim; }
+    const ctx = loupe.getContext('2d');
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, dim, dim);
+    ctx.drawImage(src, cx - srcSize / 2, cy - srcSize / 2, srcSize, srcSize, 0, 0, dim, dim);
+    // Réticule au centre = position exacte du coin
+    const c = dim / 2, arm = 13;
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.moveTo(c - arm, c); ctx.lineTo(c + arm, c); ctx.moveTo(c, c - arm); ctx.lineTo(c, c + arm); ctx.stroke();
+    ctx.strokeStyle = '#e8a020'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(c - arm, c); ctx.lineTo(c + arm, c); ctx.moveTo(c, c - arm); ctx.lineTo(c, c + arm); ctx.stroke();
+    ctx.beginPath(); ctx.arc(c, c, 5 * dpr, 0, Math.PI * 2); ctx.lineWidth = 2; ctx.stroke();
+    // Position de la bulle : au-dessus du doigt, sinon en dessous, clampée à l'écran
+    const M = 10;
+    let left = clientX - LOUPE_CSS / 2;
+    let top  = clientY - LOUPE_CSS - 30;        // au-dessus du doigt
+    if (top < M) top = clientY + 30;            // sinon en dessous
+    left = Math.max(M, Math.min(window.innerWidth  - LOUPE_CSS - M, left));
+    top  = Math.max(M, Math.min(window.innerHeight - LOUPE_CSS - M, top));
+    wrap.style.left = left + 'px';
+    wrap.style.top  = top + 'px';
   };
 
   const onAdjustMouseMove = (e) => {
@@ -4248,7 +4296,10 @@ export default function AutoCache() {
     if (!adjustDragRef.current || !adjustCanvasRef.current) return;
     e.preventDefault();
     if (e.touches.length > 0) {
-      onAdjustMouseMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
+      const { clientX, clientY } = e.touches[0];
+      onAdjustMouseMove({ clientX, clientY });
+      const corner = adjustDragRef.current.corner;
+      if (loupeActive && corner !== 'center') updateLoupe(clientX, clientY, corner);
     }
   };
 
@@ -5540,6 +5591,7 @@ export default function AutoCache() {
             // Sauvegarde le coin relâché (équivalent tactile de onMouseUp)
             commitAdjust();
             adjustDragRef.current = null; setAdjustDrag(null);
+            setLoupeActive(false);
             setCropDrag(null);
             setLbPanDrag(null);
             pinchRef.current = null;
@@ -5567,6 +5619,24 @@ export default function AutoCache() {
               onClick={e => { e.stopPropagation(); setAdjustMode(false); setAdjustDrag(null); setManualPlateMode(false); }}
               style={{ position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)", zIndex: 1010, height: 44, paddingInline: 28, borderRadius: 22, background: "#e8a020", border: "none", color: "#090909", fontSize: 15, fontWeight: 700, fontFamily: "'Rajdhani',sans-serif", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", boxShadow: "0 4px 16px rgba(0,0,0,0.7)" }}
             >✓ Terminé</button>
+          )}
+          {/* ── Loupe tactile : bulle zoomée sur le coin glissé (mobile, mode ajuster) ── */}
+          {isMobile && adjustMode && (
+            <div
+              ref={loupeWrapRef}
+              style={{
+                position: "fixed", left: 0, top: 0, zIndex: 1015,
+                width: LOUPE_CSS, height: LOUPE_CSS, borderRadius: "50%",
+                overflow: "hidden", pointerEvents: "none",
+                border: "3px solid #e8a020",
+                boxShadow: "0 4px 18px rgba(0,0,0,0.85)",
+                background: "#0a0a0a",
+                opacity: loupeActive ? 1 : 0,
+                transition: "opacity 0.12s ease",
+              }}
+            >
+              <canvas ref={loupeCanvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+            </div>
           )}
           {/* ── Barre du haut ── */}
           <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 1100, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: isMobile ? "0 44px 0 2px" : "0 2px", gap: 6 }}>
