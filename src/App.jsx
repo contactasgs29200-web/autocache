@@ -3079,6 +3079,9 @@ export default function AutoCache() {
   const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
   const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
   const adjustDragRef    = useRef(null); // sync immédiat avec setAdjustDrag (évite état périmé sur touch)
+  const adjustOverlayCanvasRef = useRef(null); // calque transparent du cache plaque (redessiné à chaque frame)
+  const adjustRafRef     = useRef(0);    // rAF en attente (coalesce les touchmove → 1 rendu/frame)
+  const adjustPendingRef = useRef(null); // dernière position du doigt en attente de rendu
   // ── Loupe tactile (smartphone) : bulle zoomée sur le coin en cours de glissement ──
   const [loupeActive, setLoupeActive] = useState(false);
   const loupeCanvasRef = useRef(null);
@@ -4202,15 +4205,25 @@ export default function AutoCache() {
     startAdjustDragAt(e.clientX, e.clientY, corner);
   };
 
-  // Rendu direct sur le canvas (pas de setState — pas de re-render — 60 fps)
-  const renderAdjustPreview = (corners) => {
+  // L'image de base ne change pas pendant un glissement : on la dessine une
+  // seule fois sur le canvas du fond (coûteux car pleine résolution).
+  const drawAdjustBase = () => {
     const canvas = adjustCanvasRef.current;
     const baseImg = adjustBaseImgRef.current;
-    const logoImg = adjustLogoImgRef.current;
     if (!canvas || !baseImg) return;
     const ctx = canvas.getContext('2d'); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(baseImg, 0, 0);
+  };
+
+  // Seul le cache plaque bouge : on le redessine sur un calque transparent
+  // (effacer + tracer le quadrilatère = bien plus léger qu'un redraw complet).
+  const renderAdjustOverlay = (corners) => {
+    const canvas = adjustOverlayCanvasRef.current;
+    const logoImg = adjustLogoImgRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d'); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (logoImg && corners) {
       const W = canvas.width, H = canvas.height;
       const toPixel = p => ({ x: p.x * W, y: p.y * H });
@@ -4219,6 +4232,27 @@ export default function AutoCache() {
       const bgColor = adjustLogoBgRef.current || '#ffffff';
       drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'bbox_stable');
     }
+  };
+
+  // Rendu complet (fond + cache) — utilisé à l'ouverture du mode Ajuster.
+  const renderAdjustPreview = (corners) => {
+    drawAdjustBase();
+    renderAdjustOverlay(corners);
+  };
+
+  // Coalesce les nombreux touchmove en UN seul rendu par frame d'affichage.
+  const scheduleAdjustRender = (clientX, clientY) => {
+    adjustPendingRef.current = { clientX, clientY };
+    if (adjustRafRef.current) return;
+    adjustRafRef.current = requestAnimationFrame(() => {
+      adjustRafRef.current = 0;
+      const corners = adjustCornersRef.current;
+      renderAdjustOverlay(corners);     // calque cache plaque (léger)
+      setAdjustCorners(corners);        // poignées oranges + contour SVG
+      const p = adjustPendingRef.current;
+      const drag = adjustDragRef.current;
+      if (p && drag && loupeActive && drag.corner !== 'center') updateLoupe(p.clientX, p.clientY, drag.corner);
+    });
   };
 
   // ── Loupe tactile : dessine une bulle zoomée centrée sur le coin glissé ──
@@ -4245,7 +4279,10 @@ export default function AutoCache() {
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     ctx.fillStyle = '#0a0a0a';
     ctx.fillRect(0, 0, dim, dim);
-    ctx.drawImage(src, cx - srcSize / 2, cy - srcSize / 2, srcSize, srcSize, 0, 0, dim, dim);
+    const sx = cx - srcSize / 2, sy = cy - srcSize / 2;
+    ctx.drawImage(src, sx, sy, srcSize, srcSize, 0, 0, dim, dim);
+    const ov = adjustOverlayCanvasRef.current; // le cache plaque vit sur le calque
+    if (ov) ctx.drawImage(ov, sx, sy, srcSize, srcSize, 0, 0, dim, dim);
     // Réticule au centre = position exacte du coin
     const c = dim / 2, arm = 13;
     ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 3.5;
@@ -4288,18 +4325,15 @@ export default function AutoCache() {
       };
     }
     adjustCornersRef.current = newCorners;
-    setAdjustCorners(newCorners);          // met à jour les points oranges
-    renderAdjustPreview(newCorners);       // met à jour le canvas en direct
+    // Calcul immédiat (léger) ; rendu canvas + setState coalescés en 1/frame.
+    scheduleAdjustRender(e.clientX, e.clientY);
   };
 
   const onAdjustTouchMove = (e) => {
     if (!adjustDragRef.current || !adjustCanvasRef.current) return;
     e.preventDefault();
     if (e.touches.length > 0) {
-      const { clientX, clientY } = e.touches[0];
-      onAdjustMouseMove({ clientX, clientY });
-      const corner = adjustDragRef.current.corner;
-      if (loupeActive && corner !== 'center') updateLoupe(clientX, clientY, corner);
+      onAdjustMouseMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
     }
   };
 
@@ -4311,18 +4345,25 @@ export default function AutoCache() {
     const canvas = adjustCanvasRef.current;
     if (!canvas) return;
     const latestCorners = adjustCornersRef.current;
+    // Garantit que le calque cache plaque correspond aux derniers coins, puis
+    // aplatit fond + cache plaque en une seule image pour l'export.
+    renderAdjustOverlay(latestCorners);
+    const flat = document.createElement('canvas');
+    flat.width = canvas.width; flat.height = canvas.height;
+    const fctx = flat.getContext('2d');
+    fctx.drawImage(canvas, 0, 0);
+    const ov = adjustOverlayCanvasRef.current; if (ov) fctx.drawImage(ov, 0, 0);
+    const flatURL = flat.toDataURL('image/jpeg', 0.97);
     if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
-      // Mode showroom : le canvas EST déjà fond+voiture+cache plaque à qualité native
+      // Mode showroom : fond+voiture+cache plaque aplatis à qualité native
       const t = adjustShowroomTransformRef.current;
       const photoCorners   = cornersFromShowroom(latestCorners, t);
-      const newShowroomURL = canvas.toDataURL('image/jpeg', 0.97);
-      const updated = { ...lightbox, corners: photoCorners, showroomDataURL: newShowroomURL };
+      const updated = { ...lightbox, corners: photoCorners, showroomDataURL: flatURL };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
     } else {
       // Mode normal : sauvegarde la photo avec le cache plaque
-      const newDataURL = canvas.toDataURL('image/jpeg', 0.97);
-      const updated = { ...lightbox, processed: newDataURL, corners: latestCorners, ...(manualPlateMode ? { plateFound: true } : {}) };
+      const updated = { ...lightbox, processed: flatURL, corners: latestCorners, ...(manualPlateMode ? { plateFound: true } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       // Régénère le showroom avec les nouveaux coins si showroom actif
@@ -4471,9 +4512,12 @@ export default function AutoCache() {
       adjustLogoImgRef.current = logoForRender;
       adjustLogoBgRef.current  = lightbox.bgColor || '#ffffff';
       const canvas = adjustCanvasRef.current;
+      const overlay = adjustOverlayCanvasRef.current;
       if (canvas && !cancelled) {
-        canvas.width  = isShowroom ? lightbox.showroomTransform.W : baseImg.naturalWidth;
-        canvas.height = isShowroom ? lightbox.showroomTransform.H : baseImg.naturalHeight;
+        const cw = isShowroom ? lightbox.showroomTransform.W : baseImg.naturalWidth;
+        const ch = isShowroom ? lightbox.showroomTransform.H : baseImg.naturalHeight;
+        canvas.width  = cw; canvas.height = ch;
+        if (overlay) { overlay.width = cw; overlay.height = ch; }
         renderAdjustPreview(adjustCornersRef.current);
       }
     })();
@@ -5588,6 +5632,7 @@ export default function AutoCache() {
             else onLbTouchMove(e);
           }}
           onTouchEnd={() => {
+            if (adjustRafRef.current) { cancelAnimationFrame(adjustRafRef.current); adjustRafRef.current = 0; }
             // Sauvegarde le coin relâché (équivalent tactile de onMouseUp)
             commitAdjust();
             adjustDragRef.current = null; setAdjustDrag(null);
@@ -5597,6 +5642,7 @@ export default function AutoCache() {
             pinchRef.current = null;
           }}
           onMouseUp={() => {
+            if (adjustRafRef.current) { cancelAnimationFrame(adjustRafRef.current); adjustRafRef.current = 0; }
             setCropDrag(null);
             // Auto-sauvegarde dès qu'un coin est relâché
             commitAdjust();
@@ -5742,10 +5788,17 @@ export default function AutoCache() {
               lineHeight: 0,
             }}>
             {adjustMode ? (
-              <canvas
-                ref={adjustCanvasRef}
-                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh", touchAction: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", pointerEvents: "none" }}
-              />
+              <>
+                <canvas
+                  ref={adjustCanvasRef}
+                  style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh", touchAction: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", pointerEvents: "none" }}
+                />
+                {/* Calque transparent du cache plaque, superposé au fond */}
+                <canvas
+                  ref={adjustOverlayCanvasRef}
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                />
+              </>
             ) : cropMode ? (
               <canvas
                 ref={cropCanvasRef}
