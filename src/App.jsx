@@ -3794,49 +3794,44 @@ export default function AutoCache() {
     }
   };
 
-  // Grille des 3 formules + liste des fonctionnalités incluses (réutilisée dans plusieurs modales)
+  // Grille des 3 formules — même format que les cartes plans (liste cochée par carte)
   const renderFormulesGrid = () => (
-    <>
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 22 }}>
-        {SUBSCRIPTION_FORMULES.map(f => {
-          const hot = f.key === "monthly";
-          return (
-            <div key={f.key}
-              onMouseEnter={() => setHoveredPlan(f.key)}
-              onMouseLeave={() => setHoveredPlan(null)}
-              style={{ background: hot ? "rgba(242,101,34,0.06)" : "#0e0e0e", border: `1px solid ${hot ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "22px 18px", position: "relative", transform: hoveredPlan === f.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
-              {f.badge && (
-                <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{f.badge}</div>
-              )}
-              <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: hot ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 2 }}>{f.name}</div>
-              <div style={{ fontSize: 9, color: "#777", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>{f.tag}</div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 4 }}>
-                <span style={{ fontSize: 23, fontWeight: 700, color: hot ? "#f26522" : "#e0dbd4" }}>{f.price}</span>
-                <span style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>{f.period}</span>
-              </div>
-              <div style={{ fontSize: 10, color: "#888", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5, marginBottom: 18, minHeight: 28 }}>{f.note}</div>
-              <button
-                disabled={checkoutLoading === f.key}
-                onClick={() => startCheckout(f.key)}
-                style={{ width: "100%", background: hot ? "#f26522" : "transparent", color: hot ? "#090909" : "#888", border: `1px solid ${hot ? "#f26522" : "#333"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
-                {checkoutLoading === f.key ? "Redirection..." : "Choisir"}
-              </button>
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 24 }}>
+      {SUBSCRIPTION_FORMULES.map(f => {
+        const hot = f.key === "monthly";
+        return (
+          <div key={f.key}
+            onMouseEnter={() => setHoveredPlan(f.key)}
+            onMouseLeave={() => setHoveredPlan(null)}
+            style={{ display: "flex", flexDirection: "column", background: hot ? "rgba(242,101,34,0.05)" : "#0e0e0e", border: `1px solid ${hot ? "#f26522" : "#2a2a2a"}`, borderRadius: 6, padding: "24px 20px", position: "relative", transform: hoveredPlan === f.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
+            {f.badge && (
+              <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{f.badge}</div>
+            )}
+            <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: hot ? "#f26522" : "#aaa", textTransform: "uppercase", marginBottom: 2 }}>{f.name}</div>
+            <div style={{ fontSize: 9, color: "#777", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>{f.tag}</div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 4 }}>
+              <span style={{ fontSize: 22, fontWeight: 700, color: hot ? "#f26522" : "#e0dbd4" }}>{f.price}</span>
+              <span style={{ fontSize: 10, color: "#ddd", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>{f.period}</span>
             </div>
-          );
-        })}
-      </div>
-      <div style={{ background: "#0e0e0e", border: "1px solid #1f1f1f", borderRadius: 6, padding: "16px 20px", marginBottom: 22 }}>
-        <div style={{ fontSize: 10, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 12 }}>Inclus dans toutes les formules</div>
-        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: "7px 18px" }}>
-          {SUBSCRIPTION_FEATURES.map((label, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 12, color: "#27ae60", flexShrink: 0 }}>✓</span>
-              <span style={{ fontSize: 11, color: "#bbb", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{label}</span>
+            <div style={{ fontSize: 9.5, color: "#888", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5, marginBottom: 16, minHeight: 26 }}>{f.note}</div>
+            <div style={{ marginBottom: 20 }}>
+              {SUBSCRIPTION_FEATURES.map((label, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                  <span style={{ fontSize: 12, color: "#27ae60", flexShrink: 0 }}>✓</span>
+                  <span style={{ fontSize: 11, color: "#bbb", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{label}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </div>
-    </>
+            <button
+              disabled={checkoutLoading === f.key}
+              onClick={() => startCheckout(f.key)}
+              style={{ width: "100%", marginTop: "auto", background: hot ? "#f26522" : "transparent", color: hot ? "#090909" : "#888", border: `1px solid ${hot ? "#f26522" : "#333"}`, padding: "11px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+              {checkoutLoading === f.key ? "Redirection..." : `Choisir ${f.name}`}
+            </button>
+          </div>
+        );
+      })}
+    </div>
   );
 
   // Close credit popup on click outside
