@@ -2968,6 +2968,24 @@ function SettingsIcon({ name, size = 16 }) {
   }
 }
 
+// ── Offre d'abonnement unique (un seul plan, 3 cadences de facturation) ──
+// ⚠️ PRIX INDICATIFS À CONFIRMER + créer les Price IDs Stripe correspondants
+// (voir api/create-checkout-session.js : STRIPE_PRO_WEEKLY/MONTHLY/ANNUAL_PRICE_ID).
+const SUB_PLAN_NAME = "AutoCache Pro";
+const SUB_FEATURES = [
+  "Cache plaque personnalisé",
+  "Logo importé ou généré",
+  "Ajustements couleurs",
+  "Amélioration automatique",
+  "Showroom Virtuel (fonds IA)",
+  "Enseigne murale",
+];
+const SUB_PERIODS = [
+  { key: "weekly",  label: "Hebdo",   price: "9,90 €",  suffix: "/sem",  note: "Sans engagement", badge: null },
+  { key: "monthly", label: "Mensuel", price: "24,90 €", suffix: "/mois", note: "Le plus courant", badge: "Populaire" },
+  { key: "annual",  label: "Annuel",  price: "249 €",   suffix: "/an",   note: "2 mois offerts",  badge: "Meilleur prix" },
+];
+
 export default function AutoCache() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -2994,7 +3012,8 @@ export default function AutoCache() {
   const [subInfoLoading, setSubInfoLoading] = useState(false);
   const creditPopupRef = useRef(null);
   const [hoveredPlan, setHoveredPlan] = useState(null);
-  const [checkoutLoading, setCheckoutLoading] = useState(null); // "essential" | "pro" | null
+  const [checkoutLoading, setCheckoutLoading] = useState(null); // cadence en cours ("weekly"|"monthly"|"annual") | null
+  const [selectedPeriod, setSelectedPeriod] = useState("monthly"); // cadence sélectionnée dans l'offre d'abonnement
   const [portalLoading, setPortalLoading] = useState(null); // null | "invoices" | "cancel" | "upgrade"
   const [portalError, setPortalError] = useState("");
   const [promoCode, setPromoCode] = useState("");
@@ -4358,6 +4377,75 @@ export default function AutoCache() {
   }
 
   if (!user) return <AuthScreen onAuth={setUser} />;
+
+  // Lance le paiement Stripe pour la cadence sélectionnée (plan unique "pro").
+  const startSubscription = async (period) => {
+    setCheckoutLoading(period);
+    try {
+      const res = await fetch("/api/create-checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: "pro", period, userId: user.id, userEmail: user.email }),
+      });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+      else alert("Erreur lors de la création du paiement.");
+    } catch { alert("Erreur réseau, réessayez."); }
+    finally { setCheckoutLoading(null); }
+  };
+
+  // Offre d'abonnement : un seul plan, sélecteur de cadence (hebdo / mensuel / annuel).
+  const renderSubscriptionOffer = () => {
+    const sel = SUB_PERIODS.find(p => p.key === selectedPeriod) || SUB_PERIODS[1];
+    return (
+      <div style={{ maxWidth: 460, margin: "0 auto" }}>
+        {/* Sélecteur de cadence */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 22 }}>
+          {SUB_PERIODS.map(p => {
+            const active = p.key === selectedPeriod;
+            return (
+              <button key={p.key} onClick={() => setSelectedPeriod(p.key)}
+                style={{
+                  position: "relative", display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+                  background: active ? "rgba(242,101,34,0.08)" : "var(--c-0e0e0e)",
+                  border: `1px solid ${active ? "#f26522" : "var(--c-2a2a2a)"}`,
+                  borderRadius: 6, padding: "12px 6px 10px", cursor: "pointer", minHeight: "unset",
+                }}>
+                {p.badge && (
+                  <div style={{ position: "absolute", top: -9, left: "50%", transform: "translateX(-50%)", background: active ? "#f26522" : "var(--c-333)", color: active ? "#090909" : "var(--c-bbb)", fontSize: 8, fontWeight: 700, letterSpacing: 1, padding: "2px 7px", borderRadius: 8, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{p.badge}</div>
+                )}
+                <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: active ? "#f26522" : "var(--c-aaa)", fontFamily: "'Rajdhani',sans-serif" }}>{p.label}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: active ? "var(--c-e0dbd4)" : "var(--c-ccc)", fontFamily: "'JetBrains Mono',monospace" }}>{p.price}</span>
+                <span style={{ fontSize: 9, color: "var(--c-888)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>{p.suffix}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Carte du plan unique */}
+        <div style={{ background: "rgba(242,101,34,0.05)", border: "1px solid #f26522", borderRadius: 8, padding: "22px 24px" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", marginBottom: 4 }}>{SUB_PLAN_NAME}</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 2 }}>
+            <span style={{ fontSize: 30, fontWeight: 700, color: "var(--c-e0dbd4)", fontFamily: "'JetBrains Mono',monospace" }}>{sel.price}</span>
+            <span style={{ fontSize: 12, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>{sel.suffix}</span>
+          </div>
+          <div style={{ fontSize: 10, color: "#f26522", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, marginBottom: 18 }}>{sel.note}</div>
+          <div style={{ marginBottom: 22 }}>
+            {SUB_FEATURES.map((f, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 12, color: "#27ae60", flexShrink: 0 }}>✓</span>
+                <span style={{ fontSize: 11, color: "var(--c-bbb)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{f}</span>
+              </div>
+            ))}
+          </div>
+          <button disabled={checkoutLoading === selectedPeriod} onClick={() => startSubscription(selectedPeriod)}
+            style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "12px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 4, cursor: "pointer" }}>
+            {checkoutLoading === selectedPeriod ? "Redirection..." : "S'abonner"}
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -6472,7 +6560,7 @@ export default function AutoCache() {
         <div onClick={() => setShowPlansModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: userPlan === "trial" ? 740 : 480, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: 480, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
 
             {userPlan === "trial" ? (
               /* ── Vue comparaison des plans (utilisateurs en essai) ── */
@@ -6484,85 +6572,7 @@ export default function AutoCache() {
                   </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 28 }}>
-                  {[
-                    {
-                      key: "essential",
-                      name: "Essentiel",
-                      price: "14,90 €",
-                      badge: null,
-                      features: [
-                        { ok: true,  label: "Cache plaque personnalisé" },
-                        { ok: true,  label: "Logo importé ou généré" },
-                        { ok: true,  label: "Ajustements couleurs" },
-                        { ok: true,  label: "Amélioration automatique" },
-                        { ok: false, label: "Showroom Virtuel (fonds IA)" },
-                        { ok: false, label: "Enseigne murale" },
-                      ],
-                    },
-                    {
-                      key: "pro",
-                      name: "Pro",
-                      price: "24,90 €",
-                      badge: "Recommandé",
-                      features: [
-                        { ok: true, label: "Cache plaque personnalisé" },
-                        { ok: true, label: "Logo importé ou généré" },
-                        { ok: true, label: "Ajustements couleurs" },
-                        { ok: true, label: "Amélioration automatique" },
-                        { ok: true, label: "Showroom Virtuel (fonds IA)" },
-                        { ok: true, label: "Enseigne murale" },
-                      ],
-                    },
-                  ].map(plan => {
-                    const isPro = plan.key === "pro";
-                    return (
-                      <div key={plan.key}
-                        onMouseEnter={() => setHoveredPlan(plan.key)}
-                        onMouseLeave={() => setHoveredPlan(null)}
-                        style={{ background: isPro ? "rgba(242,101,34,0.05)" : "var(--c-0e0e0e)", border: `1px solid ${isPro ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 6, padding: "24px 22px", position: "relative", transform: hoveredPlan === plan.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
-                        {plan.badge && (
-                          <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
-                        )}
-                        <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "var(--c-aaa)", textTransform: "uppercase", marginBottom: 4 }}>{plan.name}</div>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 2 }}>
-                          <span style={{ fontSize: 23, fontWeight: 700, color: isPro ? "#f26522" : "var(--c-ccc)" }}>{plan.price}</span>
-                          <span style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1 }}>/mois</span>
-                        </div>
-                        <div style={{ marginBottom: 20, marginTop: 14 }}>
-                          {plan.features.map((f, i) => (
-                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-                              <span style={{ fontSize: 12, color: f.ok ? "#27ae60" : "var(--c-444)", flexShrink: 0 }}>{f.ok ? "✓" : "✕"}</span>
-                              <span style={{ fontSize: 11, color: f.ok ? "var(--c-bbb)" : "var(--c-444)", fontFamily: "'JetBrains Mono',monospace", letterSpacing: 0.5 }}>{f.label}</span>
-                            </div>
-                          ))}
-                        </div>
-                        <button
-                          disabled={checkoutLoading === plan.key}
-                          onClick={async () => {
-                            setCheckoutLoading(plan.key);
-                            try {
-                              const res = await fetch("/api/create-checkout-session", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ plan: plan.key, userId: user.id, userEmail: user.email }),
-                              });
-                              const data = await res.json();
-                              if (data.url) window.location.href = data.url;
-                              else alert("Erreur lors de la création du paiement.");
-                            } catch (e) {
-                              alert("Erreur réseau, réessayez.");
-                            } finally {
-                              setCheckoutLoading(null);
-                            }
-                          }}
-                          style={{ width: "100%", background: isPro ? "#f26522" : "transparent", color: isPro ? "#090909" : "var(--c-777)", border: `1px solid ${isPro ? "#f26522" : "var(--c-333)"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
-                          {checkoutLoading === plan.key ? "Redirection..." : `Choisir ${plan.name}`}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
+                {renderSubscriptionOffer()}
 
                 <button onClick={() => setShowPlansModal(false)}
                   style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
@@ -6723,79 +6733,7 @@ export default function AutoCache() {
             </div>
 
             {/* Cartes plans */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 24 }}>
-              {[
-                {
-                  key: "essential",
-                  name: "Essentiel",
-                  price: "14,90€",
-                  badge: null,
-                  features: [
-                    { ok: true,  label: "200 photos / mois" },
-                    { ok: true,  label: "Cache plaque personnalisé" },
-                    { ok: true,  label: "Logo importé ou généré" },
-                    { ok: true,  label: "Ajustements couleurs" },
-                    { ok: false, label: "Showroom Virtuel (fonds IA)" },
-                    { ok: false, label: "Enseigne murale" },
-                  ],
-                },
-                {
-                  key: "pro",
-                  name: "Pro",
-                  price: "24,90€",
-                  badge: "Recommandé",
-                  features: [
-                    { ok: true, label: "250 photos / mois" },
-                    { ok: true, label: "Cache plaque personnalisé" },
-                    { ok: true, label: "Logo importé ou généré" },
-                    { ok: true, label: "Ajustements couleurs" },
-                    { ok: true, label: "Showroom Virtuel (fonds IA)" },
-                    { ok: true, label: "Enseigne murale" },
-                  ],
-                },
-              ].map(plan => {
-                const isPro = plan.key === "pro";
-                return (
-                  <div key={plan.key}
-                    onMouseEnter={() => setHoveredPlan(`trial-${plan.key}`)}
-                    onMouseLeave={() => setHoveredPlan(null)}
-                    style={{ background: isPro ? "rgba(242,101,34,0.05)" : "var(--c-0e0e0e)", border: `1px solid ${isPro ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 6, padding: "22px 20px", position: "relative", transform: hoveredPlan === `trial-${plan.key}` ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
-                    {plan.badge && (
-                      <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "'JetBrains Mono',monospace", textTransform: "uppercase", whiteSpace: "nowrap" }}>{plan.badge}</div>
-                    )}
-                    <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: isPro ? "#f26522" : "var(--c-aaa)", textTransform: "uppercase", marginBottom: 2 }}>{plan.name}</div>
-                    <div style={{ fontSize: 19, fontWeight: 700, color: "var(--c-e0dbd4)", marginBottom: 14, fontFamily: "'JetBrains Mono',monospace" }}>{plan.price}<span style={{ fontSize: 11, color: "var(--c-ddd)", fontWeight: 400 }}> /mois</span></div>
-                    <div style={{ marginBottom: 18 }}>
-                      {plan.features.map((f, i) => (
-                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span style={{ fontSize: 12, color: f.ok ? "#27ae60" : "var(--c-444)", flexShrink: 0 }}>{f.ok ? "✓" : "✕"}</span>
-                          <span style={{ fontSize: 11, color: f.ok ? "var(--c-bbb)" : "var(--c-444)", fontFamily: "'JetBrains Mono',monospace" }}>{f.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <button
-                      disabled={checkoutLoading === plan.key}
-                      onClick={async () => {
-                        setCheckoutLoading(plan.key);
-                        try {
-                          const res = await fetch("/api/create-checkout-session", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ plan: plan.key, userId: user.id, userEmail: user.email }),
-                          });
-                          const data = await res.json();
-                          if (data.url) window.location.href = data.url;
-                          else alert("Erreur lors de la création du paiement.");
-                        } catch { alert("Erreur réseau, réessayez."); }
-                        finally { setCheckoutLoading(null); }
-                      }}
-                      style={{ width: "100%", background: isPro ? "#f26522" : "transparent", color: isPro ? "#090909" : "var(--c-888)", border: `1px solid ${isPro ? "#f26522" : "var(--c-333)"}`, padding: "10px 0", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
-                      {checkoutLoading === plan.key ? "Redirection..." : `Choisir ${plan.name}`}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+            {renderSubscriptionOffer()}
 
             <button onClick={() => setShowUpgradeModal(false)}
               style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-222)", padding: "9px 0", fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
