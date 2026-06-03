@@ -3657,10 +3657,10 @@ export default function AutoCache() {
           }
 
           const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
-          // Default blend = 75 so the vehicle integrates with the décor as soon as
+          // Default blend = 60 so the vehicle integrates with the décor as soon as
           // the photo is generated. User can still drag the slider down to 0 in the
           // lightbox to disable the effect entirely.
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, DEFAULT_SHOWROOM_ZOOM, true, wOpts, shadowMatteUrl, 75, carBounds);
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, DEFAULT_SHOWROOM_ZOOM, true, wOpts, shadowMatteUrl, 60, carBounds);
 
           // For debug modes that show source-based overlays, override the showroom result
           if (debugDataURL) {
@@ -3678,7 +3678,7 @@ export default function AutoCache() {
           }
           entry.showroomBgUrl     = showroomBgDataUrl;
           entry.showroomZoom      = DEFAULT_SHOWROOM_ZOOM; // taille par défaut de la voiture dans le décor
-          entry.showroomBlend     = 75; // default blend so the lightbox slider opens at 75 %
+          entry.showroomBlend     = 60; // default blend so the lightbox slider opens at 60 %
           entry.wallLogoSrc       = resolvedWallLogo;
           entry.wallLogoPos       = { x: 0.5, y: 0.25 };
           entry.wallLogoScale     = wallLogoScale;
@@ -6407,24 +6407,22 @@ export default function AutoCache() {
                 <button
                   key={dir}
                   onClick={e => { e.stopPropagation(); nudgeShowroom(dx, dy); }}
-                  disabled={showroomNudging}
                   style={{
                     position: "fixed",
                     ...style,
                     pointerEvents: "all",
                     width: 52, height: 52,
                     borderRadius: "50%",
-                    background: showroomNudging ? "rgba(30,30,30,0.6)" : "rgba(242,101,34,0.82)",
+                    background: "rgba(242,101,34,0.82)",
                     border: "2px solid rgba(255,255,255,0.18)",
                     color: "#fff",
                     fontSize: 21,
-                    cursor: showroomNudging ? "not-allowed" : "pointer",
+                    cursor: "pointer",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     boxShadow: "0 2px 12px rgba(0,0,0,0.7)",
-                    transition: "background 0.15s",
                     zIndex: 1010,
                   }}
-                >{showroomNudging ? "…" : label}</button>
+                >{label}</button>
               ))}
             </div>
           )}
