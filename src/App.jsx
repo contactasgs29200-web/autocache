@@ -4252,6 +4252,46 @@ export default function AutoCache() {
     }
   };
 
+  // Sauvegarde le résultat après le relâchement d'un coin (souris OU tactile).
+  // Utilise adjustDragRef/adjustCornersRef (refs) pour rester fiable sur mobile,
+  // où l'événement souris synthétique d'iOS peut être supprimé par preventDefault.
+  const commitAdjust = () => {
+    if (!adjustDragRef.current || !adjustCornersRef.current) return;
+    const canvas = adjustCanvasRef.current;
+    if (!canvas) return;
+    const latestCorners = adjustCornersRef.current;
+    if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
+      // Mode showroom : le canvas EST déjà fond+voiture+cache plaque à qualité native
+      const t = adjustShowroomTransformRef.current;
+      const photoCorners   = cornersFromShowroom(latestCorners, t);
+      const newShowroomURL = canvas.toDataURL('image/jpeg', 0.97);
+      const updated = { ...lightbox, corners: photoCorners, showroomDataURL: newShowroomURL };
+      setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
+      setLightbox(updated);
+    } else {
+      // Mode normal : sauvegarde la photo avec le cache plaque
+      const newDataURL = canvas.toDataURL('image/jpeg', 0.97);
+      const updated = { ...lightbox, processed: newDataURL, corners: latestCorners, ...(manualPlateMode ? { plateFound: true } : {}) };
+      setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
+      setLightbox(updated);
+      // Régénère le showroom avec les nouveaux coins si showroom actif
+      if (lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
+        const snap = { ...lightbox, corners: latestCorners };
+        const nudge = showroomNudge;
+        const zoom  = showroomZoom;
+        const wOpts2 = snap.wallLogoSrc ? { src: snap.wallLogoSrc, scale: snap.wallLogoScale, opacity: snap.wallLogoOpacity, x: snap.wallLogoPos?.x ?? 0.5, y: snap.wallLogoPos?.y ?? 0.25 } : null;
+        loadImg(snap.logoPreview).then(logoImgEl =>
+          compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
+            logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, wOpts2, snap.shadowMatteDataURL, showroomBlend)
+        ).then(sr => {
+          const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
+          setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
+          setLightbox(prev => prev?.name === snap.name ? withSR : prev);
+        }).catch(e => console.error('showroom regen (adjust):', e));
+      }
+    }
+  };
+
   // ── Zoom / Pan de la lightbox ─────────────────────────────────────────────
   const onLbWheel = (e) => {
     e.preventDefault();
@@ -5497,6 +5537,8 @@ export default function AutoCache() {
             else onLbTouchMove(e);
           }}
           onTouchEnd={() => {
+            // Sauvegarde le coin relâché (équivalent tactile de onMouseUp)
+            commitAdjust();
             adjustDragRef.current = null; setAdjustDrag(null);
             setCropDrag(null);
             setLbPanDrag(null);
@@ -5505,47 +5547,12 @@ export default function AutoCache() {
           onMouseUp={() => {
             setCropDrag(null);
             // Auto-sauvegarde dès qu'un coin est relâché
-            if (adjustDrag && adjustCornersRef.current) {
-              const canvas = adjustCanvasRef.current;
-              if (canvas) {
-                const latestCorners = adjustCornersRef.current;
-                if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
-                  // Mode showroom : le canvas EST déjà fond+voiture+cache plaque à qualité native
-                  const t = adjustShowroomTransformRef.current;
-                  const photoCorners   = cornersFromShowroom(latestCorners, t);
-                  const newShowroomURL = canvas.toDataURL('image/jpeg', 0.97);
-                  const updated = { ...lightbox, corners: photoCorners, showroomDataURL: newShowroomURL };
-                  setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
-                  setLightbox(updated);
-                } else {
-                  // Mode normal : sauvegarde la photo avec le cache plaque
-                  const newDataURL = canvas.toDataURL('image/jpeg', 0.97);
-                  const updated = { ...lightbox, processed: newDataURL, corners: latestCorners, ...(manualPlateMode ? { plateFound: true } : {}) };
-                  setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
-                  setLightbox(updated);
-                  // Régénère le showroom avec les nouveaux coins si showroom actif
-                  if (lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
-                    const snap = { ...lightbox, corners: latestCorners };
-                    const nudge = showroomNudge;
-                    const zoom  = showroomZoom;
-                    const wOpts2 = snap.wallLogoSrc ? { src: snap.wallLogoSrc, scale: snap.wallLogoScale, opacity: snap.wallLogoOpacity, x: snap.wallLogoPos?.x ?? 0.5, y: snap.wallLogoPos?.y ?? 0.25 } : null;
-                    loadImg(snap.logoPreview).then(logoImgEl =>
-                      compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
-                        logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, wOpts2, snap.shadowMatteDataURL, showroomBlend)
-                    ).then(sr => {
-                      const withSR = { ...updated, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
-                      setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
-                      setLightbox(prev => prev?.name === snap.name ? withSR : prev);
-                    }).catch(e => console.error('showroom regen (adjust):', e));
-                  }
-                }
-              }
-            }
+            commitAdjust();
             adjustDragRef.current = null;
             setAdjustDrag(null);
             setLbPanDrag(null);
           }}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: isMobile ? 8 : 16, userSelect: "none" }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: isMobile ? 8 : 16, userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", WebkitTapHighlightColor: "transparent" }}
         >
           {/* ── Bouton fermer fixe (mobile) — toujours accessible même si zoomé ── */}
           {isMobile && (
@@ -5667,7 +5674,7 @@ export default function AutoCache() {
             {adjustMode ? (
               <canvas
                 ref={adjustCanvasRef}
-                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh", touchAction: "none" }}
+                style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "72vh", touchAction: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", pointerEvents: "none" }}
               />
             ) : cropMode ? (
               <canvas
