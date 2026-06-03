@@ -4,6 +4,7 @@ const PROMO_CODES = {
   "AURELEPREMIUM":   { plan: "premium" },
   "AURELEPRO":       { plan: "premium" }, // ancien code → abonnement unique
   "AURELEESSENTIEL": { plan: "premium" }, // ancien code → abonnement unique
+  "AURELEABONNEMENT": { plan: "premium" },
   "AURELEESSAI":     { plan: "trial" },
 };
 

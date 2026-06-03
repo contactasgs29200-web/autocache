@@ -79,24 +79,36 @@ export default async function handler(req, res) {
       }
     }
 
+    if (event.type === "customer.subscription.updated") {
+      // Si Stripe passe l'abonnement en unpaid/canceled (après échec des relances),
+      // on coupe l'accès. Si le paiement est rattrapé et l'abo repasse en active, on restaure.
+      const subscription = event.data.object;
+      const userId = subscription.metadata?.userId;
+      if (userId && (subscription.status === "unpaid" || subscription.status === "canceled")) {
+        await setUserPlan(userId, "trial");
+        console.log(`Abonnement ${subscription.status} — user ${userId} repassé en trial`);
+      }
+      if (userId && subscription.status === "active" && subscription.metadata?.plan) {
+        await setUserPlan(userId, subscription.metadata.plan);
+        console.log(`Abonnement réactivé — user ${userId} plan "${subscription.metadata.plan}"`);
+      }
+    }
+
     if (event.type === "invoice.payment_failed") {
-      // Échec de paiement → accès coupé immédiatement (retour en trial)
+      // Échec de paiement — on NE coupe PAS l'accès immédiatement.
+      // L'utilisateur garde son accès jusqu'à la fin de la période déjà payée.
+      // Stripe retente automatiquement. Si toutes les tentatives échouent,
+      // l'abonnement passe en unpaid/canceled (géré par customer.subscription.updated).
       const invoice = event.data.object;
       if (invoice.subscription) {
         const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
         const userId = subscription.metadata?.userId;
-        if (userId) {
-          await setUserPlan(userId, "trial");
-          console.warn(`Paiement échoué — user ${userId} repassé en trial (tentative ${invoice.attempt_count})`);
-        }
+        console.warn(`Paiement échoué — user ${userId} (tentative ${invoice.attempt_count}). Accès maintenu jusqu'à fin de période.`);
       }
     }
 
     if (event.type === "invoice.paid") {
-      // Paiement réussi (renouvellement ou rattrapage d'impayé) → réactive le plan.
-      // Le quota photos est géré par fenêtre mensuelle côté application, on ne
-      // remet donc PAS les crédits à zéro ici (sinon une formule hebdo serait
-      // rechargée chaque semaine, et une formule annuelle une seule fois par an).
+      // Paiement réussi (renouvellement) → réactive le plan + remet les crédits à zéro
       const invoice = event.data.object;
       if (invoice.subscription && invoice.billing_reason === "subscription_cycle") {
         const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
@@ -104,13 +116,13 @@ export default async function handler(req, res) {
         const plan    = subscription.metadata?.plan || "premium";
         const formule = subscription.metadata?.formule || null;
         if (userId) {
-          const meta = { plan };
+          const meta = { plan, photos_used: 0, headlight_photos_used: 0 };
           if (formule) meta.formule = formule;
           const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
             user_metadata: meta,
           });
           if (error) throw new Error(`Supabase update failed: ${error.message}`);
-          console.log(`Renouvellement réussi — user ${userId} abonnement "${plan}" (formule: ${formule}) réactivé`);
+          console.log(`Renouvellement réussi — user ${userId} (formule: ${formule}) crédits remis à zéro`);
         }
       }
     }
