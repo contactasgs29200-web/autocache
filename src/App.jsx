@@ -3254,17 +3254,15 @@ export default function AutoCache() {
   const [wallTextStrokeColor, setWallTextStrokeColor] = useState("#000000");
   const [wallTextStrokeWidth, setWallTextStrokeWidth] = useState(0); // 0 = désactivé
   const [wallTextUnderline, setWallTextUnderline]     = useState(false);
-  // ── Enseigne murale & logo (option indépendante du showroom) ─────────────
+  // ── Enseigne murale (option indépendante du showroom) ────────────────────
   const [signEnabled,       setSignEnabled]       = useState(false);
   const [signTitle,         setSignTitle]         = useState("");
   const [signTitleColor,    setSignTitleColor]    = useState("#ffffff");
   const [signFont,          setSignFont]          = useState("rajdhani");
   const [signSubtitle,      setSignSubtitle]      = useState("");
   const [signSubtitleColor, setSignSubtitleColor] = useState("#ffffff");
-  const [signLogo,          setSignLogo]          = useState(null); // data URL
   const [signScope,         setSignScope]         = useState("all"); // "all" | "selected"
   const [signSelectedIds,   setSignSelectedIds]   = useState(() => new Set());
-  const signLogoInputRef = useRef(null);
   const [signLive, setSignLive] = useState(null); // { pos, scale } pendant le déplacement dans la lightbox
   const signDragRef = useRef(null);
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
@@ -3568,13 +3566,10 @@ export default function AutoCache() {
     // plus de logo mural dessiné sur le décor showroom.
     const resolvedWallLogo = null;
     const wallLogoRatio = 0.4;
-    // ── Enseigne murale & logo : bannière (logo + enseigne + sous-titre) ──
+    // ── Enseigne murale : bannière (enseigne + sous-titre) ──
     let signImageUrl = null, signRatio = 0.4;
-    if (signEnabled && (signTitle.trim() || signSubtitle.trim() || signLogo)) {
-      let signLogoImg = null;
-      if (signLogo) { try { signLogoImg = await loadImg(signLogo); } catch (_) {} }
+    if (signEnabled && (signTitle.trim() || signSubtitle.trim())) {
       const sm = makeSignDataURL({
-        logoImg: signLogoImg,
         title: signTitle.trim(),
         titleColor: signTitleColor,
         fontKey: signFont,
@@ -5375,9 +5370,9 @@ export default function AutoCache() {
                 )}
               </section>
 
-              {/* ── 03 — Enseigne murale & logo ── */}
+              {/* ── 03 — Enseigne murale ── */}
               <section>
-                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Enseigne murale &amp; logo</div>
+                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono',monospace" }}>03 — Enseigne murale</div>
                 <div onClick={() => setSignEnabled(v => !v)}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: signEnabled ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${signEnabled ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: signEnabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
                   <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${signEnabled ? "#f26522" : "#444"}`, background: signEnabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -5385,25 +5380,14 @@ export default function AutoCache() {
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: signEnabled ? "#f26522" : "var(--c-aaa)", fontFamily: "'Rajdhani',sans-serif" }}>Ajouter une enseigne</div>
-                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Logo + enseigne + sous-titre · avec ou sans showroom</div>
+                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "'JetBrains Mono',monospace", marginTop: 2 }}>Enseigne + sous-titre · avec ou sans showroom</div>
                   </div>
                 </div>
                 {signEnabled && (() => {
                   const sf = WALL_FONTS.find(x => x.key === signFont) ?? WALL_FONTS[0];
-                  const hasContent = signTitle.trim() || signSubtitle.trim() || signLogo;
+                  const hasContent = signTitle.trim() || signSubtitle.trim();
                   return (
                   <div style={{ border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px", padding: 14, background: "var(--c-0a0a0a)" }}>
-                    {/* Logo */}
-                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>LOGO (OPTIONNEL)</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                      <div onClick={() => signLogoInputRef.current?.click()}
-                        style={{ width: 72, height: 46, border: `1px dashed ${signLogo ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--c-161616)", overflow: "hidden", flexShrink: 0 }}>
-                        {signLogo ? <img src={signLogo} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /> : <span style={{ fontSize: 19, color: "var(--c-ddd)" }}>+</span>}
-                      </div>
-                      <input ref={signLogoInputRef} type="file" accept="image/*" style={{ display: "none" }}
-                        onChange={e => { const f = e.target.files?.[0]; if (!f) return; const rd = new FileReader(); rd.onload = ev => setSignLogo(ev.target.result); rd.readAsDataURL(f); e.target.value = ''; }} />
-                      {signLogo && <button onClick={() => setSignLogo(null)} style={{ background: "transparent", border: "1px solid var(--c-2a2a2a)", color: "var(--c-ddd)", padding: "6px 11px", borderRadius: 3, cursor: "pointer", fontSize: 10, fontFamily: "'JetBrains Mono',monospace", letterSpacing: 1, textTransform: "uppercase" }}>Retirer</button>}
-                    </div>
                     {/* Enseigne */}
                     <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>ENSEIGNE</div>
                     <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -5415,7 +5399,7 @@ export default function AutoCache() {
                     {/* Sous-titre */}
                     <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>SOUS-TITRE</div>
                     <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                      <input type="text" value={signSubtitle} onChange={e => setSignSubtitle(e.target.value)} placeholder="Ex : votre slogan"
+                      <input type="text" value={signSubtitle} onChange={e => setSignSubtitle(e.target.value)} placeholder="Ex : votre slogan, numéro de téléphone…"
                         style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "'Rajdhani',sans-serif", fontSize: 14 }} />
                       <input type="color" value={signSubtitleColor} onChange={e => setSignSubtitleColor(e.target.value)}
                         style={{ width: 34, height: 34, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer", flexShrink: 0 }} />
@@ -5431,10 +5415,7 @@ export default function AutoCache() {
                     {/* Aperçu */}
                     {hasContent && (
                       <div style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 3, padding: 14, marginBottom: 14, textAlign: "center" }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-                          {signLogo && <img src={signLogo} style={{ height: 30, objectFit: "contain" }} />}
-                          {signTitle.trim() && <span style={{ fontFamily: sf.family, fontWeight: sf.weight, fontSize: 22, color: signTitleColor, letterSpacing: 1 }}>{signTitle}</span>}
-                        </div>
+                        {signTitle.trim() && <span style={{ fontFamily: sf.family, fontWeight: sf.weight, fontSize: 22, color: signTitleColor, letterSpacing: 1 }}>{signTitle}</span>}
                         {signSubtitle.trim() && <div style={{ fontFamily: sf.family, fontWeight: sf.weight, fontSize: 12, color: signSubtitleColor, marginTop: 5 }}>{signSubtitle}</div>}
                       </div>
                     )}
