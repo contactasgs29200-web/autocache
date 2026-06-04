@@ -6911,7 +6911,7 @@ export default function AutoCache() {
         <div onClick={() => setShowPlansModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: isPaid ? 480 : 980, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: isPaid ? 480 : 980, width: "92%", maxHeight: "90vh", overflowY: "auto", fontFamily: "'Rajdhani',sans-serif" }}>
 
             {!isPaid ? (
               /* ── Vue choix de formule (utilisateurs en essai) ── */
@@ -7049,7 +7049,7 @@ export default function AutoCache() {
       {showUpgradeModal && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
-            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: 980, width: "92%", fontFamily: "'Rajdhani',sans-serif" }}>
+            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 8, padding: isMobile ? "20px 14px" : "36px 40px", maxWidth: 980, width: "92%", maxHeight: "90vh", overflowY: "auto", fontFamily: "'Rajdhani',sans-serif" }}>
 
             {/* En-tête */}
             <div style={{ textAlign: "center", marginBottom: 28 }}>
