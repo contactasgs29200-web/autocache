@@ -875,6 +875,15 @@ const SHOWROOM_IMAGES = ['/showrooms/Luxury.jpeg', '/showrooms/blanc.jpg', '/sho
 const SHOWROOM_LABELS = ['Luxury', 'Showroom Blanc', 'Classique', 'Garage'];
 const SHOWROOM_THUMBS = [0, 1, 2, 3].map(i => SHOWROOM_IMAGES[i] ?? makeShowroomBackground(i, 160, 90));
 
+// Libère immédiatement le backing-store (RAM/GPU) d'un canvas temporaire au lieu
+// d'attendre le ramasse-miettes. Décisif sur mobile : sans ça, les canvas du
+// pipeline Showroom s'accumulent et la pression mémoire fait recharger l'onglet
+// (symptôme « retour à l'accueil »). N'affecte ni la résolution ni la qualité du
+// rendu final — on ne libère que des canvas intermédiaires déjà exploités.
+function freeCanvas(...cs) {
+  for (const c of cs) { if (c) { c.width = 0; c.height = 0; } }
+}
+
 // Redimensionne un dataUrl à maxPx max (côté le plus long) pour alléger l'envoi API
 function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
   return new Promise(resolve => {
@@ -885,7 +894,9 @@ function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
       c.width  = Math.round(img.width  * scale);
       c.height = Math.round(img.height * scale);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-      resolve(c.toDataURL('image/jpeg', quality));
+      const out = c.toDataURL('image/jpeg', quality);
+      freeCanvas(c);
+      resolve(out);
     };
     img.src = dataUrl;
   });
@@ -1019,6 +1030,10 @@ async function extractSourceShadow(originalDataUrl, cutoutDataUrl) {
   mCtx.drawImage(cutImg, 0, 0, W, H);
   const maskPx = mCtx.getImageData(0, 0, W, H).data;
 
+  // Pixels extraits (origPx/maskPx sont des copies) → on peut rendre les deux
+  // canvas pleine résolution tout de suite.
+  freeCanvas(origC, maskC);
+
   let carL = W, carR = 0, carT = H, carB = 0;
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++)
@@ -1099,7 +1114,9 @@ async function extractSourceShadow(originalDataUrl, cutoutDataUrl) {
   console.log('[Shadow] matte v2: ROI %dx%d [x:%d-%d y:%d-%d] meanAlpha=%.4f',
     rW, rH, roiX1, roiX2, roiY1, roiY2, meanAlpha);
 
-  return { matteDataUrl: matteCanvas.toDataURL('image/png'), meanAlpha, carBounds };
+  const matteDataUrl = matteCanvas.toDataURL('image/png');
+  freeCanvas(matteCanvas);
+  return { matteDataUrl, meanAlpha, carBounds };
 }
 
 function estimateFloorBrightness2D(lum, isCar, W, H) {
@@ -1917,6 +1934,7 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   oCtx.drawImage(shadowCanvas, 0, 0, fullW, fullH);
 
   const dataUrl = outCanvas.toDataURL('image/png');
+  freeCanvas(workCanvas, shadowCanvas, outCanvas);
   console.log('[Shadow] output PNG size=' + dataUrl.length + ' bytes');
   console.timeEnd('[Shadow] generateFromAlpha');
   return dataUrl;
@@ -2004,6 +2022,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
         actualTopFrac    = minY / carImg.height;
         actualBottomFrac = (maxY + 1) / carImg.height;
       }
+      freeCanvas(scanC);
     } catch (_) { /* garder les valeurs par défaut */ }
   }
 
@@ -2068,6 +2087,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       }
       tmpCtx.putImageData(tmpData, 0, 0);
       ctx.drawImage(tmpC, 0, 0);
+      freeCanvas(tmpC);
     } else {
       ctx.fillStyle = '#f00';
       ctx.font = '32px monospace';
@@ -2131,6 +2151,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       const carCtx = carC.getContext('2d');
       carCtx.drawImage(carImg, 0, 0, SS, SS);
       carStats = _opaqueMean(carCtx.getImageData(0, 0, SS, SS).data);
+      freeCanvas(bgC, carC);
     } catch (_) { /* fallback ci-dessous */ }
 
     if (bgStats && carStats) try {
@@ -2163,6 +2184,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       }
       cctx.putImageData(id, 0, 0);
       ctx.drawImage(cc, carX, carY, cw, ch);
+      freeCanvas(cc);
       graded = true;
     } catch (_) { graded = false; }
     if (!graded) {
@@ -2185,6 +2207,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'bbox_stable');
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
+  freeCanvas(c);
   if (returnFull) return { dataURL, baseURL, transform: { carX, carY, cw, ch, W, H } };
   return dataURL;
 }
@@ -3627,6 +3650,7 @@ export default function AutoCache() {
               }
           const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
           entry.carBoundsCache = carBounds;
+          freeCanvas(scanC); // bbox calculé → libère ce canvas pleine résolution
 
           let shadowMatteUrl = null;
           if (showroomFloorShadow) {
@@ -3742,6 +3766,7 @@ export default function AutoCache() {
               dctx.fillText('mainROI — cyan=ROI, green=vehicle, red=exclusion, dark=outside', 10, 22);
             }
             debugDataURL = dc.toDataURL('image/jpeg', 0.95);
+            freeCanvas(dc);
           }
 
           const wOpts = resolvedWallLogo ? { src: resolvedWallLogo, scale: wallLogoScale, opacity: wallLogoOpacity, x: 0.5, y: 0.25 } : null;
@@ -4177,6 +4202,7 @@ export default function AutoCache() {
                 if (y < carT) carT = y; if (y > carB) carB = y;
               }
           carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
+          freeCanvas(scanC);
         }
         const params = { opacity: shadowOpacity, blur: shadowBlur, yOffset: shadowYOffset, spread: shadowSpread, [param]: value };
         const plateBox = lightbox.yoloBbox ?? null;
@@ -4538,6 +4564,7 @@ export default function AutoCache() {
     fctx.drawImage(canvas, 0, 0);
     const ov = adjustOverlayCanvasRef.current; if (ov) fctx.drawImage(ov, 0, 0);
     const flatURL = flat.toDataURL('image/jpeg', 0.97);
+    freeCanvas(flat);
     const sign = lightbox.signImageUrl || null; // ré-applique l'enseigne si présente
     const sPos = lightbox.signPos, sScale = lightbox.signScale;
     if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
@@ -6643,6 +6670,7 @@ export default function AutoCache() {
                         if (y < carT) carT = y; if (y > carB) carB = y;
                       }
                   const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
+                  freeCanvas(scanC);
                   // Respect the "Ombres au sol" choice: don't resurrect a shadow
                   // the user disabled when they re-edit the mask.
                   const newShadow = showroomFloorShadow
