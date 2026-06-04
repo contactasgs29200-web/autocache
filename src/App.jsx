@@ -6919,7 +6919,7 @@ export default function AutoCache() {
                 <div style={{ textAlign: "center", marginBottom: 28 }}>
                   <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "var(--c-e0dbd4)", textTransform: "uppercase" }}>Notre Abonnement</div>
                   <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "'JetBrains Mono',monospace", marginTop: 6, letterSpacing: 1 }}>
-                    Un seul abonnement, 3 formules au choix · Plan actuel : <span style={{ color: "#f26522" }}>Essai gratuit</span>
+                    3 formules au choix · Plan actuel : <span style={{ color: "#f26522" }}>Essai gratuit</span>
                   </div>
                 </div>
 
