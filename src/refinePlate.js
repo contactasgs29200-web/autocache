@@ -62,10 +62,33 @@ function analyzeInk(imageData, box) {
   }
   const thr = otsu(gray);
 
-  // Moments des pixels SOMBRES (texte + bandes), en coordonnées globales.
+  // Composantes connexes des pixels SOMBRES (4-connexité). On distingue le TEXTE
+  // (petites composantes : caractères, traits) des grosses zones sombres pleines
+  // (renfoncement de pare-chocs, ombre, calandre, bandes) qui fausseraient l'angle.
+  // Seules les composantes « texte » (aire <= maxTextArea) alimentent les moments.
+  const lab = new Int32Array(rw * rh);  // 0 = clair / non visité
+  const stack = new Int32Array(rw * rh);
+  const compArea = [0];
+  let cur = 0;
+  const maxTextArea = 0.07 * box.w * box.h;
+  for (let p = 0; p < gray.length; p++) {
+    if (gray[p] > thr || lab[p]) continue; // sombre & non labellisé
+    cur++; let sp = 0; stack[sp++] = p; lab[p] = cur; let area = 0;
+    while (sp) {
+      const q = stack[--sp], qx = q % rw, qy = (q / rw) | 0; area++;
+      if (qx > 0 && gray[q - 1] <= thr && !lab[q - 1]) { lab[q - 1] = cur; stack[sp++] = q - 1; }
+      if (qx < rw - 1 && gray[q + 1] <= thr && !lab[q + 1]) { lab[q + 1] = cur; stack[sp++] = q + 1; }
+      if (qy > 0 && gray[q - rw] <= thr && !lab[q - rw]) { lab[q - rw] = cur; stack[sp++] = q - rw; }
+      if (qy < rh - 1 && gray[q + rw] <= thr && !lab[q + rw]) { lab[q + rw] = cur; stack[sp++] = q + rw; }
+    }
+    compArea[cur] = area;
+  }
+
+  // Moments des pixels de TEXTE, en coordonnées globales.
   let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
   for (let yy = 0; yy < rh; yy++) for (let xx = 0; xx < rw; xx++) {
-    if (gray[yy * rw + xx] > thr) continue; // garde le sombre (classe <= seuil Otsu)
+    const L = lab[yy * rw + xx];
+    if (!L || compArea[L] > maxTextArea) continue; // ni clair, ni grosse zone sombre
     const gx = x0 + xx, gy = y0 + yy;
     n++; sx += gx; sy += gy; sxx += gx * gx; syy += gy * gy; sxy += gx * gy;
   }

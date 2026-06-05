@@ -77,6 +77,24 @@ test('aucune plaque (uniforme) → non fiable, rect = boîte', () => {
   assert.equal(r.rect.w, box.w);
 });
 
+// Remplit un rectangle sombre plein (renfoncement de pare-chocs / ombre).
+function fillDarkBlock(img, x, y, w, h, v = 45) {
+  for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) setPx(img, xx, yy, v);
+}
+
+test('zone sombre pleine dans la boîte (renfoncement) → ignorée, angle correct', () => {
+  // cas Dacia : boîte qui déborde à droite sur une zone sombre du pare-chocs.
+  const img = makeImage(280, 160, 150);
+  const deg = 11;
+  drawPlate(img, 120, 80, 150, 34, deg);
+  fillDarkBlock(img, 205, 55, 40, 55, 45); // bloc sombre collé à droite de la plaque
+  const box = { x: 40, y: 55, w: 205, h: 55 }; // déborde sur le bloc sombre
+  const r = refinePlate(img, box);
+  assert.equal(r.reliable, true, 'la plaque doit rester localisée malgré la zone sombre');
+  assert.ok(Math.abs(Math.abs(r.metrics.tiltDeg) - deg) < 6,
+    `tilt ~${deg}° attendu, obtenu ${r.metrics.tiltDeg.toFixed(1)} (zone sombre mal filtrée ?)`);
+});
+
 test('boîte serrée sur la plaque → localisée (régression: ancienne version échouait)', () => {
   const img = makeImage(220, 110, 150);
   drawPlate(img, 110, 55, 150, 34, 0);
