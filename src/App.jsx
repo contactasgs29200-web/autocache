@@ -487,6 +487,37 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   }
 }
 
+// Inclinaison max d'un quad (deg) — coins pixel [tl,tr,br,bl].
+// Écart à l'horizontale pour les bords haut/bas, à la verticale pour gauche/droite.
+function quadMaxTiltDeg(p) {
+  const segAng = (a, b) => Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+  const fromH = a => { let v = Math.abs(a % 180); if (v > 90) v = 180 - v; return v; };
+  const fromV = a => Math.abs(90 - fromH(a));
+  return Math.max(
+    fromH(segAng(p[0], p[1])), fromH(segAng(p[3], p[2])),
+    fromV(segAng(p[0], p[3])), fromV(segAng(p[1], p[2])),
+  );
+}
+// Ratio largeur/hauteur d'un quad — coins pixel [tl,tr,br,bl].
+function quadAspect(p) {
+  const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const w = (d(p[0], p[1]) + d(p[3], p[2])) / 2;
+  const h = (d(p[0], p[3]) + d(p[1], p[2])) / 2;
+  return w / Math.max(h, 1e-6);
+}
+// Aire d'un quad (shoelace) — coins pixel [tl,tr,br,bl].
+function quadArea(p) {
+  let a = 0;
+  for (let i = 0; i < 4; i++) { const u = p[i], v = p[(i + 1) % 4]; a += u.x * v.y - v.x * u.y; }
+  return Math.abs(a / 2);
+}
+// Élargit un quad autour de son centre (couverture des bords / bande EU).
+function expandQuad(p, k) {
+  const cx = (p[0].x + p[1].x + p[2].x + p[3].x) / 4;
+  const cy = (p[0].y + p[1].y + p[2].y + p[3].y) / 4;
+  return p.map(q => ({ x: cx + (q.x - cx) * k, y: cy + (q.y - cy) * k }));
+}
+
 // Unified plate overlay renderer — fill bg, perspective draw, feather + boost.
 function drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, renderSource) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
@@ -2909,13 +2940,18 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
       });
     } catch (e) { /* best-effort */ }
 
-    // ── Affinage client des coins quand le cache serait posé en rectangle droit.
+    // ── Affinage des coins quand le cache serait posé en rectangle droit.
     // Un quad axis-aligned (source bbox_stable / fallback bbox) déborde sur une
-    // plaque vue de biais. refinePlate (JS pur, sans dépendance) ré-analyse
-    // l'ImageData : s'il détecte une VRAIE inclinaison il renvoie un quad incliné
-    // qu'on pose en perspective via le moteur existant ; sinon on conserve tel
-    // quel le rectangle droit actuel (cas plaque de face, déjà optimal). Les quads
-    // déjà inclinés (keypoints / opencv_promoted) ne sont jamais touchés.
+    // plaque vue de biais. Deux filets de récupération, dans l'ordre :
+    //   1. Le quad de plaque DÉJÀ détecté côté backend (best_opencv_candidate_
+    //      corners), rejeté seulement par le gate strict (ex. area_ratio<0.45).
+    //      Géométrie OpenCV/Hough sur l'image pleine résolution → bien plus
+    //      fiable que l'analyse pixel client (voitures grises peu contrastées).
+    //   2. refinePlate (JS pur) qui ré-analyse l'ImageData si le backend n'a
+    //      pas de candidat exploitable (ex. source Plate Recognizer).
+    // Dans les deux cas on n'agit QUE si une vraie inclinaison (>=5°) est
+    // mesurée ; sinon on conserve le rectangle droit (plaque de face, optimal).
+    // Les quads déjà inclinés (keypoints / opencv_promoted) ne passent pas ici.
     const epsRefine = 1.5;
     const isAxisAlignedQuad =
       Math.abs(ptl.y - ptr.y) < epsRefine &&
@@ -2923,25 +2959,45 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
       Math.abs(ptl.x - pbl.x) < epsRefine &&
       Math.abs(ptr.x - pbr.x) < epsRefine;
     if (isAxisAlignedQuad) {
-      try {
-        const xs = [ptl.x, ptr.x, pbr.x, pbl.x], ys = [ptl.y, ptr.y, pbr.y, pbl.y];
-        const bx = Math.min(...xs), by = Math.min(...ys);
-        const box = { x: bx, y: by, w: Math.max(...xs) - bx, h: Math.max(...ys) - by };
-        const full = ctx.getImageData(0, 0, c.width, c.height);
-        const refined = refinePlate(full, box);
-        // Log temporaire (calibration du seuil tiltDeg sur photos réelles).
-        console.log('[refinePlate]', photoFile.name, refined.mode, refined.metrics);
-        if (refined.mode === 'quad' && refined.corners) {
-          const [rTl, rTr, rBr, rBl] = refined.corners;
-          ptl = { x: rTl[0], y: rTl[1] }; ptr = { x: rTr[0], y: rTr[1] };
-          pbr = { x: rBr[0], y: rBr[1] }; pbl = { x: rBl[0], y: rBl[1] };
-          // Propager aux coins persistés (normalisés) pour que les re-rendus
-          // (composite showroom, mode « Ajuster ») suivent aussi le quad incliné.
-          const toNorm = p => ({ x: p[0] / c.width, y: p[1] / c.height });
-          savedCorners = { tl: toNorm(rTl), tr: toNorm(rTr), br: toNorm(rBr), bl: toNorm(rBl) };
+      const boxArea = Math.abs((ptr.x - ptl.x) * (pbl.y - ptl.y)) || 1;
+      const applyQuad = (px) => {
+        const e = expandQuad(px, 1.08);
+        ptl = e[0]; ptr = e[1]; pbr = e[2]; pbl = e[3];
+        const toNorm = q => ({ x: q.x / c.width, y: q.y / c.height });
+        // Propager aux coins persistés (normalisés) → re-rendus showroom / Ajuster cohérents.
+        savedCorners = { tl: toNorm(e[0]), tr: toNorm(e[1]), br: toNorm(e[2]), bl: toNorm(e[3]) };
+      };
+
+      let done = false;
+      // 1. Quad candidat du backend.
+      const nm = yolo.best_opencv_candidate_corners;
+      if (Array.isArray(nm) && nm.length === 4 &&
+          nm.every(p => p && typeof p.x === 'number' && typeof p.y === 'number')) {
+        const px = nm.map(p => ({ x: p.x * c.width, y: p.y * c.height }));
+        const tilt = quadMaxTiltDeg(px), ar = quadAspect(px), areaR = quadArea(px) / boxArea;
+        const inBounds = nm.every(p => p.x >= -0.1 && p.x <= 1.1 && p.y >= -0.1 && p.y <= 1.1);
+        console.log('[refine] backend candidate', photoFile.name,
+          { method: yolo.best_opencv_candidate_method, tilt: +tilt.toFixed(1), ar: +ar.toFixed(2), areaR: +areaR.toFixed(2) });
+        if (tilt >= 5 && tilt <= 35 && ar >= 2.2 && ar <= 7 && areaR >= 0.2 && inBounds) {
+          applyQuad(px); done = true;
+          console.log('[refine] → backend quad appliqué');
         }
-        // mode 'rect' : on garde le rectangle droit existant (ne casse rien).
-      } catch (e) { console.warn('[refinePlate] ignoré:', e.message); }
+      }
+      // 2. Repli : analyse pixel client.
+      if (!done) {
+        try {
+          const xs = [ptl.x, ptr.x, pbr.x, pbl.x], ys = [ptl.y, ptr.y, pbr.y, pbl.y];
+          const bx = Math.min(...xs), by = Math.min(...ys);
+          const box = { x: bx, y: by, w: Math.max(...xs) - bx, h: Math.max(...ys) - by };
+          const full = ctx.getImageData(0, 0, c.width, c.height);
+          const refined = refinePlate(full, box);
+          console.log('[refinePlate]', photoFile.name, refined.mode, refined.metrics);
+          if (refined.mode === 'quad' && refined.corners) {
+            applyQuad(refined.corners.map(p => ({ x: p[0], y: p[1] })));
+          }
+          // mode 'rect' : on garde le rectangle droit existant (ne casse rien).
+        } catch (e) { console.warn('[refinePlate] ignoré:', e.message); }
+      }
     }
 
     const renderSource = yolo.render_source ?? yolo.source;
