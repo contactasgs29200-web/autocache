@@ -108,13 +108,15 @@
     }
 
     function drawQuad(corners, color) {
+      // corners sont déjà dans le repère du canvas (l'ImageData analysée fait la
+      // taille du canvas) → on les dessine tels quels, SANS re-multiplier par scale.
       ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
-      ctx.moveTo(corners[0][0] * scale, corners[0][1] * scale);
-      for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0] * scale, corners[i][1] * scale);
+      ctx.moveTo(corners[0][0], corners[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0], corners[i][1]);
       ctx.closePath(); ctx.stroke();
       const labels = ['HG', 'HD', 'BD', 'BG'];
       ctx.fillStyle = color; ctx.font = '12px monospace';
-      corners.forEach((c, i) => ctx.fillText(labels[i], c[0] * scale + 3, c[1] * scale - 3));
+      corners.forEach((c, i) => ctx.fillText(labels[i], c[0] + 3, c[1] - 3));
     }
 
     function run() {
