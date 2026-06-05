@@ -65,6 +65,28 @@ test('détection non fiable (pas de plaque) → rect = boîte d\'entrée', () =>
   const box = { x: 30, y: 33, w: 140, h: 34 };
   const r = refinePlate(img, box);
   assert.equal(r.mode, 'rect');
+  assert.equal(r.reliable, false);
   assert.equal(r.rect.cx, box.x + box.w / 2);
   assert.equal(r.rect.w, box.w);
+});
+
+test('voiture argentée (faible contraste) → plaque localisée', () => {
+  // pare-chocs gris (150), plaque gris clair (180) : l'ancien Otsu brut
+  // fusionnait les deux ; l'étirement de contraste doit les séparer.
+  const img = makeImage(200, 100, 150);
+  drawStraightPlate(img, 100, 50, 140, 34, 180);
+  const box = { x: 30, y: 33, w: 140, h: 34 };
+  const r = refinePlate(img, box);
+  assert.equal(r.reliable, true, 'la plaque peu contrastée doit être localisée');
+});
+
+test('bbox trop étroite → recalage couvrant la plaque (cas Mercedes)', () => {
+  // plaque réelle large, mais bbox de détection trop étroite/carrée (~25%).
+  const img = makeImage(240, 120, 150);
+  drawStraightPlate(img, 120, 60, 150, 34, 205);
+  const box = { x: 64, y: 40, w: 112, h: 40 }; // trop étroite, déborde à droite
+  const r = refinePlate(img, box);
+  assert.equal(r.reliable, true);
+  // le rectangle recalé doit être plus large que la bbox d'entrée
+  assert.ok(r.rect.w > box.w * 1.2, `largeur recalée ${r.rect.w} attendue > ${box.w * 1.2}`);
 });

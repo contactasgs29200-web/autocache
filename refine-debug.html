@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoCache — Debug refinePlate</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
+    header { padding: 14px 18px; background: #161a22; border-bottom: 1px solid #262b36; }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    p.hint { font-size: 13px; color: #9aa3b2; margin: 4px 0; }
+    .row { display: flex; gap: 18px; padding: 16px; flex-wrap: wrap; }
+    .panel { background: #161a22; border: 1px solid #262b36; border-radius: 8px; padding: 12px; }
+    canvas { max-width: 100%; height: auto; border: 1px solid #333; background: #000; display: block; }
+    label { font-size: 13px; display: block; margin: 8px 0 2px; color: #c2c9d6; }
+    input[type=range] { width: 260px; }
+    .metrics { font-family: ui-monospace, monospace; font-size: 13px; white-space: pre; line-height: 1.5; }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .tag.quad { background: #7c3aed; color: #fff; }
+    .tag.rect { background: #2563eb; color: #fff; }
+    .tag.none { background: #6b7280; color: #fff; }
+    button { background: #2563eb; color: #fff; border: 0; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    .swatch { font-size: 12px; color: #9aa3b2; }
+    .legend span { display:inline-block; width:12px; height:12px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Debug refinePlate — visualise le quad détecté sur une vraie photo</h1>
+    <p class="hint">1) Charge une photo de plaque. 2) Trace la boîte approximative de la plaque à la souris (comme la détection). Le module affine puis dessine le quad (violet) ou le rectangle recalé (bleu).</p>
+    <p class="hint legend"><span style="background:#22c55e"></span>boîte que tu traces &nbsp; <span style="background:#a855f7"></span>quad incliné détecté &nbsp; <span style="background:#3b82f6"></span>rectangle recalé</p>
+    <input type="file" id="file" accept="image/*" />
+    <button id="reset">Réinitialiser la boîte</button>
+  </header>
+  <div class="row">
+    <div class="panel">
+      <canvas id="cv"></canvas>
+    </div>
+    <div class="panel">
+      <div><strong>Résultat :</strong> <span id="modeTag" class="tag none">—</span></div>
+      <div class="metrics" id="metrics">Charge une image et trace la boîte de la plaque…</div>
+      <label>Seuil d'inclinaison (déclenche le quad) : <span id="tiltVal">5</span>°</label>
+      <input type="range" id="tilt" min="2" max="12" step="1" value="5" />
+      <p class="hint">Le module utilise 5° en production. Ce curseur recalcule la décision localement pour t'aider à choisir le bon seuil.</p>
+    </div>
+  </div>
+
+  <script type="module">
+    import { refinePlate } from './src/refinePlate.js';
+
+    const fileInput = document.getElementById('file');
+    const cv = document.getElementById('cv');
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const metricsEl = document.getElementById('metrics');
+    const modeTag = document.getElementById('modeTag');
+    const tilt = document.getElementById('tilt');
+    const tiltVal = document.getElementById('tiltVal');
+
+    let img = null;        // HTMLImageElement
+    let scale = 1;         // canvas px / image px
+    let box = null;        // { x, y, w, h } en px IMAGE
+    let dragging = false, sx = 0, sy = 0;
+
+    fileInput.addEventListener('change', e => {
+      const f = e.target.files[0]; if (!f) return;
+      const im = new Image();
+      im.onload = () => {
+        img = im;
+        const maxW = 900;
+        scale = Math.min(1, maxW / im.naturalWidth);
+        cv.width = Math.round(im.naturalWidth * scale);
+        cv.height = Math.round(im.naturalHeight * scale);
+        box = null;
+        redraw();
+        metricsEl.textContent = 'Trace la boîte de la plaque à la souris.';
+      };
+      im.src = URL.createObjectURL(f);
+    });
+
+    document.getElementById('reset').onclick = () => { box = null; redraw(); };
+    tilt.oninput = () => { tiltVal.textContent = tilt.value; if (box) run(); };
+
+    const toImg = (cx, cy) => ({ x: cx / scale, y: cy / scale });
+
+    cv.addEventListener('mousedown', e => {
+      if (!img) return;
+      const r = cv.getBoundingClientRect();
+      const p = toImg(e.clientX - r.left, e.clientY - r.top);
+      sx = p.x; sy = p.y; dragging = true;
+    });
+    cv.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const r = cv.getBoundingClientRect();
+      const p = toImg(e.clientX - r.left, e.clientY - r.top);
+      box = { x: Math.min(sx, p.x), y: Math.min(sy, p.y), w: Math.abs(p.x - sx), h: Math.abs(p.y - sy) };
+      redraw();
+    });
+    window.addEventListener('mouseup', () => { if (dragging && box && box.w > 4 && box.h > 4) run(); dragging = false; });
+
+    function redraw() {
+      if (!img) return;
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      if (box) {
+        ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 2;
+        ctx.strokeRect(box.x * scale, box.y * scale, box.w * scale, box.h * scale);
+      }
+    }
+
+    function drawQuad(corners, color) {
+      ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
+      ctx.moveTo(corners[0][0] * scale, corners[0][1] * scale);
+      for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0] * scale, corners[i][1] * scale);
+      ctx.closePath(); ctx.stroke();
+      const labels = ['HG', 'HD', 'BD', 'BG'];
+      ctx.fillStyle = color; ctx.font = '12px monospace';
+      corners.forEach((c, i) => ctx.fillText(labels[i], c[0] * scale + 3, c[1] * scale - 3));
+    }
+
+    function run() {
+      if (!img || !box) return;
+      // ImageData de l'image COMPLÈTE à sa résolution affichée (= repère du quad).
+      const full = ctx.getImageData(0, 0, cv.width, cv.height);
+      // box est en px image → convertir au repère canvas (comme en prod, repère = ImageData).
+      const boxCanvas = { x: box.x * scale, y: box.y * scale, w: box.w * scale, h: box.h * scale };
+      const res = refinePlate(full, boxCanvas);
+
+      redraw();
+      const thr = parseFloat(tilt.value);
+      // Décision rejouée avec le seuil du curseur (le module, lui, utilise 5°).
+      const m = res.metrics;
+      const wouldQuad = res.reliable && Math.abs(m.tiltDeg) >= thr && m.ratio >= 2.2 && m.ratio <= 7;
+
+      if (res.mode === 'quad' || wouldQuad) {
+        modeTag.textContent = 'QUAD (incliné)'; modeTag.className = 'tag quad';
+        if (res.corners) drawQuad(res.corners, '#a855f7');
+      } else if (res.reliable) {
+        modeTag.textContent = 'RECT (recalé)'; modeTag.className = 'tag rect';
+        const r = res.rect;
+        drawQuad([[r.cx - r.w/2, r.cy - r.h/2], [r.cx + r.w/2, r.cy - r.h/2],
+                  [r.cx + r.w/2, r.cy + r.h/2], [r.cx - r.w/2, r.cy + r.h/2]], '#3b82f6');
+      } else {
+        modeTag.textContent = 'RECT (boîte d\'entrée, plaque non localisée)'; modeTag.className = 'tag none';
+      }
+
+      metricsEl.textContent =
+        `mode      : ${res.mode}\n` +
+        `reliable  : ${res.reliable}\n` +
+        `tiltDeg   : ${m.tiltDeg.toFixed(2)}  (seuil ${thr}° → quad: ${Math.abs(m.tiltDeg) >= thr})\n` +
+        `ratio     : ${m.ratio.toFixed(2)}  (plaque ≈ 4.7)\n` +
+        `fillRatio : ${m.fillRatio.toFixed(2)}\n` +
+        `asymPct   : ${m.asymPct.toFixed(1)}%`;
+    }
+  </script>
+</body>
+</html>

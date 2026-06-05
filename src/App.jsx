@@ -2987,15 +2987,26 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
       if (!done) {
         try {
           const xs = [ptl.x, ptr.x, pbr.x, pbl.x], ys = [ptl.y, ptr.y, pbr.y, pbl.y];
-          const bx = Math.min(...xs), by = Math.min(...ys);
-          const box = { x: bx, y: by, w: Math.max(...xs) - bx, h: Math.max(...ys) - by };
+          const ox0 = Math.min(...xs), oy0 = Math.min(...ys), ox1 = Math.max(...xs), oy1 = Math.max(...ys);
+          const box = { x: ox0, y: oy0, w: ox1 - ox0, h: oy1 - oy0 };
           const full = ctx.getImageData(0, 0, c.width, c.height);
           const refined = refinePlate(full, box);
-          console.log('[refinePlate]', photoFile.name, refined.mode, refined.metrics);
+          console.log('[refinePlate]', photoFile.name, refined.mode, { reliable: refined.reliable, ...refined.metrics });
           if (refined.mode === 'quad' && refined.corners) {
             applyQuad(refined.corners.map(p => ({ x: p[0], y: p[1] })));
+          } else if (refined.mode === 'rect' && refined.reliable) {
+            // Recalage du rectangle sur la plaque réelle, en UNION avec la bbox
+            // d'origine : on ne réduit jamais la couverture (confidentialité),
+            // on corrige seulement un cadrage trop petit/décalé (bbox carrée).
+            const r = refined.rect;
+            const rx0 = Math.min(ox0, r.cx - r.w / 2), ry0 = Math.min(oy0, r.cy - r.h / 2);
+            const rx1 = Math.max(ox1, r.cx + r.w / 2), ry1 = Math.max(oy1, r.cy + r.h / 2);
+            ptl = { x: rx0, y: ry0 }; ptr = { x: rx1, y: ry0 };
+            pbr = { x: rx1, y: ry1 }; pbl = { x: rx0, y: ry1 };
+            const toNorm = p => ({ x: p.x / c.width, y: p.y / c.height });
+            savedCorners = { tl: toNorm(ptl), tr: toNorm(ptr), br: toNorm(pbr), bl: toNorm(pbl) };
+            console.log('[refinePlate] → rectangle recalé (couverture améliorée)');
           }
-          // mode 'rect' : on garde le rectangle droit existant (ne casse rien).
         } catch (e) { console.warn('[refinePlate] ignoré:', e.message); }
       }
     }
