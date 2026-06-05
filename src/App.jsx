@@ -3,6 +3,7 @@ import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
+import { refinePlate } from "./refinePlate.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -2884,8 +2885,8 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
 
   if (autoRenderableSource && savedCorners && logoImg) {
     const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
-    const ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
-    const pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
+    let ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
+    let pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
 
     try {
       const eps = 1.5;
@@ -2907,6 +2908,41 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
         ]) === JSON.stringify(yolo.corners || []),
       });
     } catch (e) { /* best-effort */ }
+
+    // ── Affinage client des coins quand le cache serait posé en rectangle droit.
+    // Un quad axis-aligned (source bbox_stable / fallback bbox) déborde sur une
+    // plaque vue de biais. refinePlate (JS pur, sans dépendance) ré-analyse
+    // l'ImageData : s'il détecte une VRAIE inclinaison il renvoie un quad incliné
+    // qu'on pose en perspective via le moteur existant ; sinon on conserve tel
+    // quel le rectangle droit actuel (cas plaque de face, déjà optimal). Les quads
+    // déjà inclinés (keypoints / opencv_promoted) ne sont jamais touchés.
+    const epsRefine = 1.5;
+    const isAxisAlignedQuad =
+      Math.abs(ptl.y - ptr.y) < epsRefine &&
+      Math.abs(pbl.y - pbr.y) < epsRefine &&
+      Math.abs(ptl.x - pbl.x) < epsRefine &&
+      Math.abs(ptr.x - pbr.x) < epsRefine;
+    if (isAxisAlignedQuad) {
+      try {
+        const xs = [ptl.x, ptr.x, pbr.x, pbl.x], ys = [ptl.y, ptr.y, pbr.y, pbl.y];
+        const bx = Math.min(...xs), by = Math.min(...ys);
+        const box = { x: bx, y: by, w: Math.max(...xs) - bx, h: Math.max(...ys) - by };
+        const full = ctx.getImageData(0, 0, c.width, c.height);
+        const refined = refinePlate(full, box);
+        // Log temporaire (calibration du seuil tiltDeg sur photos réelles).
+        console.log('[refinePlate]', photoFile.name, refined.mode, refined.metrics);
+        if (refined.mode === 'quad' && refined.corners) {
+          const [rTl, rTr, rBr, rBl] = refined.corners;
+          ptl = { x: rTl[0], y: rTl[1] }; ptr = { x: rTr[0], y: rTr[1] };
+          pbr = { x: rBr[0], y: rBr[1] }; pbl = { x: rBl[0], y: rBl[1] };
+          // Propager aux coins persistés (normalisés) pour que les re-rendus
+          // (composite showroom, mode « Ajuster ») suivent aussi le quad incliné.
+          const toNorm = p => ({ x: p[0] / c.width, y: p[1] / c.height });
+          savedCorners = { tl: toNorm(rTl), tr: toNorm(rTr), br: toNorm(rBr), bl: toNorm(rBl) };
+        }
+        // mode 'rect' : on garde le rectangle droit existant (ne casse rien).
+      } catch (e) { console.warn('[refinePlate] ignoré:', e.message); }
+    }
 
     const renderSource = yolo.render_source ?? yolo.source;
     drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, renderSource);
