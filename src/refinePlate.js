@@ -1,18 +1,18 @@
-// refinePlate.js — affinage des 4 coins d'une plaque, 100% client, sans dépendance.
+// refinePlate.js — affinage des coins d'une plaque, 100% client, sans dépendance.
 //
-// Rôle dans AutoCache : la détection (backend YOLO / OpenCV / keypoints) fournit
-// une géométrie de plaque. Quand cette géométrie est un simple rectangle droit
-// (cas `bbox_stable` ou fallback bbox), un cache axis-aligned déborde sur une
-// plaque vue de biais — et si la bbox est trop petite, il la couvre mal. Ce
-// module reprend l'ImageData de l'image complète + la boîte approximative et :
-//   - SI une vraie inclinaison est détectée → renvoie un quad incliné (mode 'quad')
-//   - SINON → renvoie un rectangle droit recalé sur la plaque réelle (mode 'rect')
-// La bascule est automatique et basée sur l'inclinaison, jamais l'asymétrie.
+// Rôle dans AutoCache : la détection (YOLO / bbox) fournit une boîte approximative
+// de la plaque. Sur une plaque vue de biais, un cache axis-aligned ne suit pas
+// l'angle. Ce module estime l'inclinaison réelle de la plaque et, si elle est
+// significative, renvoie un quad incliné ; sinon un rectangle droit.
 //
-// Robustesse voitures peu contrastées (plaque blanche / pare-chocs argenté) :
-//   - normalisation de contraste (étirement par percentiles) avant Otsu
-//   - ROI de recherche généreuse (récupère une bbox trop petite/carrée)
-//   - sélection de la composante la plus « plaque » (ratio + remplissage + aire)
+// MÉTHODE (robuste, indépendante de la couleur de la voiture) :
+//   Le TEXTE de la plaque est toujours sombre sur fond clair, quelle que soit la
+//   carrosserie (blanche, grise, argentée...). On binarise (Otsu), on prend les
+//   pixels sombres (texte + bandes), et on calcule leurs MOMENTS d'image :
+//   l'axe principal du nuage de texte donne l'inclinaison de la plaque.
+//   À partir de cet angle + la boîte (= AABB de la plaque), on reconstruit le
+//   rectangle incliné inscrit. Pas de composantes connexes, pas de rejet de
+//   bord — ce qui faisait échouer l'ancienne version sur boîte serrée.
 //
 // Les coins/rect renvoyés sont dans le MÊME repère pixel que l'ImageData fournie.
 //
@@ -24,8 +24,8 @@
 //     mode: 'quad' | 'rect',
 //     corners: [[x,y],[x,y],[x,y],[x,y]] | null,   // HG, HD, BD, BG (si 'quad')
 //     rect: { cx, cy, w, h } | null,                // centre + dims (si 'rect')
-//     reliable: boolean,                            // true = plaque réellement localisée
-//     metrics: { tiltDeg, ratio, asymPct, fillRatio }
+//     reliable: boolean,                            // true = plaque localisée
+//     metrics: { tiltDeg, ratio, asymPct, fillRatio, elongation, darkFrac }
 //   }
 
 function otsu(gray) {
@@ -44,133 +44,107 @@ function otsu(gray) {
   return thr;
 }
 
-// Étirement de contraste par percentiles (2% / 98%). Sépare une plaque claire
-// d'un pare-chocs de luminosité voisine (voitures grises/argentées), là où un
-// Otsu brut sur l'image d'origine fusionne les deux.
-function stretchContrast(gray) {
-  const h = new Array(256).fill(0);
-  for (let i = 0; i < gray.length; i++) h[gray[i]]++;
-  const total = gray.length;
-  let acc = 0, lo = 0, hi = 255;
-  const loN = total * 0.02, hiN = total * 0.98;
-  for (let t = 0; t < 256; t++) { acc += h[t]; if (acc >= loN) { lo = t; break; } }
-  acc = 0;
-  for (let t = 255; t >= 0; t--) { acc += h[t]; if (acc >= total - hiN) { hi = t; break; } }
-  if (hi - lo < 8) return gray; // contraste déjà nul → on ne force pas
-  const out = new Uint8Array(gray.length), scale = 255 / (hi - lo);
-  for (let i = 0; i < gray.length; i++) {
-    const v = (gray[i] - lo) * scale;
-    out[i] = v < 0 ? 0 : v > 255 ? 255 : v | 0;
-  }
-  return out;
-}
-
-const D = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-const ANG = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
-
-// Détecte le quad de la plaque dans la boîte. Renvoie [HG,HD,BD,BG] (px image) ou null.
-function detectQuad(imageData, box) {
+// Analyse les pixels sombres (texte) de la plaque dans la boîte.
+// Renvoie { theta, cx, cy, elongation, darkFrac, n, x0, y0, rw, rh } ou null.
+function analyzeInk(imageData, box) {
   const W = imageData.width, H = imageData.height, data = imageData.data;
-  // ROI généreuse : padding proportionnel au plus grand côté de la boîte, afin
-  // de récupérer la plaque même si la bbox de détection est trop petite/carrée.
-  const pad = Math.round(0.35 * Math.max(box.w, box.h));
+  // Petite marge pour ne pas couper le texte si la boîte est légèrement serrée.
+  const pad = Math.round(0.08 * Math.max(box.w, box.h));
   const x0 = Math.max(0, Math.round(box.x - pad)), y0 = Math.max(0, Math.round(box.y - pad));
   const x1 = Math.min(W, Math.round(box.x + box.w + pad)), y1 = Math.min(H, Math.round(box.y + box.h + pad));
   const rw = x1 - x0, rh = y1 - y0;
-  if (rw < 6 || rh < 6) return null;
+  if (rw < 8 || rh < 8) return null;
 
-  // niveaux de gris sur la ROI
-  const gray0 = new Uint8Array(rw * rh);
+  const gray = new Uint8Array(rw * rh);
   for (let yy = 0; yy < rh; yy++) for (let xx = 0; xx < rw; xx++) {
     const si = ((y0 + yy) * W + (x0 + xx)) * 4;
-    gray0[yy * rw + xx] = (data[si] * 0.299 + data[si + 1] * 0.587 + data[si + 2] * 0.114) | 0;
+    gray[yy * rw + xx] = (data[si] * 0.299 + data[si + 1] * 0.587 + data[si + 2] * 0.114) | 0;
   }
-  const gray = stretchContrast(gray0);
   const thr = otsu(gray);
-  const bin = new Uint8Array(rw * rh);
-  for (let i = 0; i < gray.length; i++) bin[i] = gray[i] > thr ? 1 : 0;
 
-  // composantes connexes (4-connexité) ; on garde la plus « plaque » (ratio +
-  // remplissage + aire), en ignorant celles qui touchent le bord de la ROI
-  // (= arrière-plan / carrosserie qui déborde).
-  const lab = new Int32Array(rw * rh);
-  const stack = new Int32Array(rw * rh);
-  let cur = 0, bestScore = 0, bestQ = null;
-  const minArea = 0.015 * rw * rh;
-  for (let p = 0; p < bin.length; p++) {
-    if (!bin[p] || lab[p]) continue;
-    cur++; let sp = 0; stack[sp++] = p; lab[p] = cur; let n = 0;
-    let sMin = 1e9, sMax = -1e9, dMin = 1e9, dMax = -1e9, tl = 0, br = 0, tr = 0, bl = 0;
-    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
-    while (sp) {
-      const q = stack[--sp], qx = q % rw, qy = (q / rw) | 0; n++;
-      const s = qx + qy, df = qx - qy;
-      if (s < sMin) { sMin = s; tl = q; } if (s > sMax) { sMax = s; br = q; }
-      if (df > dMax) { dMax = df; tr = q; } if (df < dMin) { dMin = df; bl = q; }
-      if (qx < minX) minX = qx; if (qx > maxX) maxX = qx;
-      if (qy < minY) minY = qy; if (qy > maxY) maxY = qy;
-      if (qx > 0 && bin[q - 1] && !lab[q - 1]) { lab[q - 1] = cur; stack[sp++] = q - 1; }
-      if (qx < rw - 1 && bin[q + 1] && !lab[q + 1]) { lab[q + 1] = cur; stack[sp++] = q + 1; }
-      if (qy > 0 && bin[q - rw] && !lab[q - rw]) { lab[q - rw] = cur; stack[sp++] = q - rw; }
-      if (qy < rh - 1 && bin[q + rw] && !lab[q + rw]) { lab[q + rw] = cur; stack[sp++] = q + rw; }
-    }
-    if (n < minArea) continue;
-    if (minX <= 1 || minY <= 1 || maxX >= rw - 2 || maxY >= rh - 2) continue; // touche le bord
-    const C = q => [(q % rw) + x0, ((q / rw) | 0) + y0];
-    const Q = [C(tl), C(tr), C(br), C(bl)];
-    const top = D(Q[0], Q[1]), bot = D(Q[2], Q[3]), lft = D(Q[0], Q[3]), rgt = D(Q[1], Q[2]);
-    const ratio = ((top + bot) / 2) / Math.max((lft + rgt) / 2, 1);
-    // remplissage de la composante dans son propre rectangle englobant
-    const extArea = Math.max((maxX - minX) * (maxY - minY), 1);
-    const fill = n / extArea;
-    const like = Math.exp(-Math.pow((ratio - 4) / 2.5, 2)); // pic vers le ratio plaque réel
-    const score = n * like * (0.5 + 0.5 * Math.min(1, fill / 0.6));
-    if (score > bestScore) { bestScore = score; bestQ = Q; }
+  // Moments des pixels SOMBRES (texte + bandes), en coordonnées globales.
+  let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+  for (let yy = 0; yy < rh; yy++) for (let xx = 0; xx < rw; xx++) {
+    if (gray[yy * rw + xx] > thr) continue; // garde le sombre (classe <= seuil Otsu)
+    const gx = x0 + xx, gy = y0 + yy;
+    n++; sx += gx; sy += gy; sxx += gx * gx; syy += gy * gy; sxy += gx * gy;
   }
-  return bestQ;
+  const darkFrac = n / (rw * rh);
+  if (n < 12) return null;
+
+  const cx = sx / n, cy = sy / n;
+  const cxx = sxx / n - cx * cx, cyy = syy / n - cy * cy, cxy = sxy / n - cx * cy;
+  // Angle de l'axe principal (orientation du nuage de texte).
+  const theta = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
+  // Valeurs propres → élongation (le texte d'une plaque est large, pas rond).
+  const tr = cxx + cyy, det = cxx * cyy - cxy * cxy;
+  const disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+  const l1 = tr / 2 + disc, l2 = tr / 2 - disc;
+  const elongation = l1 / Math.max(l2, 1e-6);
+
+  return { theta, cx, cy, elongation, darkFrac, n };
+}
+
+// Reconstruit le rectangle incliné de la plaque inscrit dans la boîte (AABB),
+// à partir de l'angle theta. Renvoie les coins [HG,HD,BD,BG] px.
+function plateQuadFromTilt(box, theta, cxIn, cyIn, expand) {
+  const c = Math.cos(theta), s = Math.sin(theta);
+  const cos2 = c * c - s * s; // cos(2θ)
+  let pw, ph;
+  if (Math.abs(cos2) > 0.15) {
+    // W = pw·|c| + ph·|s| ; H = pw·|s| + ph·|c|  →  inversion
+    const ac = Math.abs(c), as = Math.abs(s);
+    pw = (box.w * ac - box.h * as) / cos2;
+    ph = (box.h * ac - box.w * as) / cos2;
+  } else { pw = box.w; ph = box.h; }
+  if (!(pw > 0) || !(ph > 0)) { pw = box.w; ph = box.h; }
+  const hw = (pw / 2) * expand, hh = (ph / 2) * expand;
+  const cx = cxIn, cy = cyIn;
+  const rot = (dx, dy) => [cx + dx * c - dy * s, cy + dx * s + dy * c];
+  return { corners: [rot(-hw, -hh), rot(hw, -hh), rot(hw, hh), rot(-hw, hh)], pw, ph, cx, cy };
 }
 
 export function refinePlate(imageData, box) {
-  const q = detectQuad(imageData, box);
-  const boxArea = Math.max(box.w * box.h, 1);
+  const ink = analyzeInk(imageData, box);
 
-  // métriques
-  let tiltDeg = 0, ratio = 0, asymPct = 0, fillRatio = 0;
-  if (q) {
-    const top = D(q[0], q[1]), bot = D(q[2], q[3]), left = D(q[0], q[3]), right = D(q[1], q[2]);
-    ratio = ((top + bot) / 2) / Math.max((left + right) / 2, 1);
-    tiltDeg = (ANG(q[0], q[1]) + ANG(q[3], q[2])) / 2;
-    asymPct = Math.abs(left - right) / Math.max(left, right) * 100;
-    let a = 0; for (let i = 0; i < 4; i++) { const u = q[i], v = q[(i + 1) % 4]; a += u[0] * v[1] - v[0] * u[1]; }
-    fillRatio = Math.abs(a / 2) / boxArea;
+  let tiltDeg = 0, ratio = 0, elongation = 0, darkFrac = 0;
+  const blank = { mode: 'rect', corners: null, reliable: false,
+    rect: { cx: box.x + box.w / 2, cy: box.y + box.h / 2, w: box.w, h: box.h },
+    metrics: { tiltDeg: 0, ratio: 0, asymPct: 0, fillRatio: 0, elongation: 0, darkFrac: 0 } };
+
+  if (!ink) return blank;
+  elongation = ink.elongation;
+  darkFrac = ink.darkFrac;
+  tiltDeg = ink.theta * 180 / Math.PI;
+  // Normalise dans [-90, 90] (atan2/2 le garantit déjà), puis on ne traite que
+  // des inclinaisons plausibles de plaque (texte horizontal).
+  if (tiltDeg > 90) tiltDeg -= 180; else if (tiltDeg < -90) tiltDeg += 180;
+
+  // Fiabilité : nuage de texte large (élongation), proportion de sombre
+  // raisonnable (sinon : pas de plaque claire, ou boîte sur zone sombre), et
+  // inclinaison dans une plage exploitable.
+  const reliable =
+    elongation >= 1.8 &&
+    darkFrac >= 0.02 && darkFrac <= 0.75 &&
+    Math.abs(tiltDeg) <= 35;
+
+  if (!reliable) {
+    return { ...blank, metrics: { tiltDeg, ratio: 0, asymPct: 0, fillRatio: 0, elongation, darkFrac } };
   }
 
-  // DÉCISION :
-  // - la perspective ne se déclenche que sur une INCLINAISON réelle (≥5°) ;
-  //   l'asymétrie seule n'est PAS un déclencheur (plaque de face penchée à tort).
-  // - `reliable` indique qu'on a bien localisé une plaque (ratio plausible +
-  //   surface suffisante) ; il autorise aussi le recalage du RECTANGLE.
-  const reliable = !!q && ratio >= 2.2 && ratio <= 7 && fillRatio >= 0.3;
-  const angled = reliable && Math.abs(tiltDeg) >= 5;   // seuil : ~5°
+  const angled = Math.abs(tiltDeg) >= 5;
+  const q = plateQuadFromTilt(box, ink.theta, ink.cx, ink.cy, angled ? 1.08 : 1.05);
+  ratio = q.pw / Math.max(q.ph, 1e-6);
+
+  const metrics = { tiltDeg, ratio, asymPct: 0, fillRatio: darkFrac, elongation, darkFrac };
 
   if (angled) {
-    // léger élargissement (~8%) pour bien couvrir la plaque (bandes incluses)
-    const cgx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
-    const cgy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
-    const corners = q.map(p => [cgx + (p[0] - cgx) * 1.08, cgy + (p[1] - cgy) * 1.08]);
-    return { mode: 'quad', corners, rect: null, reliable: true, metrics: { tiltDeg, ratio, asymPct, fillRatio } };
+    return { mode: 'quad', corners: q.corners, rect: null, reliable: true, metrics };
   }
-
-  // sinon : rectangle droit. Si la détection est fiable on recale sur la boîte
-  // englobante du quad (corrige une bbox trop petite/décalée) ; sinon on garde
-  // la boîte de détection telle quelle.
-  let cx, cy, w, h;
-  if (reliable) {
-    const xs = q.map(p => p[0]), ys = q.map(p => p[1]);
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    cx = (minX + maxX) / 2; cy = (minY + maxY) / 2; w = (maxX - minX) * 1.05; h = (maxY - minY) * 1.05;
-  } else {
-    cx = box.x + box.w / 2; cy = box.y + box.h / 2; w = box.w; h = box.h;
-  }
-  return { mode: 'rect', corners: null, rect: { cx, cy, w, h }, reliable, metrics: { tiltDeg, ratio, asymPct, fillRatio } };
+  // Plaque de face : rectangle droit recalé sur la plaque mesurée.
+  return {
+    mode: 'rect', corners: null, reliable: true,
+    rect: { cx: q.cx, cy: q.cy, w: q.pw * 1.05, h: q.ph * 1.05 },
+    metrics,
+  };
 }
