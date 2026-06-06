@@ -59,6 +59,19 @@ test('fragment (fillRatio < 0.35) → mode rect (cas Dacia)', () => {
   assert.equal(r.mode, 'rect');
 });
 
+test('quad incliné = rectangle pivoté SYMÉTRIQUE (anti-vrille: top=bot, left=right)', () => {
+  const img = makeImage(260, 150);
+  drawPlate(img, 130, 75, 150, 32, 12);
+  const box = { x: 48, y: 46, w: 164, h: 58 };
+  const r = refinePlate(img, box);
+  assert.equal(r.mode, 'quad');
+  const [TL, TR, BR, BL] = r.corners;
+  const len = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const top = len(TL, TR), bot = len(BL, BR), left = len(TL, BL), right = len(TR, BR);
+  assert.ok(Math.abs(top - bot) < 0.01, `top(${top.toFixed(2)}) doit == bot(${bot.toFixed(2)})`);
+  assert.ok(Math.abs(left - right) < 0.01, `left(${left.toFixed(2)}) doit == right(${right.toFixed(2)})`);
+});
+
 test('aucune plaque (uniforme) → rect = boîte d\'entrée', () => {
   const img = makeImage(220, 110);
   const box = { x: 35, y: 39, w: 150, h: 32 };
