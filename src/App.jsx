@@ -2205,7 +2205,7 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     const mp = p => ({ x: carX + p.x * cw, y: carY + p.y * ch });
     const ptl = mp(corners.tl), ptr = mp(corners.tr);
     const pbr = mp(corners.br), pbl = mp(corners.bl);
-    drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'bbox_stable');
+    drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'plate');
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
   freeCanvas(c);
@@ -2805,146 +2805,53 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // `yolo` a déjà été récupéré plus haut (dimensionnement du canvas).
   if (yolo) {
     plateFound = true;
-    // ── Diagnostic console : qui pilote la pose du cache plaque, et
-    // ── pourquoi (utile pour calibrer le gate sur photos réelles).
-    // ── On expose tous les champs de diagnostic du backend pour que la
-    // ── trace soit auto-suffisante : on doit pouvoir lire UNE seule
-    // ── ligne de log et savoir pourquoi le rendu est ce qu'il est.
-    try {
-      const gt = yolo.gate_telemetry || {};
-      const top_rej = (gt.rejection_reasons || []).slice(0, 5).map(r => ({
-        method: r.method, reason: r.reason, score: r.score,
-        ar: r.ar, contain: r.contain, area_ratio: r.area_ratio,
-        center: [r.center_dx_norm, r.center_dy_norm],
-        max_corner_outside: r.max_corner_outside,
-        center_score: r.center_score, size_score: r.size_score,
-        is_perspective: r.is_perspective,
-        tilts: [r.top_tilt_deg, r.bottom_tilt_deg, r.left_tilt_deg, r.right_tilt_deg],
-        skews: [r.width_skew, r.height_skew],
-        gate_failed_on: r.gate_failed_on,
-      }));
-      // eslint-disable-next-line no-console
-      console.log('[YOLO]', photoFile.name, {
-        // Décision finale
-        source:                            yolo.source,
-        render_source:                     yolo.render_source ?? yolo.source,
-        gate_reason:                       yolo.gate_reason,
-        gate_failed_on:                    yolo.gate_failed_on,
-        quad_source:                       yolo.quad_source,
-        promotion_reason:                  yolo.promotion_reason,
-        rejection_reason:                  yolo.rejection_reason,
-        // Géométries (toutes accessibles côté frontend pour cross-check)
-        bbox:                              yolo.bbox,
-        corners:                           yolo.corners,
-        render_corners:                    yolo.render_corners ?? yolo.corners,
-        bbox_stable_corners:               yolo.bbox_stable_corners ?? yolo.bbox_stable,
-        opencv_corners:                    yolo.opencv_corners,
-        rejected_opencv_corners:           yolo.rejected_opencv_corners ?? yolo.opencv_corners,
-        best_opencv_candidate_corners:     yolo.best_opencv_candidate_corners,
-        best_opencv_candidate_method:      yolo.best_opencv_candidate_method,
-        best_opencv_candidate_score:       yolo.best_opencv_candidate_score,
-        // Telemetry agrégée
-        passes_count:                      gt.passes_count,
-        persp_count:                       gt.persp_count,
-        candidates_seen:                   gt.candidates_seen,
-        chosen_method:                     gt.chosen_method,
-        chosen_score:                      gt.chosen_score,
-        near_miss:                         gt.near_miss,
-        picks:                             gt.picks,
-        rejection_reasons:                 top_rej,
-        // Front plate refinement
-        front_plate_detected:              yolo.front_plate_detected ?? false,
-        front_plate_telemetry:             yolo.front_plate_telemetry ?? null,
-      });
-    } catch (e) { /* logging is best-effort */ }
-    // ── Render geometry — priorité absolue à `yolo.corners` (le quad
-    // ── que le backend a élu : keypoints, opencv_promoted ou
-    // ── bbox_stable). Ce champ EST `render_corners` — drawPerspective
-    // ── est piloté par lui. La bbox n'est utilisée qu'en dernier recours
-    // ── pour fournir un savedCorners utilisable dans « Ajuster » manuel.
-    if (yolo.corners && yolo.corners.length === 4) {
-      savedCorners = { tl: yolo.corners[0], tr: yolo.corners[1], br: yolo.corners[2], bl: yolo.corners[3] };
-    } else {
-      const b = yolo.bbox;
-      savedCorners = { tl: { x: b.x1, y: b.y1 }, tr: { x: b.x2, y: b.y1 }, br: { x: b.x2, y: b.y2 }, bl: { x: b.x1, y: b.y2 } };
-    }
-  }
-
-  // Rendu auto du cache plaque : on dessine le logo en perspective si
-  // la source des coins est validée par le backend :
-  //   - keypoints       → modèle pose (priorité absolue)
-  //   - opencv_promoted → quad OpenCV qui a passé le quality gate ET
-  //                       montré une vraie perspective (3/4 visible)
-  //   - bbox_stable     → quad axis-aligned dérivé de la bbox YOLO
-  // Les anciennes sources (opencv_fallback / tightened_bbox) ne sont
-  // plus exposées et ne sont jamais auto-rendues.
-  const autoRenderableSource = yolo?.source === 'keypoints'
-                            || yolo?.source === 'opencv_promoted'
-                            || yolo?.source === 'front_plate_refined'
-                            || yolo?.source === 'bbox_stable';
-
-  if (autoRenderableSource && savedCorners && logoImg) {
-    const toPixel = p => ({ x: p.x * c.width, y: p.y * c.height });
-    let ptl = toPixel(savedCorners.tl), ptr = toPixel(savedCorners.tr);
-    let pbr = toPixel(savedCorners.br), pbl = toPixel(savedCorners.bl);
-
-    try {
-      const eps = 1.5;
-      const isAxisAligned =
-        Math.abs(ptl.y - ptr.y) < eps &&
-        Math.abs(pbl.y - pbr.y) < eps &&
-        Math.abs(ptl.x - pbl.x) < eps &&
-        Math.abs(ptr.x - pbr.x) < eps;
-      console.log('[draw]', photoFile.name, {
-        label_source:       yolo.render_source ?? yolo.source,
-        gate_reason:        yolo.gate_reason,
-        savedCorners_norm:  savedCorners,
-        drawPerspective_px: { tl: ptl, tr: ptr, br: pbr, bl: pbl },
-        is_axis_aligned:    isAxisAligned,
-        is_front_plate_refined: (yolo.render_source ?? yolo.source) === 'front_plate_refined',
-        front_plate_telemetry:  yolo.front_plate_telemetry ?? null,
-        same_as_render:     JSON.stringify([
-          savedCorners.tl, savedCorners.tr, savedCorners.br, savedCorners.bl,
-        ]) === JSON.stringify(yolo.corners || []),
-      });
-    } catch (e) { /* best-effort */ }
-
-    // ── Chemin UNIQUE de décision du cache (référence) ──
-    // a) la détection (YOLO / Plate Recognizer) a fourni la boîte approximative ;
-    //    quand le quad à poser est axis-aligned (bbox_stable / fallback bbox),
-    // b) refinePlate(imageData, box) décide SEUL : quad incliné OU rectangle droit
-    //    (gate de référence : ratio 2.2–7, fillRatio >= 0.35, tilt >= 5°) ;
-    // c) pose : rect → on garde le rectangle droit ; quad → drawPerspective.
-    // refinePlate détecte sur le canvas `c` qui EST le canvas de pose → un seul
-    // espace, résolution native, aucune conversion. Pas de pipeline parallèle.
-    const epsRefine = 1.5;
-    const isAxisAlignedQuad =
-      Math.abs(ptl.y - ptr.y) < epsRefine &&
-      Math.abs(pbl.y - pbr.y) < epsRefine &&
-      Math.abs(ptl.x - pbl.x) < epsRefine &&
-      Math.abs(ptr.x - pbr.x) < epsRefine;
-    if (isAxisAlignedQuad) {
+    // ── CHEMIN UNIQUE de pose du cache ──
+    // Le détecteur (YOLO / Plate Recognizer) ne sert QU'À fournir la boîte
+    // approximative {x,y,w,h}. On ignore yolo.corners / source / render_source :
+    // aucune logique de double source. refinePlate décide seul (rect fiable par
+    // défaut, quad uniquement si net + franchement incliné), sur le canvas `c`
+    // qui EST le canvas de pose → un seul espace, résolution native.
+    if (yolo.bbox && logoImg) {
+      const b = yolo.bbox; // normalisé 0-1
+      const box = {
+        x: b.x1 * c.width, y: b.y1 * c.height,
+        w: (b.x2 - b.x1) * c.width, h: (b.y2 - b.y1) * c.height,
+      };
+      // Debug optionnel : tracer la BOÎTE D'ENTRÉE reçue par refinePlate, pour
+      // vérifier qu'elle tombe sur la plaque (localStorage.refineBoxDebug = '1').
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('refineBoxDebug') === '1') {
+        ctx.save();
+        ctx.strokeStyle = '#00e5ff';
+        ctx.lineWidth = Math.max(2, c.width / 600);
+        ctx.strokeRect(box.x, box.y, box.w, box.h);
+        ctx.restore();
+      }
       try {
-        const xs = [ptl.x, ptr.x, pbr.x, pbl.x], ys = [ptl.y, ptr.y, pbr.y, pbl.y];
-        const ox0 = Math.min(...xs), oy0 = Math.min(...ys), ox1 = Math.max(...xs), oy1 = Math.max(...ys);
-        const box = { x: ox0, y: oy0, w: ox1 - ox0, h: oy1 - oy0 };
         const full = ctx.getImageData(0, 0, c.width, c.height);
         const refined = refinePlate(full, box);
-        console.log('[refinePlate]', photoFile.name,
-          { mode: refined.mode, reliable: refined.reliable, ...refined.metrics });
+        console.log('[refinePlate]', photoFile.name, {
+          mode:      refined.mode,
+          tiltDeg:   +refined.metrics.tiltDeg.toFixed(2),
+          ratio:     +refined.metrics.ratio.toFixed(2),
+          fillRatio: +refined.metrics.fillRatio.toFixed(3),
+        });
+        let ptl, ptr, pbr, pbl;
         if (refined.mode === 'quad' && refined.corners) {
-          const cr = refined.corners; // [HG,HD,BD,BG] px, déjà élargi 8%
+          const cr = refined.corners; // [HG,HD,BD,BG] px, rectangle pivoté élargi 8%
           ptl = { x: cr[0][0], y: cr[0][1] }; ptr = { x: cr[1][0], y: cr[1][1] };
           pbr = { x: cr[2][0], y: cr[2][1] }; pbl = { x: cr[3][0], y: cr[3][1] };
-          const toNorm = p => ({ x: p.x / c.width, y: p.y / c.height });
-          savedCorners = { tl: toNorm(ptl), tr: toNorm(ptr), br: toNorm(pbr), bl: toNorm(pbl) };
+        } else {
+          // Cache DROIT fiable (défaut) : couvre proprement la plaque.
+          const r = refined.rect || { cx: box.x + box.w / 2, cy: box.y + box.h / 2, w: box.w, h: box.h };
+          const hw = r.w / 2, hh = r.h / 2;
+          ptl = { x: r.cx - hw, y: r.cy - hh }; ptr = { x: r.cx + hw, y: r.cy - hh };
+          pbr = { x: r.cx + hw, y: r.cy + hh }; pbl = { x: r.cx - hw, y: r.cy + hh };
         }
-        // mode 'rect' → on conserve le rectangle droit existant (ptl..pbl = bbox).
+        const toNorm = p => ({ x: p.x / c.width, y: p.y / c.height });
+        savedCorners = { tl: toNorm(ptl), tr: toNorm(ptr), br: toNorm(pbr), bl: toNorm(pbl) };
+        drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, refined.mode);
       } catch (e) { console.warn('[refinePlate] ignoré:', e.message); }
     }
-
-    const renderSource = yolo.render_source ?? yolo.source;
-    drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, renderSource);
   }
   const yoloBbox             = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
   const yoloCorners          = yolo?.corners ?? null;       // = render_corners
@@ -4475,7 +4382,7 @@ export default function AutoCache() {
       const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
       const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
       const bgColor = adjustLogoBgRef.current || '#ffffff';
-      drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'bbox_stable');
+      drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'plate');
     }
   };
 

@@ -115,8 +115,14 @@ export function refinePlate(imageData, box) {
     let a = 0; for (let i = 0; i < 4; i++) { const u = corners[i], v = corners[(i + 1) % 4]; a += u[0] * v[1] - v[0] * u[1]; }
     fillRatio = Math.abs(a / 2) / boxArea;
   }
-  const reliable = !!corners && ratio >= 2.2 && ratio <= 7 && fillRatio >= 0.35;
-  const angled = reliable && Math.abs(tiltDeg) >= 5;   // décision sur l'ANGLE uniquement
+  // Perspective seulement si la détection est NETTE et FRANCHEMENT inclinée.
+  // La détection d'angle par contraste est peu fiable sur plaques sombres :
+  // garde-fou strict → en cas de doute, cache DROIT (fiable) par défaut.
+  const reliable = !!corners
+    && fillRatio >= 0.45
+    && ratio >= 3.0 && ratio <= 6.0   // une vraie plaque ; rejette les ratio ~2.7 (zone fausse)
+    && Math.abs(tiltDeg) <= 35;        // au-delà, c'est forcément une erreur de détection
+  const angled = reliable && Math.abs(tiltDeg) >= 8;  // angle franc requis
 
   if (angled) {
     const cgx = (corners[0][0] + corners[1][0] + corners[2][0] + corners[3][0]) / 4;
