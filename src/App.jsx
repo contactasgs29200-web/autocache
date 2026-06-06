@@ -487,37 +487,6 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   }
 }
 
-// Inclinaison max d'un quad (deg) — coins pixel [tl,tr,br,bl].
-// Écart à l'horizontale pour les bords haut/bas, à la verticale pour gauche/droite.
-function quadMaxTiltDeg(p) {
-  const segAng = (a, b) => Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
-  const fromH = a => { let v = Math.abs(a % 180); if (v > 90) v = 180 - v; return v; };
-  const fromV = a => Math.abs(90 - fromH(a));
-  return Math.max(
-    fromH(segAng(p[0], p[1])), fromH(segAng(p[3], p[2])),
-    fromV(segAng(p[0], p[3])), fromV(segAng(p[1], p[2])),
-  );
-}
-// Ratio largeur/hauteur d'un quad — coins pixel [tl,tr,br,bl].
-function quadAspect(p) {
-  const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  const w = (d(p[0], p[1]) + d(p[3], p[2])) / 2;
-  const h = (d(p[0], p[3]) + d(p[1], p[2])) / 2;
-  return w / Math.max(h, 1e-6);
-}
-// Aire d'un quad (shoelace) — coins pixel [tl,tr,br,bl].
-function quadArea(p) {
-  let a = 0;
-  for (let i = 0; i < 4; i++) { const u = p[i], v = p[(i + 1) % 4]; a += u.x * v.y - v.x * u.y; }
-  return Math.abs(a / 2);
-}
-// Élargit un quad autour de son centre (couverture des bords / bande EU).
-function expandQuad(p, k) {
-  const cx = (p[0].x + p[1].x + p[2].x + p[3].x) / 4;
-  const cy = (p[0].y + p[1].y + p[2].y + p[3].y) / 4;
-  return p.map(q => ({ x: cx + (q.x - cx) * k, y: cy + (q.y - cy) * k }));
-}
-
 // Unified plate overlay renderer — fill bg, perspective draw, feather + boost.
 function drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, renderSource) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
@@ -2236,18 +2205,6 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
     const mp = p => ({ x: carX + p.x * cw, y: carY + p.y * ch });
     const ptl = mp(corners.tl), ptr = mp(corners.tr);
     const pbr = mp(corners.br), pbl = mp(corners.bl);
-    // ── DIAGNOSTIC showroom : le mapping normalisé→cutout est uniforme SSI
-    // l'aspect du cutout (cw/ch) == aspect des coins source. On compare l'angle
-    // du bord haut AVANT (espace source, normalisé) et APRÈS (espace showroom).
-    const angSrc = Math.atan2((corners.tr.y - corners.tl.y) * ch, (corners.tr.x - corners.tl.x) * cw) * 180 / Math.PI;
-    const angDst = Math.atan2(ptr.y - ptl.y, ptr.x - ptl.x) * 180 / Math.PI;
-    console.log('[diag-showroom]', {
-      cutout: [carImg.width, carImg.height],
-      car_draw: [Math.round(cw), Math.round(ch)],
-      aspect_cutout: +(carImg.width / carImg.height).toFixed(4),
-      tilt_top_edge: +angDst.toFixed(2),
-      tilt_consistent: Math.abs(angSrc - angDst) < 0.5, // doit être true (mapping uniforme)
-    });
     drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'bbox_stable');
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
@@ -2952,18 +2909,14 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
       });
     } catch (e) { /* best-effort */ }
 
-    // ── Affinage des coins quand le cache serait posé en rectangle droit.
-    // Un quad axis-aligned (source bbox_stable / fallback bbox) déborde sur une
-    // plaque vue de biais. Deux filets de récupération, dans l'ordre :
-    //   1. Le quad de plaque DÉJÀ détecté côté backend (best_opencv_candidate_
-    //      corners), rejeté seulement par le gate strict (ex. area_ratio<0.45).
-    //      Géométrie OpenCV/Hough sur l'image pleine résolution → bien plus
-    //      fiable que l'analyse pixel client (voitures grises peu contrastées).
-    //   2. refinePlate (JS pur) qui ré-analyse l'ImageData si le backend n'a
-    //      pas de candidat exploitable (ex. source Plate Recognizer).
-    // Dans les deux cas on n'agit QUE si une vraie inclinaison (>=5°) est
-    // mesurée ; sinon on conserve le rectangle droit (plaque de face, optimal).
-    // Les quads déjà inclinés (keypoints / opencv_promoted) ne passent pas ici.
+    // ── Chemin UNIQUE de décision du cache (référence) ──
+    // a) la détection (YOLO / Plate Recognizer) a fourni la boîte approximative ;
+    //    quand le quad à poser est axis-aligned (bbox_stable / fallback bbox),
+    // b) refinePlate(imageData, box) décide SEUL : quad incliné OU rectangle droit
+    //    (gate de référence : ratio 2.2–7, fillRatio >= 0.35, tilt >= 5°) ;
+    // c) pose : rect → on garde le rectangle droit ; quad → drawPerspective.
+    // refinePlate détecte sur le canvas `c` qui EST le canvas de pose → un seul
+    // espace, résolution native, aucune conversion. Pas de pipeline parallèle.
     const epsRefine = 1.5;
     const isAxisAlignedQuad =
       Math.abs(ptl.y - ptr.y) < epsRefine &&
@@ -2971,78 +2924,23 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
       Math.abs(ptl.x - pbl.x) < epsRefine &&
       Math.abs(ptr.x - pbr.x) < epsRefine;
     if (isAxisAlignedQuad) {
-      const boxArea = Math.abs((ptr.x - ptl.x) * (pbl.y - ptl.y)) || 1;
-      const applyQuad = (px) => {
-        const e = expandQuad(px, 1.08);
-        ptl = e[0]; ptr = e[1]; pbr = e[2]; pbl = e[3];
-        const toNorm = q => ({ x: q.x / c.width, y: q.y / c.height });
-        // Propager aux coins persistés (normalisés) → re-rendus showroom / Ajuster cohérents.
-        savedCorners = { tl: toNorm(e[0]), tr: toNorm(e[1]), br: toNorm(e[2]), bl: toNorm(e[3]) };
-      };
-
-      // ── DIAGNOSTIC espaces de coordonnées (détection vs pose vs natif) ──
-      // refinePlate détecte ET on pose le cache sur le MÊME canvas `c`, donc
-      // aspectDetection === aspectPose par construction. natif = source EXIF-
-      // orientée par le navigateur au drawImage initial → même repère.
-      console.log('[diag-spaces]', photoFile.name, {
-        detection_ET_pose: [c.width, c.height],     // (a) = (b) : un seul canvas
-        native:            [natW, natH],            // (c)
-        aspect_canvas:     +(c.width / c.height).toFixed(4),
-        aspect_native:     +(natW / natH).toFixed(4),
-        same_aspect:       Math.abs(c.width / c.height - natW / natH) < 0.01,
-      });
-
-      // Tilt du candidat backend — calculé pour COMPARAISON (même si non utilisé).
-      const nm = yolo.best_opencv_candidate_corners;
-      let backendTilt = null, backendPx = null;
-      if (Array.isArray(nm) && nm.length === 4 &&
-          nm.every(p => p && typeof p.x === 'number' && typeof p.y === 'number')) {
-        backendPx = nm.map(p => ({ x: p.x * c.width, y: p.y * c.height }));
-        backendTilt = quadMaxTiltDeg(backendPx);
-      }
-
-      let done = false;
-      // 1. PRIORITÉ : refinePlate — détecte sur le canvas `c` (= canvas de pose),
-      //    aucun changement d'espace, résolution native. C'est la méthode validée
-      //    sur la page de debug.
       try {
         const xs = [ptl.x, ptr.x, pbr.x, pbl.x], ys = [ptl.y, ptr.y, pbr.y, pbl.y];
         const ox0 = Math.min(...xs), oy0 = Math.min(...ys), ox1 = Math.max(...xs), oy1 = Math.max(...ys);
         const box = { x: ox0, y: oy0, w: ox1 - ox0, h: oy1 - oy0 };
         const full = ctx.getImageData(0, 0, c.width, c.height);
         const refined = refinePlate(full, box);
-        console.log('[refinePlate]', photoFile.name, refined.mode,
-          { reliable: refined.reliable, ...refined.metrics, backendTilt: backendTilt == null ? null : +backendTilt.toFixed(1) });
-        if (refined.reliable && refined.mode === 'quad' && refined.corners) {
-          applyQuad(refined.corners.map(p => ({ x: p[0], y: p[1] })));
-          done = true;
-          console.log('[refine] → quad refinePlate appliqué (tilt', refined.metrics.tiltDeg.toFixed(1), '°)');
-        } else if (refined.reliable && refined.mode === 'rect') {
-          // Plaque de face fiable : recalage rectangle (union, ne réduit jamais).
-          const r = refined.rect;
-          const rx0 = Math.min(ox0, r.cx - r.w / 2), ry0 = Math.min(oy0, r.cy - r.h / 2);
-          const rx1 = Math.max(ox1, r.cx + r.w / 2), ry1 = Math.max(oy1, r.cy + r.h / 2);
-          ptl = { x: rx0, y: ry0 }; ptr = { x: rx1, y: ry0 };
-          pbr = { x: rx1, y: ry1 }; pbl = { x: rx0, y: ry1 };
+        console.log('[refinePlate]', photoFile.name,
+          { mode: refined.mode, reliable: refined.reliable, ...refined.metrics });
+        if (refined.mode === 'quad' && refined.corners) {
+          const cr = refined.corners; // [HG,HD,BD,BG] px, déjà élargi 8%
+          ptl = { x: cr[0][0], y: cr[0][1] }; ptr = { x: cr[1][0], y: cr[1][1] };
+          pbr = { x: cr[2][0], y: cr[2][1] }; pbl = { x: cr[3][0], y: cr[3][1] };
           const toNorm = p => ({ x: p.x / c.width, y: p.y / c.height });
           savedCorners = { tl: toNorm(ptl), tr: toNorm(ptr), br: toNorm(pbr), bl: toNorm(pbl) };
-          done = true;
-          console.log('[refinePlate] → rectangle recalé (face, couverture améliorée)');
         }
+        // mode 'rect' → on conserve le rectangle droit existant (ptl..pbl = bbox).
       } catch (e) { console.warn('[refinePlate] ignoré:', e.message); }
-
-      // 2. REPLI : quad candidat du backend, seulement si refinePlate n'a pas
-      //    localisé la plaque (ex. plaque sans texte lisible).
-      if (!done && backendPx) {
-        const ar = quadAspect(backendPx), areaR = quadArea(backendPx) / boxArea;
-        const inBounds = nm.every(p => p.x >= -0.1 && p.x <= 1.1 && p.y >= -0.1 && p.y <= 1.1);
-        console.log('[refine] backend candidate (repli)', photoFile.name,
-          { method: yolo.best_opencv_candidate_method, tilt: +backendTilt.toFixed(1), ar: +ar.toFixed(2), areaR: +areaR.toFixed(2) });
-        if (backendTilt >= 5 && backendTilt <= 35 && ar >= 2.2 && ar <= 7 && areaR >= 0.2 && inBounds) {
-          applyQuad(backendPx); done = true;
-          console.log('[refine] → backend quad appliqué (repli)');
-        }
-      }
     }
 
     const renderSource = yolo.render_source ?? yolo.source;
