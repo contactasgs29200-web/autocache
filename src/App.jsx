@@ -3,7 +3,7 @@ import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
-import { refinePlate } from "./refinePlate.js";
+import { orderQuad, quadArea } from "./plateGeometry.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -2213,29 +2213,6 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   return dataURL;
 }
 
-// Coins précis via GPT-4o sur le CROP de la plaque (plaque = 100% de l'image envoyée)
-// Retourne { near_side, angle_deg, corners } ou null
-async function detectGptData(b64) {
-  try {
-    const r = await fetch("/api/corners", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ b64 }),
-    });
-    const data = await r.json();
-    if (typeof data.near_side === 'string' && typeof data.angle_deg === 'number') {
-      return {
-        near_side: data.near_side,
-        angle_deg: data.angle_deg,
-        corners: data.corners ?? null,
-      };
-    }
-    return null;
-  } catch(e) {
-    return null;
-  }
-}
-
 // Downscale an image before sending it to the YOLO backend. The backend
 // returns normalized coordinates, so the scale factor is irrelevant to the
 // geometry — this only shrinks upload + server-side decode time. Returns the
@@ -2261,34 +2238,53 @@ function downscaleForUpload(file, maxPx = 1600, quality = 0.9) {
   });
 }
 
-async function detectPlateYOLO(imageFile) {
-  const backendUrl = import.meta.env.VITE_YOLO_BACKEND_URL;
-  if (!backendUrl) { console.warn('VITE_YOLO_BACKEND_URL non défini'); return null; }
+// Réduit l'image (≤ maxSide) et renvoie sa version base64 JPEG + ses dimensions.
+// On envoie une copie réduite à la détection (rapide, sous la limite Vercel) ;
+// les coins renvoyés sont normalisés (÷ dimensions envoyées) → indépendants de
+// la résolution, donc directement réutilisables sur le canvas natif.
+function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
+      const s = Math.min(1, maxSide / Math.max(w0, h0));
+      const w = Math.max(1, Math.round(w0 * s)), h = Math.max(1, Math.round(h0 * s));
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve({ base64: c.toDataURL('image/jpeg', quality), w, h });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image load failed')); };
+    img.src = url;
+  });
+}
+
+// Détection plaque via Plate Recognizer Blur (coins précis, gère l'angle).
+// Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
+// normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
+async function detectPlate(imageFile, regions = 'fr') {
   try {
-    const upload = await downscaleForUpload(imageFile);
-    const formData = new FormData();
-    formData.append('file', upload, upload.name || 'upload.jpg');
-    const r = await fetch(`${backendUrl}/detect-plate`, {
+    const { base64, w, h } = await downscaledImageBase64(imageFile, 1600, 0.85);
+    const r = await fetch('/api/detect-plates', {
       method: 'POST',
-      body: formData,
-      // pas de Content-Type : le navigateur pose multipart/form-data + boundary
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageBase64: base64, regions }),
     });
-    if (!r.ok) { console.warn('YOLO backend HTTP', r.status); return null; }
-    const d = await r.json();
-    if (!d.found) { console.log('YOLO: aucune plaque détectée'); return null; }
-    const b = d.bbox;
-    console.log(`YOLO bbox: (${b.x1.toFixed(3)},${b.y1.toFixed(3)})-(${b.x2.toFixed(3)},${b.y2.toFixed(3)}) conf=${d.conf} source=${d.source ?? '?'}`);
-    if (d.corners) console.log('Corners:', d.corners.map(p => `(${p.x.toFixed(3)},${p.y.toFixed(3)})`).join(' '));
-    if (d.debug?.candidates?.length) {
-      console.log(`YOLO debug: ${d.debug.total_candidates} candidats, méthode finale = ${d.debug.method}`);
-      d.debug.candidates.forEach((c, i) => {
-        const star = c.is_final ? '★' : ' ';
-        console.log(`  ${star} #${i+1} score=${c.score} method=${c.method} ar=${c.sub_scores.ar ?? '?'} contain=${c.sub_scores.contain ?? '?'}`);
-      });
-    }
-    return d;
-  } catch(e) {
-    console.error('YOLO error:', e.message);
+    if (!r.ok) { console.warn('[detect-plates] HTTP', r.status); return null; }
+    const { polygons } = await r.json();
+    const quads = (polygons || []).filter(p => Array.isArray(p) && p.length === 4);
+    if (!quads.length) { console.log('Aucune plaque détectée'); return null; }
+    // Plaque principale = polygone de plus grande aire (shoelace).
+    const best = quads.slice().sort((A, B) => quadArea(B) - quadArea(A))[0];
+    const corners = orderQuad(best).map(p => ({ x: p[0] / w, y: p[1] / h }));
+    const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
+    const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+    console.log(`Plaque détectée (Plate Recognizer): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
+    return { found: true, conf: 1, bbox, corners };
+  } catch (e) {
+    console.error('[detect-plates] erreur:', e.message);
     return null;
   }
 }
@@ -2732,7 +2728,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const natH = photoImg.naturalHeight || photoImg.height;
 
   // Détection plaque (coordonnées normalisées 0–1, sur le fichier original).
-  const yolo = await detectPlateYOLO(photoFile);
+  const yolo = await detectPlate(photoFile);
 
   // Largeur de la plaque en pixels natifs (coins si dispo, sinon bbox).
   let plateNativePx = 0;
@@ -2806,72 +2802,30 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   if (yolo) {
     plateFound = true;
     // ── CHEMIN UNIQUE de pose du cache ──
-    // Le détecteur (YOLO / Plate Recognizer) ne sert QU'À fournir la boîte
-    // approximative {x,y,w,h}. On ignore yolo.corners / source / render_source :
-    // aucune logique de double source. refinePlate décide seul (rect fiable par
-    // défaut, quad uniquement si net + franchement incliné), sur le canvas `c`
-    // qui EST le canvas de pose → un seul espace, résolution native.
-    if (yolo.bbox && logoImg) {
-      const b = yolo.bbox; // normalisé 0-1
-      const box = {
-        x: b.x1 * c.width, y: b.y1 * c.height,
-        w: (b.x2 - b.x1) * c.width, h: (b.y2 - b.y1) * c.height,
-      };
-      // Debug optionnel : tracer la BOÎTE D'ENTRÉE reçue par refinePlate, pour
-      // vérifier qu'elle tombe sur la plaque (localStorage.refineBoxDebug = '1').
-      if (typeof localStorage !== 'undefined' && localStorage.getItem('refineBoxDebug') === '1') {
-        ctx.save();
-        ctx.strokeStyle = '#00e5ff';
-        ctx.lineWidth = Math.max(2, c.width / 600);
-        ctx.strokeRect(box.x, box.y, box.w, box.h);
-        ctx.restore();
-      }
+    // Plate Recognizer fournit directement les 4 coins précis de la plaque
+    // (TL,TR,BR,BL, gère l'angle). On les projette sur le canvas de pose `c`
+    // (résolution native), avec un léger élargissement pour bien couvrir les
+    // bords, puis on pose le cache en perspective via drawPlateOverlay.
+    if (yolo.corners && logoImg) {
       try {
-        const full = ctx.getImageData(0, 0, c.width, c.height);
-        const refined = refinePlate(full, box);
-        console.log('[refinePlate]', photoFile.name, {
-          mode:      refined.mode,
-          tiltDeg:   +refined.metrics.tiltDeg.toFixed(2),
-          ratio:     +refined.metrics.ratio.toFixed(2),
-          fillRatio: +refined.metrics.fillRatio.toFixed(3),
-        });
-        let ptl, ptr, pbr, pbl;
-        if (refined.mode === 'quad' && refined.corners) {
-          const cr = refined.corners; // [HG,HD,BD,BG] px, rectangle pivoté élargi 8%
-          ptl = { x: cr[0][0], y: cr[0][1] }; ptr = { x: cr[1][0], y: cr[1][1] };
-          pbr = { x: cr[2][0], y: cr[2][1] }; pbl = { x: cr[3][0], y: cr[3][1] };
-        } else {
-          // Cache DROIT fiable (défaut) : couvre proprement la plaque.
-          const r = refined.rect || { cx: box.x + box.w / 2, cy: box.y + box.h / 2, w: box.w, h: box.h };
-          const hw = r.w / 2, hh = r.h / 2;
-          ptl = { x: r.cx - hw, y: r.cy - hh }; ptr = { x: r.cx + hw, y: r.cy - hh };
-          pbr = { x: r.cx + hw, y: r.cy + hh }; pbl = { x: r.cx - hw, y: r.cy + hh };
-        }
+        let pts = yolo.corners.map(p => ({ x: p.x * c.width, y: p.y * c.height }));
+        const cgx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+        const cgy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+        pts = pts.map(p => ({ x: cgx + (p.x - cgx) * 1.06, y: cgy + (p.y - cgy) * 1.06 }));
+        const [ptl, ptr, pbr, pbl] = pts;
         const toNorm = p => ({ x: p.x / c.width, y: p.y / c.height });
         savedCorners = { tl: toNorm(ptl), tr: toNorm(ptr), br: toNorm(pbr), bl: toNorm(pbl) };
-        drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, refined.mode);
-      } catch (e) { console.warn('[refinePlate] ignoré:', e.message); }
+        drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'plate');
+      } catch (e) { console.warn('[plate] pose ignorée:', e.message); }
     }
   }
-  const yoloBbox             = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
-  const yoloCorners          = yolo?.corners ?? null;       // = render_corners
-  const yoloDebug            = yolo?.debug   ?? null;
-  const yoloSource           = yolo?.source  ?? null;
-  // Render-geometry telemetry — qui pilote le cache plaque, et pourquoi.
-  const yoloRenderSource     = yolo?.render_source    ?? yolo?.source ?? null;
-  const yoloQuadSource       = yolo?.quad_source      ?? null;  // ex. "plate_edges:v=2_s=3:eps=0.04"
-  const yoloPromotionReason  = yolo?.promotion_reason ?? null;
-  const yoloRejectionReason  = yolo?.rejection_reason ?? null;
-  // Quad OpenCV historique (« chosen » de refine_corners) ET quad
-  // bbox_stable (filet axe-aligné) — exposés pour les overlays debug
-  // « rejected_opencv » (orange dashed) et « bbox_stable » (bleu dashed).
-  const yoloOpencvCorners    = yolo?.opencv_corners   ?? null;
-  const yoloBboxStable       = yolo?.bbox_stable      ?? null;
-  // Telemetry agrégée du gate (picks, rejection_reasons[], counts).
-  const yoloGateTelemetry    = yolo?.gate_telemetry   ?? null;
-  const yoloFrontPlateDetected  = yolo?.front_plate_detected ?? false;
-  const yoloFrontPlateTelemetry = yolo?.front_plate_telemetry ?? null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloDebug, yoloSource, yoloRenderSource, yoloQuadSource, yoloPromotionReason, yoloRejectionReason, yoloOpencvCorners, yoloBboxStable, yoloGateTelemetry, yoloFrontPlateDetected, yoloFrontPlateTelemetry, imgW: c.width, imgH: c.height };
+  // Télémétrie plaque — exposée pour l'overlay debug (?plateDebug) : bbox,
+  // coins finaux et source. Plus de pipeline parallèle (render_source,
+  // bbox_stable, opencv_corners…) : Plate Recognizer fournit un seul quad.
+  const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
+  const yoloCorners = yolo?.corners ?? null;
+  const yoloSource  = yolo ? 'platerecognizer' : null;
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloSource, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (

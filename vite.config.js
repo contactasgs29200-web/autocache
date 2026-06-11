@@ -6,12 +6,4 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@imgly/background-removal', '@huggingface/transformers', 'onnxruntime-web'],
   },
-  build: {
-    rollupOptions: {
-      input: {
-        main: 'index.html',
-        'refine-debug': 'refine-debug.html',
-      },
-    },
-  },
 })
