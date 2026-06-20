@@ -297,7 +297,7 @@ export default function LoadingGame({ gated = false }) {
         style={{
           marginTop: 14,
           background: "none", border: "none", cursor: "pointer",
-          fontFamily: "'JetBrains Mono', monospace",
+          fontFamily: "var(--font-apple)",
           fontSize: 11, color: "#888", letterSpacing: 1.5,
           textTransform: "uppercase", lineHeight: 1.6,
           userSelect: "none",
@@ -313,7 +313,7 @@ export default function LoadingGame({ gated = false }) {
     <div style={{
       width: ROAD_W, marginTop: 18,
       position: "relative",
-      fontFamily: "'JetBrains Mono', monospace",
+      fontFamily: "var(--font-apple)",
       userSelect: "none",
     }}>
       {/* Score + record */}
@@ -432,6 +432,6 @@ const kbdStyle = {
   padding: "1px 6px",
   fontSize: 11,
   color: "#ddd5c8",
-  fontFamily: "'JetBrains Mono', monospace",
+  fontFamily: "var(--font-apple)",
   margin: "0 2px",
 };

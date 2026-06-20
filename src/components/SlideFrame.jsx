@@ -91,7 +91,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
           flexDirection: "column",
           alignItems: "center",
           gap: isMobile ? 6 : 8,
-          fontFamily: "'Rajdhani', sans-serif",
+          fontFamily: "var(--font-apple)",
           pointerEvents: "none", // halo + clickable backdrop handled at Tutorial level
         }}
       >
@@ -106,7 +106,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
           {!isMobile && (
             <div style={{
               fontSize: 11, color: "#dddddd",
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: "var(--font-apple)",
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
               maxWidth: "30%",
             }}>{filename ?? ""}</div>
@@ -137,7 +137,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
                   style={{
                     background: v.bg, color: v.color, border: v.border,
                     padding: isMobile ? "6px 10px" : "7px 14px",
-                    fontFamily: "'Rajdhani', sans-serif",
+                    fontFamily: "var(--font-apple)",
                     fontSize: isMobile ? 11 : 12,
                     fontWeight: 700, letterSpacing: 1, textTransform: "uppercase",
                     borderRadius: 2, lineHeight: 1,
@@ -220,7 +220,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
             <span style={{
               fontSize: 11, color: "#dddddd",
               letterSpacing: 1.5, textTransform: "uppercase",
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: "var(--font-apple)",
               userSelect: "none", whiteSpace: "nowrap",
             }}>{label}</span>
             <div style={{ flex: 1, position: "relative", height: 14, display: "flex", alignItems: "center" }}>
@@ -236,7 +236,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
             </div>
             <span style={{
               fontSize: 11, color: "#f26522",
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: "var(--font-apple)",
               minWidth: 34, textAlign: "right",
             }}>{value}</span>
           </div>
@@ -247,7 +247,7 @@ const SlideFrame = forwardRef(function SlideFrame({ frame, image, isMobile = fal
           <div style={{
             marginTop: 4,
             fontSize: 10, color: "#dddddd",
-            fontFamily: "'JetBrains Mono', monospace",
+            fontFamily: "var(--font-apple)",
             textAlign: "center",
             maxWidth: "min(900px, 95%)",
           }}>{footer}</div>

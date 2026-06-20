@@ -88,7 +88,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
           bottom: isMobile ? 16 : 22,
           right:  isMobile ? 16 : 22,
           zIndex: 1500,
-          fontFamily: "'Rajdhani', sans-serif",
+          fontFamily: "var(--font-apple)",
         }}
       >
         {/* Popover menu */}
@@ -113,7 +113,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                 style={{
                   display: "flex", alignItems: "center", gap: 10, width: "100%",
                   padding: "11px 16px", background: "transparent", border: "none",
-                  color: "var(--c-ddd)", cursor: "pointer", fontFamily: "'Rajdhani',sans-serif",
+                  color: "var(--c-ddd)", cursor: "pointer", fontFamily: "var(--font-apple)",
                   fontSize: 13, fontWeight: 600, letterSpacing: 1, textAlign: "left",
                   borderBottom: i < items.length - 1 ? "1px solid var(--c-1a1a1a)" : "none",
                   transition: "background 0.12s",
@@ -145,7 +145,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
             cursor: "pointer",
             display: "flex", alignItems: "center", justifyContent: "center",
             boxShadow: "0 4px 16px rgba(242,101,34,0.45), 0 2px 6px rgba(0,0,0,0.6)",
-            fontFamily: "'Rajdhani', sans-serif",
+            fontFamily: "var(--font-apple)",
             lineHeight: 1,
             padding: 0,
             transition: "transform 0.15s ease, box-shadow 0.15s ease",
@@ -177,7 +177,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
               width: "100%", maxWidth: 640,
               maxHeight: "90vh",
               display: "flex", flexDirection: "column",
-              fontFamily: "'Rajdhani', sans-serif",
+              fontFamily: "var(--font-apple)",
             }}
           >
             {/* Header */}
@@ -189,7 +189,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
               }}
             >
               <div>
-                <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
+                <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "var(--font-apple)", marginBottom: 4 }}>
                   FAQ
                 </div>
                 <div style={{ fontSize: 14, color: "var(--c-ddd)" }}>Questions fréquentes</div>
@@ -217,7 +217,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                         padding: "16px 24px",
                         background: "transparent", border: "none",
                         textAlign: "left", cursor: "pointer",
-                        fontFamily: "'Rajdhani', sans-serif",
+                        fontFamily: "var(--font-apple)",
                         transition: "background 0.12s",
                       }}
                       onMouseEnter={e => e.currentTarget.style.background = "var(--c-161616)"}
@@ -231,7 +231,7 @@ export default function HelpWidget({ onOpenTutorial, onOpenContact, hidden = fal
                         flexShrink: 0,
                         transform: open ? "rotate(45deg)" : "rotate(0)",
                         transition: "transform 0.2s ease",
-                        fontFamily: "'JetBrains Mono', monospace",
+                        fontFamily: "var(--font-apple)",
                       }}>
                         +
                       </span>

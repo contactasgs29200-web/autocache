@@ -486,7 +486,7 @@ export default function Tutorial({ onClose, isMobile }) {
           border: "1px solid var(--c-2a2a2a)",
           borderRadius: 8,
           boxShadow: isLight ? "0 16px 60px rgba(0,0,0,0.22)" : "0 16px 60px rgba(0,0,0,0.8)",
-          fontFamily: "'Rajdhani', sans-serif",
+          fontFamily: "var(--font-apple)",
           overflow: "hidden",
           opacity: animating ? 0 : 1,
           transition: "opacity 0.25s ease, top 0.35s cubic-bezier(0.4,0,0.2,1), left 0.35s cubic-bezier(0.4,0,0.2,1), bottom 0.35s cubic-bezier(0.4,0,0.2,1)",
@@ -524,7 +524,7 @@ export default function Tutorial({ onClose, isMobile }) {
         <div style={{ padding: "14px 20px 16px" }}>
           <p style={{
             fontSize: 14, color: "var(--c-ddd)", lineHeight: 1.7,
-            margin: 0, fontFamily: "'Rajdhani', sans-serif",
+            margin: 0, fontFamily: "var(--font-apple)",
           }}>
             {current.body}
           </p>
@@ -552,7 +552,7 @@ export default function Tutorial({ onClose, isMobile }) {
               <button onClick={prev} style={{
                 background: "transparent", border: "1px solid var(--c-2a2a2a)",
                 color: "var(--c-ddd)", padding: "6px 14px", cursor: "pointer",
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: "var(--font-apple)",
                 fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 3,
               }}>Précédent</button>
             )}
@@ -560,14 +560,14 @@ export default function Tutorial({ onClose, isMobile }) {
               <button onClick={skip} style={{
                 background: "transparent", border: "none", color: "var(--c-ddd)",
                 padding: "6px 10px", cursor: "pointer",
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: "var(--font-apple)",
                 fontSize: 11, letterSpacing: 1, textTransform: "uppercase",
               }}>Passer</button>
             )}
             <button onClick={next} style={{
               background: "#f26522", border: "none", color: "#090909",
               padding: "7px 18px", cursor: "pointer",
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: "var(--font-apple)",
               fontSize: 11, fontWeight: 700, letterSpacing: 1,
               textTransform: "uppercase", borderRadius: 3,
             }}>
@@ -580,7 +580,7 @@ export default function Tutorial({ onClose, isMobile }) {
         <div style={{
           position: "absolute", top: 18, right: 44,
           fontSize: 10, color: "var(--c-ddd)",
-          fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1,
+          fontFamily: "var(--font-apple)", letterSpacing: 1,
         }}>
           {step + 1}/{STEPS.length}
         </div>
