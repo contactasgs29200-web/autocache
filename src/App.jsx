@@ -2261,17 +2261,19 @@ function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
   });
 }
 
-// Appel bas niveau à /api/plate-corners (Fable 5 Vision).
-async function fablePlateAPI(b64DataUrl, mode) {
+// Appel bas niveau à /api/plate-corners (Claude Vision).
+// tier "best" force Fable 5 (escalade qualité) ; sinon modèle économique
+// (Haiku pour locate, Sonnet 5 pour refine) choisi côté serveur.
+async function fablePlateAPI(b64DataUrl, mode, tier) {
   const b64 = b64DataUrl.includes(',') ? b64DataUrl.split(',')[1] : b64DataUrl;
   const r = await fetch('/api/plate-corners', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ b64, mode }),
+    body: JSON.stringify({ b64, mode, ...(tier ? { tier } : {}) }),
   });
   if (!r.ok) {
     const body = await r.text().catch(() => '');
-    console.warn(`[plate-corners:${mode}] HTTP`, r.status, body.slice(0, 500));
+    console.warn(`[plate-corners:${mode}${tier ? ':' + tier : ''}] HTTP`, r.status, body.slice(0, 500));
     return null;
   }
   return r.json();
@@ -2300,9 +2302,15 @@ async function detectPlateFable(imageFile) {
     fc.width = Math.max(1, Math.round(W * fullScale));
     fc.height = Math.max(1, Math.round(H * fullScale));
     fc.getContext('2d').drawImage(img, 0, 0, fc.width, fc.height);
-    const loc = await fablePlateAPI(fc.toDataURL('image/jpeg', 0.85), 'locate');
+    const fullB64 = fc.toDataURL('image/jpeg', 0.85);
+    // Modèle éco d'abord (Haiku) ; si échec, escalade Fable 5 avant d'abandonner.
+    let loc = await fablePlateAPI(fullB64, 'locate');
+    if (!loc || !loc.found) {
+      console.log('[plate] locate éco sans résultat, escalade Fable 5');
+      loc = await fablePlateAPI(fullB64, 'locate', 'best');
+    }
     if (!loc) return null;
-    if (!loc.found) { console.log('Aucune plaque détectée (Fable 5)'); return null; }
+    if (!loc.found) { console.log('Aucune plaque détectée (Claude)'); return null; }
     const box = loc.box;
 
     // ── Crop zoomé autour de la bbox, avec une large marge ──
@@ -2326,25 +2334,34 @@ async function detectPlateFable(imageFile) {
     cctx.drawImage(img, cx1 * W, cy1 * H, cropW, cropH, 0, 0, cc.width, cc.height);
 
     // ── Passe 2 : les 4 coins exacts sur le crop ──
-    const ref = await fablePlateAPI(cc.toDataURL('image/jpeg', 0.92), 'refine');
-    if (!ref) return null;
-    if (!ref.found) { console.log('Plaque perdue au refine (Fable 5)'); return null; }
-
     // Reprojection crop (0–1) → image complète (0–1)
     const map = p => ({
       x: cx1 + Math.min(1, Math.max(0, p.x)) * (cx2 - cx1),
       y: cy1 + Math.min(1, Math.max(0, p.y)) * (cy2 - cy1),
     });
-    const corners = [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)];
-
     // Sanity check : le quad doit être une plaque plausible (plus large que
     // haut en pixels, aire ni nulle ni délirante).
-    const px = corners.map(p => p.x * W), py = corners.map(p => p.y * H);
-    const qw = (Math.hypot(px[1]-px[0], py[1]-py[0]) + Math.hypot(px[2]-px[3], py[2]-py[3])) / 2;
-    const qh = (Math.hypot(px[3]-px[0], py[3]-py[0]) + Math.hypot(px[2]-px[1], py[2]-py[1])) / 2;
-    if (qw < 4 || qh < 2 || qw / qh < 1.2 || qw / qh > 12) {
-      console.warn('[plate-corners] quad implausible (ratio', (qw/qh).toFixed(2), '), rejeté');
-      return null;
+    const plausible = (corners) => {
+      const px = corners.map(p => p.x * W), py = corners.map(p => p.y * H);
+      const qw = (Math.hypot(px[1]-px[0], py[1]-py[0]) + Math.hypot(px[2]-px[3], py[2]-py[3])) / 2;
+      const qh = (Math.hypot(px[3]-px[0], py[3]-py[0]) + Math.hypot(px[2]-px[1], py[2]-py[1])) / 2;
+      return qw >= 4 && qh >= 2 && qw / qh >= 1.2 && qw / qh <= 12;
+    };
+    const cropB64 = cc.toDataURL('image/jpeg', 0.92);
+
+    // Modèle éco d'abord (Sonnet 5) ; escalade Fable 5 si le résultat est
+    // absent ou implausible — la qualité max n'est payée que sur les photos
+    // difficiles.
+    let ref = await fablePlateAPI(cropB64, 'refine');
+    let corners = (ref && ref.found) ? [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)] : null;
+    if (!corners || !plausible(corners)) {
+      console.log('[plate] refine éco rejeté' + (corners ? ' (quad implausible)' : '') + ', escalade Fable 5');
+      ref = await fablePlateAPI(cropB64, 'refine', 'best');
+      corners = (ref && ref.found) ? [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)] : null;
+      if (!corners || !plausible(corners)) {
+        console.warn('[plate-corners] refine échoué même en escalade, rejeté');
+        return null;
+      }
     }
 
     const xs = corners.map(p => p.x), ys = corners.map(p => p.y);

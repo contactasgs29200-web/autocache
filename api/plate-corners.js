@@ -1,13 +1,22 @@
 // /api/plate-corners.js
-// Détection interne des coins de la plaque via Claude (Fable 5) Vision.
+// Détection interne des coins de la plaque via Claude Vision.
 // Fonctionne en DEUX PASSES pilotées par le frontend :
 //   mode "locate" : image entière → bbox approximative de la plaque.
 //   mode "refine" : crop zoomé sur la plaque → les 4 coins exacts (quadrilatère
 //                   en perspective, pas un rectangle).
-// La précision au pixel n'est possible que sur le crop — sur l'image entière la
-// plaque est trop petite pour viser les coins exactement.
+//
+// Stratégie de coût : chaque passe utilise par défaut le modèle le moins cher
+// capable de la tâche (locate = trivial → Haiku ; refine = précision → Sonnet 5).
+// Le frontend peut demander tier "best" (Fable 5) en escalade quand le résultat
+// économique échoue au contrôle de plausibilité — la qualité max n'est donc
+// payée que sur les photos difficiles.
 
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
+
+const MODELS = {
+  locate: { default: 'claude-haiku-4-5', best: 'claude-fable-5' },
+  refine: { default: 'claude-sonnet-5', best: 'claude-fable-5' },
+};
 
 const LOCATE_PROMPT = `Regarde cette photo de véhicule. Trouve la PLAQUE D'IMMATRICULATION : la plaque portant des caractères alphanumériques (ex: "AB-123-CD"), sur fond blanc ou jaune, fixée au pare-choc avant ou arrière du véhicule.
 
@@ -63,54 +72,57 @@ function extractJSON(txt) {
   return null;
 }
 
-async function askFable(apiKey, b64, prompt) {
+async function askClaude(apiKey, model, b64, prompt) {
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+  };
+  const body = {
+    model,
+    // Sonnet 5 / Fable 5 : le thinking (adaptatif, actif par défaut) compte
+    // dans max_tokens — un budget trop petit part entièrement en thinking et
+    // le JSON final n'est jamais écrit. Haiku ne « pense » pas mais le budget
+    // large ne coûte rien (on ne paie que les tokens réellement générés).
+    max_tokens: 8000,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+        { type: 'text', text: prompt },
+      ],
+    }],
+  };
+  if (model === 'claude-fable-5') {
+    // Repli serveur : si les classifieurs Fable 5 refusent la requête,
+    // l'API relance automatiquement sur Opus 4.8 dans le même appel.
+    headers['anthropic-beta'] = 'server-side-fallback-2026-06-01';
+    body.fallbacks = [{ model: 'claude-opus-4-8' }];
+  }
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      // Repli serveur : si les classifieurs Fable 5 refusent la requête,
-      // l'API relance automatiquement sur Opus 4.8 dans le même appel.
-      'anthropic-beta': 'server-side-fallback-2026-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-fable-5',
-      // Fable 5 : le thinking (toujours actif) compte dans max_tokens. Le
-      // prompt refine déclenche un long raisonnement perspective — avec un
-      // budget trop petit, tout part en thinking et le JSON final n'est
-      // jamais écrit (réponse sans bloc text).
-      max_tokens: 8000,
-      fallbacks: [{ model: 'claude-opus-4-8' }],
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-          { type: 'text', text: prompt },
-        ],
-      }],
-    }),
+    method: 'POST', headers, body: JSON.stringify(body),
   });
 
   const data = await response.json();
   if (!response.ok) {
-    console.error('plate-corners Anthropic error:', JSON.stringify(data).slice(0, 500));
+    console.error(`plate-corners [${model}] Anthropic error:`, JSON.stringify(data).slice(0, 500));
     return { error: { status: 500, body: { error: 'Anthropic error', details: data } } };
   }
   if (data.stop_reason === 'refusal') {
-    console.warn('plate-corners: refusal', JSON.stringify(data.stop_details || {}));
+    console.warn(`plate-corners [${model}]: refusal`, JSON.stringify(data.stop_details || {}));
     return { refused: true };
   }
-  // Fable 5 renvoie un bloc "thinking" avant le bloc "text" : ne jamais
-  // lire content[0] directement, chercher le premier bloc texte.
+  // Les modèles avec thinking renvoient un bloc "thinking" avant le bloc
+  // "text" : ne jamais lire content[0] directement, chercher le bloc texte.
   const text = data.content?.find(b => b.type === 'text')?.text ?? '';
-  console.log('plate-corners stop:', data.stop_reason, 'raw:', text.slice(0, 300));
+  console.log(`plate-corners [${model}] stop:`, data.stop_reason, 'raw:', text.slice(0, 300));
   const raw = extractJSON(text);
-  if (!raw) return { error: { status: 500, body: { error: 'No JSON in response', stop_reason: data.stop_reason, text } } };
+  if (!raw) return { error: { status: 500, body: { error: 'No JSON in response', model, stop_reason: data.stop_reason, text } } };
   try {
     return { json: JSON.parse(raw) };
   } catch (e) {
-    return { error: { status: 500, body: { error: 'Bad JSON in response', text } } };
+    return { error: { status: 500, body: { error: 'Bad JSON in response', model, text } } };
   }
 }
 
@@ -120,39 +132,42 @@ const okPoint = p => p && typeof p.x === 'number' && typeof p.y === 'number'
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { b64, mode } = req.body || {};
+  const { b64, mode, tier } = req.body || {};
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
+  const passe = mode === 'locate' ? 'locate' : 'refine';
+  const model = MODELS[passe][tier === 'best' ? 'best' : 'default'];
+
   try {
-    if (mode === 'locate') {
-      const r = await askFable(apiKey, b64, LOCATE_PROMPT);
+    if (passe === 'locate') {
+      const r = await askClaude(apiKey, model, b64, LOCATE_PROMPT);
       if (r.error)   return res.status(r.error.status).json(r.error.body);
       if (r.refused || !r.json.found) return res.status(200).json({ found: false });
       const box = r.json.box;
       if (!box || ![box.x1, box.y1, box.x2, box.y2].every(v => typeof v === 'number')
           || box.x2 <= box.x1 || box.y2 <= box.y1) {
-        return res.status(500).json({ error: 'Invalid box', box });
+        return res.status(500).json({ error: 'Invalid box', model, box });
       }
-      console.log('plate-corners locate OK:', JSON.stringify(box));
-      return res.status(200).json({ found: true, box });
+      console.log(`plate-corners locate [${model}] OK:`, JSON.stringify(box));
+      return res.status(200).json({ found: true, box, model });
     }
 
-    // mode "refine" (défaut) : 4 coins précis sur le crop
-    const r = await askFable(apiKey, b64, REFINE_PROMPT);
+    // mode "refine" : 4 coins précis sur le crop
+    const r = await askClaude(apiKey, model, b64, REFINE_PROMPT);
     if (r.error)   return res.status(r.error.status).json(r.error.body);
     if (r.refused || !r.json.found) return res.status(200).json({ found: false });
 
     const c = r.json;
     if (c.analysis) console.log('analysis:', c.analysis);
     if (!okPoint(c.tl) || !okPoint(c.tr) || !okPoint(c.br) || !okPoint(c.bl)) {
-      return res.status(500).json({ error: 'Invalid corners', c });
+      return res.status(500).json({ error: 'Invalid corners', model, c });
     }
 
-    console.log('plate-corners refine OK:', JSON.stringify({ tl: c.tl, tr: c.tr, br: c.br, bl: c.bl }));
-    return res.status(200).json({ found: true, tl: c.tl, tr: c.tr, br: c.br, bl: c.bl });
+    console.log(`plate-corners refine [${model}] OK:`, JSON.stringify({ tl: c.tl, tr: c.tr, br: c.br, bl: c.bl }));
+    return res.status(200).json({ found: true, tl: c.tl, tr: c.tr, br: c.br, bl: c.bl, model });
 
   } catch (e) {
     console.error('plate-corners error:', e);
