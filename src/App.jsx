@@ -2261,32 +2261,95 @@ function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
   });
 }
 
-// Détection plaque — Claude (Fable 5) Vision en interne : raisonne sur la
-// perspective et renvoie un vrai quadrilatère (trapèze) qui épouse la plaque
-// même quand la voiture a de l'angle, au lieu d'un rectangle strict comme
-// pouvait le donner l'ancien chemin (bbox-like) de Plate Recognizer.
+// Appel bas niveau à /api/plate-corners (Fable 5 Vision).
+async function fablePlateAPI(b64DataUrl, mode) {
+  const b64 = b64DataUrl.includes(',') ? b64DataUrl.split(',')[1] : b64DataUrl;
+  const r = await fetch('/api/plate-corners', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ b64, mode }),
+  });
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    console.warn(`[plate-corners:${mode}] HTTP`, r.status, body.slice(0, 500));
+    return null;
+  }
+  return r.json();
+}
+
+// Détection plaque — Claude (Fable 5) Vision en interne, en DEUX PASSES.
+// Sur l'image entière, la plaque est trop petite (~3% de l'image) pour que le
+// modèle place les coins au pixel près : les coordonnées dérivent (cache posé
+// à côté / trop grand). On demande donc d'abord une bbox grossière sur
+// l'image entière (passe "locate"), puis on recadre/zoome sur cette zone et
+// on redemande les 4 coins exacts sur le crop (passe "refine"), où la plaque
+// occupe l'essentiel de l'image. Les coins du crop sont ensuite reprojetés
+// dans le repère de la photo complète.
 // Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
 // normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
 async function detectPlateFable(imageFile) {
   try {
-    const { base64 } = await downscaledImageBase64(imageFile, 1600, 0.85);
-    const b64 = base64.includes(',') ? base64.split(',')[1] : base64;
-    const r = await fetch('/api/plate-corners', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ b64 }),
+    const url = URL.createObjectURL(imageFile);
+    const img = await loadImg(url);
+    URL.revokeObjectURL(url);
+    const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+
+    // ── Passe 1 : localisation grossière sur l'image entière (downscalée) ──
+    const fullScale = Math.min(1, 1800 / Math.max(W, H));
+    const fc = document.createElement('canvas');
+    fc.width = Math.max(1, Math.round(W * fullScale));
+    fc.height = Math.max(1, Math.round(H * fullScale));
+    fc.getContext('2d').drawImage(img, 0, 0, fc.width, fc.height);
+    const loc = await fablePlateAPI(fc.toDataURL('image/jpeg', 0.85), 'locate');
+    if (!loc) return null;
+    if (!loc.found) { console.log('Aucune plaque détectée (Fable 5)'); return null; }
+    const box = loc.box;
+
+    // ── Crop zoomé autour de la bbox, avec une large marge ──
+    // Marge généreuse : la bbox "locate" est approximative, il faut que la
+    // plaque entière soit dans le crop même si la bbox est décalée.
+    const bw = box.x2 - box.x1, bh = box.y2 - box.y1;
+    const mx = Math.max(bw * 0.7, 0.015), my = Math.max(bh * 1.0, 0.015);
+    const cx1 = Math.max(0, box.x1 - mx), cy1 = Math.max(0, box.y1 - my);
+    const cx2 = Math.min(1, box.x2 + mx), cy2 = Math.min(1, box.y2 + my);
+    const cropW = Math.round((cx2 - cx1) * W), cropH = Math.round((cy2 - cy1) * H);
+    if (cropW < 8 || cropH < 8) { console.warn('[plate-corners] bbox locate trop petite'); return null; }
+
+    // Upscale du crop pour que le modèle voie la plaque en grand (~1100px).
+    const cropScale = Math.min(4, Math.max(1, 1100 / Math.max(cropW, cropH)));
+    const cc = document.createElement('canvas');
+    cc.width = Math.round(cropW * cropScale);
+    cc.height = Math.round(cropH * cropScale);
+    const cctx = cc.getContext('2d');
+    cctx.imageSmoothingEnabled = true;
+    cctx.imageSmoothingQuality = 'high';
+    cctx.drawImage(img, cx1 * W, cy1 * H, cropW, cropH, 0, 0, cc.width, cc.height);
+
+    // ── Passe 2 : les 4 coins exacts sur le crop ──
+    const ref = await fablePlateAPI(cc.toDataURL('image/jpeg', 0.92), 'refine');
+    if (!ref) return null;
+    if (!ref.found) { console.log('Plaque perdue au refine (Fable 5)'); return null; }
+
+    // Reprojection crop (0–1) → image complète (0–1)
+    const map = p => ({
+      x: cx1 + Math.min(1, Math.max(0, p.x)) * (cx2 - cx1),
+      y: cy1 + Math.min(1, Math.max(0, p.y)) * (cy2 - cy1),
     });
-    if (!r.ok) {
-      const body = await r.text().catch(() => '');
-      console.warn('[plate-corners] HTTP', r.status, body.slice(0, 500));
+    const corners = [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)];
+
+    // Sanity check : le quad doit être une plaque plausible (plus large que
+    // haut en pixels, aire ni nulle ni délirante).
+    const px = corners.map(p => p.x * W), py = corners.map(p => p.y * H);
+    const qw = (Math.hypot(px[1]-px[0], py[1]-py[0]) + Math.hypot(px[2]-px[3], py[2]-py[3])) / 2;
+    const qh = (Math.hypot(px[3]-px[0], py[3]-py[0]) + Math.hypot(px[2]-px[1], py[2]-py[1])) / 2;
+    if (qw < 4 || qh < 2 || qw / qh < 1.2 || qw / qh > 12) {
+      console.warn('[plate-corners] quad implausible (ratio', (qw/qh).toFixed(2), '), rejeté');
       return null;
     }
-    const d = await r.json();
-    if (!d.found) { console.log('Aucune plaque détectée (Fable 5)'); return null; }
-    const corners = [d.tl, d.tr, d.br, d.bl];
+
     const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
     const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
-    console.log(`Plaque détectée (Fable 5): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
+    console.log(`Plaque détectée (Fable 5 2-passes): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
     return { found: true, conf: 1, bbox, corners, source: 'fable' };
   } catch (e) {
     console.error('[plate-corners] erreur:', e.message);
