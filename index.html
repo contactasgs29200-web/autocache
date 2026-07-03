@@ -2,9 +2,19 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- maximum-scale=1 empêche le zoom automatique d'iOS Safari au focus des champs texte
+         (le pincement manuel reste possible, Safari l'autorise toujours pour l'accessibilité) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
     <title>AutoCache Pro</title>
+    <meta name="description" content="Cache plaque automatique et showroom virtuel pour vos annonces automobiles." />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Cpolygon points='11,1 21,6 21,16 11,21 1,16 1,6' fill='%23f26522'/%3E%3Cpolygon points='11,5 17,8 17,14 11,17 5,14 5,8' fill='%23090909'/%3E%3C/svg%3E" />
+    <!-- ── PWA : installation sur écran d'accueil (Android / iOS) ── -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#f26522" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="AutoCache" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@700&family=Cormorant+Garamond:wght@600&family=Bebas+Neue&family=Montserrat:wght@700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
@@ -35,6 +45,8 @@
         --c-666:#726a5b; --c-555:#797063; --c-4a4a4a:#7c7363; --c-444:#928a7a;
       }
       html,body{ background:var(--c-1c1c1c); }
+      /* Aucun débordement horizontal : évite que la page paraisse « zoomée » sur mobile */
+      html,body{ max-width:100%; overflow-x:hidden; }
     </style>
     <script>
       /* Applique le thème enregistré avant le premier rendu (évite un flash de couleur). Mode jour par défaut. */
