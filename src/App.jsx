@@ -2261,10 +2261,40 @@ function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
   });
 }
 
-// Détection plaque via Plate Recognizer Blur (coins précis, gère l'angle).
+// Détection plaque — Claude (Fable 5) Vision en interne : raisonne sur la
+// perspective et renvoie un vrai quadrilatère (trapèze) qui épouse la plaque
+// même quand la voiture a de l'angle, au lieu d'un rectangle strict comme
+// pouvait le donner l'ancien chemin (bbox-like) de Plate Recognizer.
 // Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
 // normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
-async function detectPlate(imageFile, regions = 'fr') {
+async function detectPlateFable(imageFile) {
+  try {
+    const { base64 } = await downscaledImageBase64(imageFile, 1600, 0.85);
+    const b64 = base64.includes(',') ? base64.split(',')[1] : base64;
+    const r = await fetch('/api/plate-corners', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ b64 }),
+    });
+    if (!r.ok) { console.warn('[plate-corners] HTTP', r.status); return null; }
+    const d = await r.json();
+    if (!d.found) { console.log('Aucune plaque détectée (Fable 5)'); return null; }
+    const corners = [d.tl, d.tr, d.br, d.bl];
+    const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
+    const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+    console.log(`Plaque détectée (Fable 5): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
+    return { found: true, conf: 1, bbox, corners, source: 'fable' };
+  } catch (e) {
+    console.error('[plate-corners] erreur:', e.message);
+    return null;
+  }
+}
+
+// Détection plaque via Plate Recognizer Blur — filet de sécurité si Fable 5
+// échoue (erreur réseau/API), pas utilisé en chemin normal.
+// Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
+// normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
+async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
   try {
     const { base64, w, h } = await downscaledImageBase64(imageFile, 1600, 0.85);
     const r = await fetch('/api/detect-plates', {
@@ -2282,11 +2312,18 @@ async function detectPlate(imageFile, regions = 'fr') {
     const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
     const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
     console.log(`Plaque détectée (Plate Recognizer): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
-    return { found: true, conf: 1, bbox, corners };
+    return { found: true, conf: 1, bbox, corners, source: 'platerecognizer' };
   } catch (e) {
     console.error('[detect-plates] erreur:', e.message);
     return null;
   }
+}
+
+async function detectPlate(imageFile, regions = 'fr') {
+  const fable = await detectPlateFable(imageFile);
+  if (fable) return fable;
+  console.warn('[plate] Fable 5 indisponible, repli sur Plate Recognizer');
+  return detectPlatePlateRecognizer(imageFile, regions);
 }
 
 // ── Vehicle detection + main vehicle selection ──
@@ -2824,7 +2861,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // bbox_stable, opencv_corners…) : Plate Recognizer fournit un seul quad.
   const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
   const yoloCorners = yolo?.corners ?? null;
-  const yoloSource  = yolo ? 'platerecognizer' : null;
+  const yoloSource  = yolo ? (yolo.source || 'platerecognizer') : null;
   return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloSource, imgW: c.width, imgH: c.height };
 }
 
