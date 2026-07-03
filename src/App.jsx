@@ -53,8 +53,18 @@ function useInstallPrompt() {
   return { canInstall: !!deferredPrompt, isIOS, installed, promptInstall };
 }
 
-// Modal d'instructions pour iOS (Safari ne propose pas d'invite d'installation automatique)
-function IOSInstallModal({ onClose }) {
+// Modal d'instructions d'installation manuelle : Safari iOS ne propose jamais
+// d'invite automatique, et certains navigateurs Android non plus.
+function InstallHelpModal({ onClose, ios }) {
+  const steps = ios ? [
+    ["📤", <>1. Appuyez sur le bouton <b>Partager</b> de Safari (en bas de l'écran).</>],
+    ["➕", <>2. Choisissez <b>Sur l'écran d'accueil</b>.</>],
+    ["✓",  <>3. Confirmez avec <b>Ajouter</b>.</>],
+  ] : [
+    ["⋮",  <>1. Ouvrez le menu du navigateur (en haut à droite).</>],
+    ["➕", <>2. Choisissez <b>Installer l'application</b> ou <b>Ajouter à l'écran d'accueil</b>.</>],
+    ["✓",  <>3. Confirmez avec <b>Installer</b>.</>],
+  ];
   return (
     <div onClick={onClose}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -65,18 +75,12 @@ function IOSInstallModal({ onClose }) {
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
         <div style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14, fontSize: 13, color: "var(--c-ddd5c8)", lineHeight: 1.6 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 20, width: 26, textAlign: "center" }}>📤</span>
-            <span>1. Appuyez sur le bouton <b>Partager</b> de Safari (en bas de l'écran).</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 20, width: 26, textAlign: "center" }}>➕</span>
-            <span>2. Choisissez <b>Sur l'écran d'accueil</b>.</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 20, width: 26, textAlign: "center" }}>✓</span>
-            <span>3. Confirmez avec <b>Ajouter</b>.</span>
-          </div>
+          {steps.map(([icon, text], i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 20, width: 26, textAlign: "center" }}>{icon}</span>
+              <span>{text}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -3022,8 +3026,8 @@ function AuthScreen({ onAuth }) {
   const [success, setSuccess] = useState("");
   const isMobile = useIsMobile();
   const { canInstall, isIOS, installed, promptInstall } = useInstallPrompt();
-  const [showIOSInstall, setShowIOSInstall] = useState(false);
-  const showInstallCTA = isMobile && !installed && (canInstall || isIOS);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const showInstallCTA = isMobile && !installed;
 
   const submit = async () => {
     setError(""); setSuccess(""); setLoading(true);
@@ -3073,7 +3077,7 @@ function AuthScreen({ onAuth }) {
         </div>
         {showInstallCTA && (
           <button
-            onClick={async () => { if (canInstall) { await promptInstall(); } else { setShowIOSInstall(true); } }}
+            onClick={async () => { if (canInstall) { await promptInstall(); } else { setShowInstallHelp(true); } }}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%",
               background: "transparent", border: "1px solid #f26522", color: "#f26522", borderRadius: 4,
@@ -3188,7 +3192,7 @@ function AuthScreen({ onAuth }) {
           <a href="/politique-confidentialite.html" target="_blank" style={{ color: "var(--c-4a4a4a)", textDecoration: "none" }}>Politique de confidentialité</a>
         </div>
       </div>
-      {showIOSInstall && <IOSInstallModal onClose={() => setShowIOSInstall(false)} />}
+      {showInstallHelp && <InstallHelpModal ios={isIOS} onClose={() => setShowInstallHelp(false)} />}
     </div>
   );
 }
@@ -3274,8 +3278,10 @@ export default function AutoCache() {
   const [promoMsg, setPromoMsg] = useState("");
   const isMobile = useIsMobile();
   const { canInstall, isIOS, installed: appInstalled, promptInstall } = useInstallPrompt();
-  const [showIOSInstall, setShowIOSInstall] = useState(false);
-  const showInstallMenuItem = !appInstalled && (canInstall || isIOS);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
+  // Sur mobile le raccourci est toujours proposé (instructions manuelles en secours) ;
+  // sur desktop uniquement quand le navigateur sait déclencher l'invite native.
+  const showInstallMenuItem = !appInstalled && (canInstall || isIOS || isMobile);
   const TRIAL_LIMIT = 30;
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
@@ -4964,15 +4970,16 @@ export default function AutoCache() {
         .ac-spinner{animation:ac-spin 0.7s linear infinite;-webkit-animation:ac-spin 0.7s linear infinite;}
       `}</style>
       <div style={{ fontFamily: "var(--font-apple)", background: "var(--c-1c1c1c)", minHeight: "100vh", color: "var(--c-e0dbd4)", overflowX: "hidden", maxWidth: "100vw" }}>
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: isMobile ? "0 12px" : "0 28px", height: 56, borderBottom: "1px solid var(--c-1e1e1e)", position: "sticky", top: 0, background: "var(--c-1c1c1c)", zIndex: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <svg width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
-            <span style={{ fontSize: isMobile ? 16 : 20, fontWeight: 700, letterSpacing: isMobile ? 2 : 4, textTransform: "uppercase" }}>AutoCache</span>
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: isMobile ? 6 : 12, padding: isMobile ? "0 10px" : "0 28px", height: 56, borderBottom: "1px solid var(--c-1e1e1e)", position: "sticky", top: 0, background: "var(--c-1c1c1c)", zIndex: 10 }}>
+          {/* minWidth:0 + ellipsis : le titre se tronque au besoin, le menu à droite reste toujours accessible */}
+          <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 7 : 10, minWidth: 0, flexShrink: 1 }}>
+            <svg width="22" height="22" viewBox="0 0 22 22" style={{ flexShrink: 0 }}><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
+            <span style={{ fontSize: isMobile ? 14 : 20, fontWeight: 700, letterSpacing: isMobile ? 1 : 4, textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>AutoCache</span>
             {!isMobile && <span style={{ fontSize: 10, color: "#f26522", letterSpacing: 2, fontFamily: "var(--font-apple)" }}>PRO</span>}
           </div>
-          <nav style={{ display: "flex", alignItems: "center", gap: isMobile ? 4 : 8 }}>
+          <nav style={{ display: "flex", alignItems: "center", gap: isMobile ? 3 : 8, flexShrink: 0 }}>
             {[["setup", isMobile ? "Config" : "Configuration"], ["results", `Résultats${results.length ? ` · ${results.length}` : ""}`]].map(([t, label]) => (
-              <button key={t} onClick={() => setTab(t)} {...(t === "results" ? { "data-tutorial": "results-tab" } : {})} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "var(--c-777)", border: "none", padding: isMobile ? "7px 10px" : "7px 18px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: isMobile ? 12 : 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", minHeight: "unset" }}>{label}</button>
+              <button key={t} onClick={() => setTab(t)} {...(t === "results" ? { "data-tutorial": "results-tab" } : {})} style={{ background: tab === t ? "#f26522" : "transparent", color: tab === t ? "#090909" : "var(--c-777)", border: "none", padding: isMobile ? "6px 7px" : "7px 18px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: isMobile ? 11 : 13, fontWeight: 700, letterSpacing: isMobile ? 1 : 2, textTransform: "uppercase", minHeight: "unset", whiteSpace: "nowrap" }}>{label}</button>
             ))}
             {!isMobile && <div style={{ width: 1, height: 20, background: "var(--c-252525)", margin: "0 4px" }} />}
             {/* ── Compteur crédits + popup abonnement ── */}
@@ -4989,10 +4996,10 @@ export default function AutoCache() {
                     setShowCreditPopup(next);
                     if (next && userPlan !== 'trial') fetchSubInfo();
                   }}
-                    style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "4px 6px" : "4px 10px", borderRadius: 2, border: `1px solid ${isExpired ? "#c0392b" : showCreditPopup ? "#f26522" : "var(--c-2a2a2a)"}`, cursor: "pointer", background: isExpired ? "rgba(192,57,43,0.08)" : showCreditPopup ? "rgba(242,101,34,0.06)" : "transparent", transition: "all 0.15s" }}
+                    style={{ display: "flex", alignItems: "center", gap: 5, padding: isMobile ? "4px 5px" : "4px 10px", borderRadius: 2, border: `1px solid ${isExpired ? "#c0392b" : showCreditPopup ? "#f26522" : "var(--c-2a2a2a)"}`, cursor: "pointer", background: isExpired ? "rgba(192,57,43,0.08)" : showCreditPopup ? "rgba(242,101,34,0.06)" : "transparent", transition: "all 0.15s" }}
                     title="Cliquez pour voir les détails"
                   >
-                    <span style={{ fontSize: 10, fontFamily: "var(--font-apple)", color: isExpired ? "#c0392b" : isLow ? "#f26522" : "var(--c-666)", letterSpacing: 1 }}>
+                    <span style={{ fontSize: 10, fontFamily: "var(--font-apple)", color: isExpired ? "#c0392b" : isLow ? "#f26522" : "var(--c-666)", letterSpacing: isMobile ? 0.5 : 1, whiteSpace: "nowrap" }}>
                       {isExpired
                         ? (isMobile ? "ÉPUISÉ" : `${PLAN_LABEL} ÉPUISÉ`)
                         : (isMobile ? `${left}/${PLAN_LIMIT}` : `${PLAN_LABEL} · ${left}/${PLAN_LIMIT}`)}
@@ -5085,7 +5092,7 @@ export default function AutoCache() {
             {/* ── Bouton Settings + Menu déroulant ── */}
             <div ref={settingsRef} style={{ position: "relative" }}>
               <button onClick={() => setSettingsOpen(o => !o)}
-                style={{ background: settingsOpen ? "var(--c-1e1e1e)" : "transparent", border: `1px solid ${settingsOpen ? "#f26522" : "var(--c-282828)"}`, color: settingsOpen ? "#f26522" : "var(--c-777)", padding: "5px 10px", cursor: "pointer", borderRadius: 2, fontFamily: "var(--font-apple)", fontSize: 14, display: "flex", alignItems: "center", gap: 5, minHeight: "unset" }}
+                style={{ background: settingsOpen ? "var(--c-1e1e1e)" : "transparent", border: `1px solid ${settingsOpen ? "#f26522" : "var(--c-282828)"}`, color: settingsOpen ? "#f26522" : "var(--c-777)", padding: isMobile ? "5px 7px" : "5px 10px", cursor: "pointer", borderRadius: 2, fontFamily: "var(--font-apple)", fontSize: 14, display: "flex", alignItems: "center", gap: 5, minHeight: "unset", flexShrink: 0 }}
                 title="Paramètres"
               >
                 <span style={{ fontSize: 15 }}>⚙</span>
@@ -5134,7 +5141,7 @@ export default function AutoCache() {
                     { icon: "game", label: "Mini-jeu", action: () => { setSettingsOpen(false); setShowMiniGame(true); } },
                     ...(showInstallMenuItem ? [{
                       icon: "install", label: "Installer l'application",
-                      action: async () => { setSettingsOpen(false); if (canInstall) { await promptInstall(); } else { setShowIOSInstall(true); } },
+                      action: async () => { setSettingsOpen(false); if (canInstall) { await promptInstall(); } else { setShowInstallHelp(true); } },
                     }] : []),
                   ].map((item, i) => (
                     <button key={i} onClick={item.action}
@@ -6856,7 +6863,7 @@ export default function AutoCache() {
         </div>
       )}
 
-      {showIOSInstall && <IOSInstallModal onClose={() => setShowIOSInstall(false)} />}
+      {showInstallHelp && <InstallHelpModal ios={isIOS} onClose={() => setShowInstallHelp(false)} />}
 
       {/* ── Modal Nous Contacter ── */}
       {showContactModal && (
