@@ -76,7 +76,11 @@ async function askFable(apiKey, b64, prompt) {
     },
     body: JSON.stringify({
       model: 'claude-fable-5',
-      max_tokens: 800,
+      // Fable 5 : le thinking (toujours actif) compte dans max_tokens. Le
+      // prompt refine déclenche un long raisonnement perspective — avec un
+      // budget trop petit, tout part en thinking et le JSON final n'est
+      // jamais écrit (réponse sans bloc text).
+      max_tokens: 8000,
       fallbacks: [{ model: 'claude-opus-4-8' }],
       messages: [{
         role: 'user',
@@ -100,9 +104,9 @@ async function askFable(apiKey, b64, prompt) {
   // Fable 5 renvoie un bloc "thinking" avant le bloc "text" : ne jamais
   // lire content[0] directement, chercher le premier bloc texte.
   const text = data.content?.find(b => b.type === 'text')?.text ?? '';
-  console.log('plate-corners raw:', text.slice(0, 300));
+  console.log('plate-corners stop:', data.stop_reason, 'raw:', text.slice(0, 300));
   const raw = extractJSON(text);
-  if (!raw) return { error: { status: 500, body: { error: 'No JSON in response', text } } };
+  if (!raw) return { error: { status: 500, body: { error: 'No JSON in response', stop_reason: data.stop_reason, text } } };
   try {
     return { json: JSON.parse(raw) };
   } catch (e) {
