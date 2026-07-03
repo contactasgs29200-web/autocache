@@ -18,6 +18,71 @@ function useIsMobile() {
   return isMobile;
 }
 
+// ── Installation de l'app (PWA) sur l'écran d'accueil ────────────────────
+function isStandaloneDisplay() {
+  return typeof window !== "undefined" && (
+    window.matchMedia?.("(display-mode: standalone)")?.matches ||
+    window.navigator.standalone === true // Safari iOS
+  );
+}
+function isIOSDevice() {
+  if (typeof navigator === "undefined") return false;
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+}
+function useInstallPrompt() {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [installed, setInstalled] = useState(() => isStandaloneDisplay());
+  useEffect(() => {
+    const onBeforeInstall = (e) => { e.preventDefault(); setDeferredPrompt(e); };
+    const onInstalled = () => { setInstalled(true); setDeferredPrompt(null); };
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+  const promptInstall = useCallback(async () => {
+    if (!deferredPrompt) return false;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    setDeferredPrompt(null);
+    return outcome === "accepted";
+  }, [deferredPrompt]);
+  const isIOS = isIOSDevice();
+  return { canInstall: !!deferredPrompt, isIOS, installed, promptInstall };
+}
+
+// Modal d'instructions pour iOS (Safari ne propose pas d'invite d'installation automatique)
+function IOSInstallModal({ onClose }) {
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 9500, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 6, width: "92%", maxWidth: 380, fontFamily: "var(--font-apple)" }}>
+        <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--c-1c1c1c)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 12, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Installer l'application</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 21, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14, fontSize: 13, color: "var(--c-ddd5c8)", lineHeight: 1.6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 20, width: 26, textAlign: "center" }}>📤</span>
+            <span>1. Appuyez sur le bouton <b>Partager</b> de Safari (en bas de l'écran).</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 20, width: 26, textAlign: "center" }}>➕</span>
+            <span>2. Choisissez <b>Sur l'écran d'accueil</b>.</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 20, width: 26, textAlign: "center" }}>✓</span>
+            <span>3. Confirmez avec <b>Ajouter</b>.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
@@ -2955,6 +3020,10 @@ function AuthScreen({ onAuth }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const isMobile = useIsMobile();
+  const { canInstall, isIOS, installed, promptInstall } = useInstallPrompt();
+  const [showIOSInstall, setShowIOSInstall] = useState(false);
+  const showInstallCTA = isMobile && !installed && (canInstall || isIOS);
 
   const submit = async () => {
     setError(""); setSuccess(""); setLoading(true);
@@ -3002,6 +3071,19 @@ function AuthScreen({ onAuth }) {
           <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", color: "var(--c-ddd5c8)" }}>AutoCache</span>
           <span style={{ fontSize: 10, color: "#f26522", letterSpacing: 2, fontFamily: "var(--font-apple)" }}>PRO</span>
         </div>
+        {showInstallCTA && (
+          <button
+            onClick={async () => { if (canInstall) { await promptInstall(); } else { setShowIOSInstall(true); } }}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%",
+              background: "transparent", border: "1px solid #f26522", color: "#f26522", borderRadius: 4,
+              padding: "10px 14px", marginBottom: 24, cursor: "pointer", fontFamily: "var(--font-apple)",
+              fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase",
+            }}>
+            <SettingsIcon name="install" size={15} />
+            Installer l'application
+          </button>
+        )}
         <div style={{ display: "flex", marginBottom: 28, borderBottom: "1px solid var(--c-1c1c1c)" }}>
           {[["login", "Connexion"], ["signup", "Inscription"]].map(([m, label]) => (
             <button key={m} onClick={() => { setMode(m); setError(""); setSuccess(""); }} style={{
@@ -3106,6 +3188,7 @@ function AuthScreen({ onAuth }) {
           <a href="/politique-confidentialite.html" target="_blank" style={{ color: "var(--c-4a4a4a)", textDecoration: "none" }}>Politique de confidentialité</a>
         </div>
       </div>
+      {showIOSInstall && <IOSInstallModal onClose={() => setShowIOSInstall(false)} />}
     </div>
   );
 }
@@ -3133,6 +3216,8 @@ function SettingsIcon({ name, size = 16 }) {
       return (<svg {...common}><rect x="2" y="6" width="20" height="12" rx="3" /><line x1="6" y1="12" x2="10" y2="12" /><line x1="8" y1="10" x2="8" y2="14" /><line x1="16" y1="11" x2="16.01" y2="11" /><line x1="18.5" y1="13" x2="18.51" y2="13" /></svg>);
     case "logout": // Déconnexion
       return (<svg {...common}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16,17 21,12 16,7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>);
+    case "install": // Installer l'application
+      return (<svg {...common}><rect x="5" y="2" width="14" height="20" rx="2" /><line x1="12" y1="6" x2="12" y2="14" /><polyline points="9,11 12,14 15,11" /><line x1="10" y1="18" x2="14" y2="18" /></svg>);
     default:
       return null;
   }
@@ -3188,6 +3273,9 @@ export default function AutoCache() {
   const [promoStatus, setPromoStatus] = useState(null); // null | "loading" | "success" | "error"
   const [promoMsg, setPromoMsg] = useState("");
   const isMobile = useIsMobile();
+  const { canInstall, isIOS, installed: appInstalled, promptInstall } = useInstallPrompt();
+  const [showIOSInstall, setShowIOSInstall] = useState(false);
+  const showInstallMenuItem = !appInstalled && (canInstall || isIOS);
   const TRIAL_LIMIT = 30;
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
@@ -5044,6 +5132,10 @@ export default function AutoCache() {
                     { icon: "contact", label: "Nous contacter", action: () => { setSettingsOpen(false); setShowContactModal(true); } },
                     { icon: "tutorial", label: "Revoir le didacticiel", action: () => { setSettingsOpen(false); setShowTutorial(true); } },
                     { icon: "game", label: "Mini-jeu", action: () => { setSettingsOpen(false); setShowMiniGame(true); } },
+                    ...(showInstallMenuItem ? [{
+                      icon: "install", label: "Installer l'application",
+                      action: async () => { setSettingsOpen(false); if (canInstall) { await promptInstall(); } else { setShowIOSInstall(true); } },
+                    }] : []),
                   ].map((item, i) => (
                     <button key={i} onClick={item.action}
                       style={{
@@ -6763,6 +6855,8 @@ export default function AutoCache() {
           </div>
         </div>
       )}
+
+      {showIOSInstall && <IOSInstallModal onClose={() => setShowIOSInstall(false)} />}
 
       {/* ── Modal Nous Contacter ── */}
       {showContactModal && (
