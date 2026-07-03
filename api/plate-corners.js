@@ -147,9 +147,12 @@ export default async function handler(req, res) {
       if (r.error)   return res.status(r.error.status).json(r.error.body);
       if (r.refused || !r.json.found) return res.status(200).json({ found: false });
       const box = r.json.box;
-      if (!box || ![box.x1, box.y1, box.x2, box.y2].every(v => typeof v === 'number')
+      // Coordonnées normalisées attendues : rejette aussi les valeurs en
+      // pixels (ex: 310 au lieu de 0.31) pour déclencher l'escalade.
+      if (!box || ![box.x1, box.y1, box.x2, box.y2].every(v => typeof v === 'number' && v >= -0.1 && v <= 1.1)
           || box.x2 <= box.x1 || box.y2 <= box.y1) {
-        return res.status(500).json({ error: 'Invalid box', model, box });
+        console.warn(`plate-corners locate [${model}] box invalide:`, JSON.stringify(box));
+        return res.status(200).json({ found: false, invalid_box: true });
       }
       console.log(`plate-corners locate [${model}] OK:`, JSON.stringify(box));
       return res.status(200).json({ found: true, box, model });

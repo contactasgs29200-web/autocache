@@ -2365,49 +2365,37 @@ async function detectPlateFable(imageFile) {
     URL.revokeObjectURL(url);
     const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
 
-    // ── Passe 1 : localisation grossière sur l'image entière (downscalée) ──
+    // Image entière downscalée (partagée par les deux tentatives de locate).
     const fullScale = Math.min(1, 1800 / Math.max(W, H));
     const fc = document.createElement('canvas');
     fc.width = Math.max(1, Math.round(W * fullScale));
     fc.height = Math.max(1, Math.round(H * fullScale));
     fc.getContext('2d').drawImage(img, 0, 0, fc.width, fc.height);
     const fullB64 = fc.toDataURL('image/jpeg', 0.85);
-    // Modèle éco d'abord (Haiku) ; si échec, escalade Fable 5 avant d'abandonner.
-    let loc = await fablePlateAPI(fullB64, 'locate');
-    if (!loc || !loc.found) {
-      console.log('[plate] locate éco sans résultat, escalade Fable 5');
-      loc = await fablePlateAPI(fullB64, 'locate', 'best');
-    }
-    if (!loc) return null;
-    if (!loc.found) { console.log('Aucune plaque détectée (Claude)'); return null; }
-    const box = loc.box;
 
-    // ── Crop zoomé autour de la bbox, avec une large marge ──
-    // Marge généreuse : la bbox "locate" est approximative, il faut que la
-    // plaque entière soit dans le crop même si la bbox est décalée.
-    const bw = box.x2 - box.x1, bh = box.y2 - box.y1;
-    const mx = Math.max(bw * 0.7, 0.015), my = Math.max(bh * 1.0, 0.015);
-    const cx1 = Math.max(0, box.x1 - mx), cy1 = Math.max(0, box.y1 - my);
-    const cx2 = Math.min(1, box.x2 + mx), cy2 = Math.min(1, box.y2 + my);
-    const cropW = Math.round((cx2 - cx1) * W), cropH = Math.round((cy2 - cy1) * H);
-    if (cropW < 8 || cropH < 8) { console.warn('[plate-corners] bbox locate trop petite'); return null; }
+    // Crop zoomé autour d'une bbox locate, avec une large marge (la bbox est
+    // approximative, la plaque doit rester entière dans le crop même décalée).
+    const buildCrop = (box) => {
+      if (!box || ![box.x1, box.y1, box.x2, box.y2].every(v => typeof v === 'number' && v >= -0.1 && v <= 1.1)
+          || box.x2 <= box.x1 || box.y2 <= box.y1) return null;
+      const bw = box.x2 - box.x1, bh = box.y2 - box.y1;
+      const mx = Math.max(bw * 0.7, 0.015), my = Math.max(bh * 1.0, 0.015);
+      const cx1 = Math.max(0, box.x1 - mx), cy1 = Math.max(0, box.y1 - my);
+      const cx2 = Math.min(1, box.x2 + mx), cy2 = Math.min(1, box.y2 + my);
+      const cropW = Math.round((cx2 - cx1) * W), cropH = Math.round((cy2 - cy1) * H);
+      if (cropW < 8 || cropH < 8) return null;
+      // Upscale pour que le modèle voie la plaque en grand (~1100px).
+      const cropScale = Math.min(4, Math.max(1, 1100 / Math.max(cropW, cropH)));
+      const cc = document.createElement('canvas');
+      cc.width = Math.round(cropW * cropScale);
+      cc.height = Math.round(cropH * cropScale);
+      const cctx = cc.getContext('2d');
+      cctx.imageSmoothingEnabled = true;
+      cctx.imageSmoothingQuality = 'high';
+      cctx.drawImage(img, cx1 * W, cy1 * H, cropW, cropH, 0, 0, cc.width, cc.height);
+      return { b64: cc.toDataURL('image/jpeg', 0.92), cx1, cy1, cx2, cy2 };
+    };
 
-    // Upscale du crop pour que le modèle voie la plaque en grand (~1100px).
-    const cropScale = Math.min(4, Math.max(1, 1100 / Math.max(cropW, cropH)));
-    const cc = document.createElement('canvas');
-    cc.width = Math.round(cropW * cropScale);
-    cc.height = Math.round(cropH * cropScale);
-    const cctx = cc.getContext('2d');
-    cctx.imageSmoothingEnabled = true;
-    cctx.imageSmoothingQuality = 'high';
-    cctx.drawImage(img, cx1 * W, cy1 * H, cropW, cropH, 0, 0, cc.width, cc.height);
-
-    // ── Passe 2 : les 4 coins exacts sur le crop ──
-    // Reprojection crop (0–1) → image complète (0–1)
-    const map = p => ({
-      x: cx1 + Math.min(1, Math.max(0, p.x)) * (cx2 - cx1),
-      y: cy1 + Math.min(1, Math.max(0, p.y)) * (cy2 - cy1),
-    });
     // Sanity check : le quad doit être une plaque plausible (plus large que
     // haut en pixels, aire ni nulle ni délirante).
     const plausible = (corners) => {
@@ -2416,26 +2404,55 @@ async function detectPlateFable(imageFile) {
       const qh = (Math.hypot(px[3]-px[0], py[3]-py[0]) + Math.hypot(px[2]-px[1], py[2]-py[1])) / 2;
       return qw >= 4 && qh >= 2 && qw / qh >= 1.2 && qw / qh <= 12;
     };
-    const cropB64 = cc.toDataURL('image/jpeg', 0.92);
 
-    // Modèle éco d'abord (Sonnet 5) ; escalade Fable 5 si le résultat est
-    // absent ou implausible — la qualité max n'est payée que sur les photos
-    // difficiles.
-    let ref = await fablePlateAPI(cropB64, 'refine');
-    let corners = (ref && ref.found) ? [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)] : null;
-    if (!corners || !plausible(corners)) {
-      console.log('[plate] refine éco rejeté' + (corners ? ' (quad implausible)' : '') + ', escalade Fable 5');
-      ref = await fablePlateAPI(cropB64, 'refine', 'best');
-      corners = (ref && ref.found) ? [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)] : null;
-      if (!corners || !plausible(corners)) {
-        console.warn('[plate-corners] refine échoué même en escalade, rejeté');
+    // Refine sur un crop → coins reprojetés dans le repère de la photo
+    // complète, ou null si absent/implausible.
+    const refineOnCrop = async (crop, tier) => {
+      const ref = await fablePlateAPI(crop.b64, 'refine', tier);
+      if (!ref || !ref.found) return null;
+      const map = p => ({
+        x: crop.cx1 + Math.min(1, Math.max(0, p.x)) * (crop.cx2 - crop.cx1),
+        y: crop.cy1 + Math.min(1, Math.max(0, p.y)) * (crop.cy2 - crop.cy1),
+      });
+      const corners = [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)];
+      return plausible(corners) ? corners : null;
+    };
+
+    // ── Chemin nominal (éco) : locate Haiku → crop → refine Sonnet 5 ──
+    let corners = null;
+    const locEco = await fablePlateAPI(fullB64, 'locate');
+    const cropEco = (locEco && locEco.found) ? buildCrop(locEco.box) : null;
+    if (cropEco) {
+      corners = await refineOnCrop(cropEco);
+      // Le crop éco semble bon mais Sonnet n'a pas donné un quad plausible :
+      // retente le même crop avec Fable 5.
+      if (!corners) {
+        console.log('[plate] refine éco rejeté, escalade Fable 5 (même crop)');
+        corners = await refineOnCrop(cropEco, 'best');
+      }
+    }
+
+    // ── Escalade complète : si toujours rien, la LOCALISATION éco était
+    // probablement fausse (crop sans plaque) → refaire locate + refine en
+    // Fable 5 sur une nouvelle zone.
+    if (!corners) {
+      console.log('[plate] échec chemin éco, relocalisation Fable 5');
+      const locBest = await fablePlateAPI(fullB64, 'locate', 'best');
+      if (!locBest || !locBest.found) { console.log('Aucune plaque détectée (Claude)'); return null; }
+      const cropBest = buildCrop(locBest.box);
+      if (!cropBest) { console.warn('[plate-corners] bbox locate best invalide'); return null; }
+      // Ne pas re-refiner deux fois le même crop : si la bbox best est quasi
+      // identique à la bbox éco déjà tentée en best, inutile d'insister.
+      corners = await refineOnCrop(cropBest, 'best');
+      if (!corners) {
+        console.warn('[plate-corners] refine échoué même après relocalisation, rejeté');
         return null;
       }
     }
 
     const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
     const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
-    console.log(`Plaque détectée (Fable 5 2-passes): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
+    console.log(`Plaque détectée (Claude 2-passes): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
     return { found: true, conf: 1, bbox, corners, source: 'fable' };
   } catch (e) {
     console.error('[plate-corners] erreur:', e.message);
