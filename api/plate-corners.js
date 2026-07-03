@@ -65,10 +65,14 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
+        // Repli serveur : si les classifieurs Fable 5 refusent la requête,
+        // l'API relance automatiquement sur Opus 4.8 dans le même appel.
+        'anthropic-beta': 'server-side-fallback-2026-06-01',
       },
       body: JSON.stringify({
         model: 'claude-fable-5',
         max_tokens: 600,
+        fallbacks: [{ model: 'claude-opus-4-8' }],
         messages: [{
           role: 'user',
           content: [
@@ -81,9 +85,19 @@ export default async function handler(req, res) {
 
     const data = await response.json();
     console.log('plate-corners status:', response.status);
-    if (!response.ok) return res.status(500).json({ error: 'Anthropic error', details: data });
+    if (!response.ok) {
+      console.error('plate-corners Anthropic error:', JSON.stringify(data).slice(0, 500));
+      return res.status(500).json({ error: 'Anthropic error', details: data });
+    }
 
-    const text = data.content?.[0]?.text ?? '';
+    if (data.stop_reason === 'refusal') {
+      console.warn('plate-corners: refusal', JSON.stringify(data.stop_details || {}));
+      return res.status(200).json({ found: false, refused: true });
+    }
+
+    // Fable 5 renvoie un bloc "thinking" avant le bloc "text" : ne jamais
+    // lire content[0] directement, chercher le premier bloc texte.
+    const text = data.content?.find(b => b.type === 'text')?.text ?? '';
     console.log('plate-corners raw:', text.slice(0, 300));
 
     const raw = extractJSON(text);

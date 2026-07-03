@@ -2276,7 +2276,11 @@ async function detectPlateFable(imageFile) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ b64 }),
     });
-    if (!r.ok) { console.warn('[plate-corners] HTTP', r.status); return null; }
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      console.warn('[plate-corners] HTTP', r.status, body.slice(0, 500));
+      return null;
+    }
     const d = await r.json();
     if (!d.found) { console.log('Aucune plaque détectée (Fable 5)'); return null; }
     const corners = [d.tl, d.tr, d.br, d.bl];
