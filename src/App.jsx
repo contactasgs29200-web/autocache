@@ -2913,7 +2913,7 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
   return c.toDataURL('image/png');
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2, autoPlate = true) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
   const photoURL = URL.createObjectURL(photoFile);
@@ -2935,7 +2935,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const natH = photoImg.naturalHeight || photoImg.height;
 
   // Détection plaque (coordonnées normalisées 0–1, sur le fichier original).
-  const yolo = await detectPlate(photoFile);
+  // Option "cache plaque automatique" décochée : aucune détection (ni coût
+  // API) — la photo sort telle quelle et le cache se pose manuellement.
+  const yolo = autoPlate ? await detectPlate(photoFile) : null;
 
   // Largeur de la plaque en pixels natifs (coins si dispo, sinon bbox).
   let plateNativePx = 0;
@@ -3032,7 +3034,7 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
   const yoloCorners = yolo?.corners ?? null;
   const yoloSource  = yolo ? (yolo.source || 'platerecognizer') : null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloSource, imgW: c.width, imgH: c.height };
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, autoPlateOff: !autoPlate, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloSource, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -3323,6 +3325,11 @@ export default function AutoCache() {
   const [bodyPolish, setBodyPolish] = useState(false);
   const [floorClean, setFloorClean] = useState(false);
   const [enhancePro, setEnhancePro] = useState(false); // couleurs froides + sol uniforme
+  // Pose automatique du cache plaque (détection IA). Décoché : les photos
+  // sortent telles quelles et le cache se pose manuellement via le bouton
+  // "+ Cache plaque" (ajustement 4 coins). Persisté par appareil.
+  const [autoPlate, setAutoPlate] = useState(() => (typeof localStorage === "undefined") || localStorage.getItem("ac_auto_plate") !== "0");
+  useEffect(() => { try { localStorage.setItem("ac_auto_plate", autoPlate ? "1" : "0"); } catch {} }, [autoPlate]);
   const [enhanceProIntensity, setEnhanceProIntensity] = useState(2); // 0–5 : force du dé-jaunissement (2 par défaut, modifiable)
   const [outputFormat, setOutputFormat] = useState("original"); // format d'export : clé de OUTPUT_FORMATS
   const [tab, setTab] = useState("setup");
@@ -3737,7 +3744,7 @@ export default function AutoCache() {
       : null;
 
     for (let i = 0; i < photosToProcess.length; i++) {
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish, enhanceProIntensity);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {
@@ -5412,6 +5419,13 @@ export default function AutoCache() {
                 {/* ── Cases à cocher : améliorations photo ── */}
                 {[
                   {
+                    active: autoPlate,
+                    toggle: () => setAutoPlate(p => !p),
+                    icon: "🛡",
+                    label: "Cache plaque automatique",
+                    sub: autoPlate ? "Détection et pose automatiques sur chaque photo" : "Désactivé — posez le cache via « + Cache plaque » puis ajustez-le",
+                  },
+                  {
                     active: enhancePro,
                     toggle: () => setEnhancePro(p => !p),
                     icon: "✨",
@@ -5920,8 +5934,8 @@ export default function AutoCache() {
                           </svg>
                         )}
                         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4 }}>
-                          <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 9, padding: "3px 7px", borderRadius: 2, fontFamily: "var(--font-apple)" }}>
-                            {r.plateFound ? "✓ PLAQUE CACHÉE" : "⚠ NON DÉTECTÉE"}
+                          <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : r.autoPlateOff ? "rgba(80,80,80,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 9, padding: "3px 7px", borderRadius: 2, fontFamily: "var(--font-apple)" }}>
+                            {r.plateFound ? "✓ PLAQUE CACHÉE" : r.autoPlateOff ? "⊕ CACHE MANUEL" : "⚠ NON DÉTECTÉE"}
                           </span>
                           {r.cropped && (
                             <span style={{ background: "rgba(242,101,34,0.85)", color: "#fff", fontSize: 9, padding: "3px 7px", borderRadius: 2, fontFamily: "var(--font-apple)" }}>✂ ROGNÉ</span>
