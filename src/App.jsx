@@ -2976,7 +2976,11 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
     renderScale = Math.max(renderScale, TARGET_PLATE_PX / plateNativePx);
   }
   renderScale = Math.min(renderScale, MAX_DIM / Math.max(natW, natH));
-  renderScale = Math.max(1, renderScale);
+  // Desktop : jamais de réduction sous la résolution native (renderScale ≥ 1).
+  // Mobile : la réduction est PRÉCISÉMENT le but du plafond — une photo
+  // iPhone 4032px traitée en pleine résolution fait échouer les canvas en
+  // aval (toDataURL vide → image finale cassée) même sans tuer l'onglet.
+  if (!isMobileDevice()) renderScale = Math.max(1, renderScale);
 
   const c = document.createElement("canvas");
   c.width  = Math.round(natW * renderScale);
@@ -3923,6 +3927,10 @@ export default function AutoCache() {
           // the photo is generated. User can still drag the slider down to 0 in the
           // lightbox to disable the effect entirely.
           const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, DEFAULT_SHOWROOM_ZOOM, true, wOpts, shadowMatteUrl, 60, carBounds);
+          // iOS : sous pression mémoire, toDataURL() peut renvoyer une image
+          // vide ("data:,") sans lever d'erreur → vignette/lightbox cassées.
+          // On préfère perdre le décor (photo sans showroom) qu'afficher du vide.
+          if (!sr?.dataURL || sr.dataURL.length < 1000) throw new Error('rendu showroom vide (mémoire insuffisante ?)');
 
           // For debug modes that show source-based overlays, override the showroom result
           if (debugDataURL) {
