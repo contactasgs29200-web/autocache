@@ -5421,7 +5421,7 @@ export default function AutoCache() {
                   {
                     active: autoPlate,
                     toggle: () => setAutoPlate(p => !p),
-                    icon: "🛡",
+                    icon: "",
                     label: "Cache plaque automatique",
                     sub: autoPlate ? "Détection et pose automatiques sur chaque photo" : "Désactivé — posez le cache via « + Cache plaque » puis ajustez-le",
                   },
