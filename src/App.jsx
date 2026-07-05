@@ -950,6 +950,13 @@ const SHOWROOM_THUMBS = [0, 1, 2, 3].map(i => SHOWROOM_IMAGES[i] ?? makeShowroom
 // pipeline Showroom s'accumulent et la pression mémoire fait recharger l'onglet
 // (symptôme « retour à l'accueil »). N'affecte ni la résolution ni la qualité du
 // rendu final — on ne libère que des canvas intermédiaires déjà exploités.
+// Appareil mobile (iOS/Android) : WebKit tue l'onglet (page blanche + retour
+// accueil) quand la mémoire canvas cumulée explose. Les pipelines plafonnent
+// leurs résolutions de travail sur ces appareils.
+function isMobileDevice() {
+  return typeof navigator !== "undefined" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+}
+
 function freeCanvas(...cs) {
   for (const c of cs) { if (c) { c.width = 0; c.height = 0; } }
 }
@@ -1067,7 +1074,9 @@ async function imglyRemoveBackground(dataUrl) {
     const mod = await import("@imgly/background-removal");
     removeBgImgly = mod.removeBackground;
   }
-  const small = await shrinkDataUrl(dataUrl, 2000, 0.96);
+  // Mobile : entrée réduite pour contenir le pic mémoire de l'inférence ONNX
+  // (le détourage @imgly est l'étape la plus gourmande du pipeline showroom).
+  const small = await shrinkDataUrl(dataUrl, isMobileDevice() ? 1400 : 2000, 0.96);
   const blob = await fetch(small).then(r => r.blob());
   const result = await removeBgImgly(blob, {
     model: 'medium',
@@ -2956,7 +2965,12 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
 
   const MIN_WORK_PX     = 1600;  // plancher image entière (fallback sans plaque)
   const TARGET_PLATE_PX = 400;   // largeur de plaque visée → qualité constante
-  const MAX_DIM         = 4400;  // garde-fou mémoire (plus grand côté du canvas)
+  // Garde-fou mémoire (plus grand côté du canvas). Sur mobile, un canvas
+  // 4400px (~52 Mo RGBA) multiplié par les étapes du pipeline showroom
+  // dépasse le budget canvas de WebKit → onglet tué (page qui "plante" et
+  // revient à l'accueil). On plafonne à 2400px : suffisant pour l'export
+  // showroom 2400×1350 et pour un cache plaque net.
+  const MAX_DIM         = isMobileDevice() ? 2400 : 4400;
   let renderScale = Math.max(1, MIN_WORK_PX / Math.max(natW, natH));
   if (plateNativePx > 2) {
     renderScale = Math.max(renderScale, TARGET_PLATE_PX / plateNativePx);
