@@ -2922,7 +2922,7 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
   return c.toDataURL('image/png');
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2, autoPlate = true) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2, autoPlate = true, preDetectedPlate = undefined) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
   const photoURL = URL.createObjectURL(photoFile);
@@ -2946,7 +2946,10 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // Détection plaque (coordonnées normalisées 0–1, sur le fichier original).
   // Option "cache plaque automatique" décochée : aucune détection (ni coût
   // API) — la photo sort telle quelle et le cache se pose manuellement.
-  const yolo = autoPlate ? await detectPlate(photoFile) : null;
+  // preDetectedPlate : résultat pré-calculé par le pipelining du batch
+  // (undefined = pas de préfetch, on détecte ici).
+  const yolo = !autoPlate ? null
+    : (preDetectedPlate !== undefined ? preDetectedPlate : await detectPlate(photoFile));
 
   // Largeur de la plaque en pixels natifs (coins si dispo, sinon bbox).
   let plateNativePx = 0;
@@ -3761,8 +3764,24 @@ export default function AutoCache() {
           : (SHOWROOM_IMAGES[showroomSetupBg] ?? makeShowroomBackground(showroomSetupBg, 2400, 1350)))
       : null;
 
+    // ── Pipelining : la détection de plaque (réseau, plusieurs secondes) des
+    // photos suivantes tourne PENDANT le rendu canvas/showroom (local) de la
+    // photo courante, au lieu d'attendre son tour. Deux détections d'avance
+    // maximum : latence divisée sans pic mémoire (les appels sont réseau).
+    const plateJobs = new Array(photosToProcess.length).fill(undefined);
+    const startPlateJob = (idx) => {
+      if (idx >= 0 && idx < photosToProcess.length && plateJobs[idx] === undefined) {
+        plateJobs[idx] = autoPlate
+          ? detectPlate(photosToProcess[idx].file).catch(e => { console.warn('[plate] préfetch échoué:', e?.message); return null; })
+          : Promise.resolve(null);
+      }
+    };
+    startPlateJob(0); startPlateJob(1);
+
     for (let i = 0; i < photosToProcess.length; i++) {
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate);
+      startPlateJob(i + 1); startPlateJob(i + 2);
+      const plateResult = await plateJobs[i];
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate, plateResult);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomEnabled && showroomBgDataUrl) {
         try {

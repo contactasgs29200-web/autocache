@@ -99,6 +99,14 @@ async function askClaude(apiKey, model, b64, prompt) {
     headers['anthropic-beta'] = 'server-side-fallback-2026-06-01';
     body.fallbacks = [{ model: 'claude-opus-4-8' }];
   }
+  if (model !== 'claude-haiku-4-5') {
+    // Latence : en effort "high" (défaut), le thinking adaptatif de Sonnet 5 /
+    // Fable 5 peut durer 15-30 s par photo. "medium" garde une précision quasi
+    // identique sur une tâche ciblée comme celle-ci (et le contrôle de
+    // plausibilité + escalade côté client protège la qualité). Haiku ne
+    // supporte pas ce paramètre.
+    body.output_config = { effort: 'medium' };
+  }
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', headers, body: JSON.stringify(body),
