@@ -2384,11 +2384,13 @@ async function detectPlateFable(imageFile) {
 
     // Crop zoomé autour d'une bbox locate, avec une large marge (la bbox est
     // approximative, la plaque doit rester entière dans le crop même décalée).
-    const buildCrop = (box) => {
+    // marginMult permet d'élargir encore le cadrage quand le premier essai
+    // s'est révélé trop serré (voir touchesEdge plus bas).
+    const buildCrop = (box, marginMult = 1) => {
       if (!box || ![box.x1, box.y1, box.x2, box.y2].every(v => typeof v === 'number' && v >= -0.1 && v <= 1.1)
           || box.x2 <= box.x1 || box.y2 <= box.y1) return null;
       const bw = box.x2 - box.x1, bh = box.y2 - box.y1;
-      const mx = Math.max(bw * 0.7, 0.015), my = Math.max(bh * 1.0, 0.015);
+      const mx = Math.max(bw * 0.7, 0.015) * marginMult, my = Math.max(bh * 1.0, 0.015) * marginMult;
       const cx1 = Math.max(0, box.x1 - mx), cy1 = Math.max(0, box.y1 - my);
       const cx2 = Math.min(1, box.x2 + mx), cy2 = Math.min(1, box.y2 + my);
       const cropW = Math.round((cx2 - cx1) * W), cropH = Math.round((cy2 - cy1) * H);
@@ -2415,16 +2417,23 @@ async function detectPlateFable(imageFile) {
     };
 
     // Refine sur un crop → coins reprojetés dans le repère de la photo
-    // complète, ou null si absent/implausible.
+    // complète, ou null si absent/implausible. `touchesEdge` signale qu'un
+    // coin colle au bord du crop : la plaque déborde probablement du
+    // cadrage (bbox locate sous-estimée) et les coins renvoyés sont alors
+    // tronqués — le cache posé dessus ne couvre pas toute la plaque.
     const refineOnCrop = async (crop, tier) => {
       const ref = await fablePlateAPI(crop.b64, 'refine', tier);
       if (!ref || !ref.found) return null;
+      const EDGE = 0.02;
+      const touchesEdge = [ref.tl, ref.tr, ref.br, ref.bl].some(
+        p => p.x <= EDGE || p.x >= 1 - EDGE || p.y <= EDGE || p.y >= 1 - EDGE
+      );
       const map = p => ({
         x: crop.cx1 + Math.min(1, Math.max(0, p.x)) * (crop.cx2 - crop.cx1),
         y: crop.cy1 + Math.min(1, Math.max(0, p.y)) * (crop.cy2 - crop.cy1),
       });
       const corners = [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)];
-      return plausible(corners) ? corners : null;
+      return plausible(corners) ? { corners, touchesEdge } : null;
     };
 
     // ── Chemin nominal (éco) : locate Haiku → crop → refine Sonnet 5 ──
@@ -2432,12 +2441,23 @@ async function detectPlateFable(imageFile) {
     const locEco = await fablePlateAPI(fullB64, 'locate');
     const cropEco = (locEco && locEco.found) ? buildCrop(locEco.box) : null;
     if (cropEco) {
-      corners = await refineOnCrop(cropEco);
+      let res = await refineOnCrop(cropEco);
+      if (res?.touchesEdge) {
+        // Plaque probablement tronquée par un cadrage trop serré (photo très
+        // rapprochée / bbox locate sous-estimée) → élargit la marge et refait
+        // le refine plutôt que d'accepter des coins coupés.
+        console.log('[plate] quad éco au bord du crop, élargissement de la marge');
+        const widerCrop = buildCrop(locEco.box, 2.5);
+        const res2 = widerCrop ? await refineOnCrop(widerCrop, 'best') : null;
+        if (res2) res = res2;
+      }
+      corners = res?.corners ?? null;
       // Le crop éco semble bon mais Sonnet n'a pas donné un quad plausible :
       // retente le même crop avec Fable 5.
       if (!corners) {
         console.log('[plate] refine éco rejeté, escalade Fable 5 (même crop)');
-        corners = await refineOnCrop(cropEco, 'best');
+        res = await refineOnCrop(cropEco, 'best');
+        corners = res?.corners ?? null;
       }
     }
 
@@ -2452,7 +2472,14 @@ async function detectPlateFable(imageFile) {
       if (!cropBest) { console.warn('[plate-corners] bbox locate best invalide'); return null; }
       // Ne pas re-refiner deux fois le même crop : si la bbox best est quasi
       // identique à la bbox éco déjà tentée en best, inutile d'insister.
-      corners = await refineOnCrop(cropBest, 'best');
+      let res = await refineOnCrop(cropBest, 'best');
+      if (res?.touchesEdge) {
+        console.log('[plate] quad best au bord du crop, élargissement de la marge');
+        const widerCrop = buildCrop(locBest.box, 2.5);
+        const res2 = widerCrop ? await refineOnCrop(widerCrop, 'best') : null;
+        if (res2) res = res2;
+      }
+      corners = res?.corners ?? null;
       if (!corners) {
         console.warn('[plate-corners] refine échoué même après relocalisation, rejeté');
         return null;
