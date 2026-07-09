@@ -861,9 +861,6 @@ function polishBodywork(ctx, W, H) {
 }
 
 
-// ── Feature flags (shadow system) ──
-const USE_SOURCE_SHADOW_TRANSFER = false;
-
 // Zoom appliqué par défaut à la voiture dans le décor showroom (la voiture
 // paraissait trop petite par rapport au décor à l'échelle 1.0).
 const DEFAULT_SHOWROOM_ZOOM = 1.25;
@@ -1843,6 +1840,75 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   console.log('[Shadow] output PNG size=' + dataUrl.length + ' bytes');
   console.timeEnd('[Shadow] generateFromAlpha');
   return dataUrl;
+}
+
+// ── Ombre hybride : vraie ombre de la photo d'origine + garde-fou synthétique ──
+// L'ombre EXTRAITE de la photo source (extractSourceShadow) est la plus
+// naturelle possible — c'est littéralement l'ombre réelle du véhicule, avec
+// ses reflets et son dégradé. Mais seule, elle est fragile (elle peut attraper
+// joints de carrelage, ombres d'autres voitures, marquages au sol). On la
+// CONFINE donc à l'empreinte du véhicule via une porte spatiale dérivée de
+// l'ombre synthétique (dilatation douce), et le synthétique reste en plancher
+// (cœur sombre garanti sous la caisse même si l'extraction échoue).
+async function combineShadowMattes(synthUrl, sourceUrl) {
+  const [sImg, oImg] = await Promise.all([loadImg(synthUrl), loadImg(sourceUrl)]);
+  const W0 = sImg.naturalWidth || sImg.width, H0 = sImg.naturalHeight || sImg.height;
+  const scale = Math.min(1, 1200 / W0);
+  const W = Math.round(W0 * scale), H = Math.round(H0 * scale);
+  const grab = (img) => {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, W, H);
+    const d = ctx.getImageData(0, 0, W, H).data;
+    freeCanvas(c);
+    return d;
+  };
+  const S = grab(sImg), O = grab(oImg);
+  const sAlpha = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) sAlpha[i] = S[i * 4 + 3] / 255;
+  // Porte spatiale = synthétique dilaté (flou large puis gain) : vaut ~1 sur
+  // et autour de l'empreinte, retombe à 0 au-delà.
+  const gate = gaussianBlurMask(sAlpha, W, H, Math.max(4, W * 0.012));
+  const out = document.createElement('canvas');
+  out.width = W; out.height = H;
+  const oCtx = out.getContext('2d');
+  const outData = oCtx.createImageData(W, H);
+  for (let i = 0; i < W * H; i++) {
+    const g = Math.min(1, gate[i] * 5);
+    const v = Math.max(sAlpha[i], (O[i * 4 + 3] / 255) * g);
+    if (v > 0.004) outData.data[i * 4 + 3] = Math.round(Math.min(1, v) * 255);
+  }
+  oCtx.putImageData(outData, 0, 0);
+  // Ré-upscale aux dimensions du cutout
+  const full = document.createElement('canvas');
+  full.width = W0; full.height = H0;
+  const fCtx = full.getContext('2d');
+  fCtx.imageSmoothingEnabled = true; fCtx.imageSmoothingQuality = 'high';
+  fCtx.drawImage(out, 0, 0, W0, H0);
+  const url = full.toDataURL('image/png');
+  freeCanvas(out, full);
+  return url;
+}
+
+// Point d'entrée unique de l'ombre showroom : synthétique (robuste) enrichie
+// de l'ombre réelle extraite de la photo d'origine quand elle est exploitable.
+async function buildShadowMatte(originalDataUrl, cutoutDataURL, carBounds, plateBox, shadowParams = {}) {
+  const synthetic = await generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, shadowParams);
+  if (!originalDataUrl || !synthetic) return synthetic;
+  try {
+    const src = await extractSourceShadow(originalDataUrl, cutoutDataURL);
+    if (!src?.matteDataUrl || (src.meanAlpha ?? 0) < 0.01) {
+      console.log('[Shadow] ombre source inexploitable (meanAlpha=' + (src?.meanAlpha ?? 0).toFixed(3) + '), synthétique seule');
+      return synthetic;
+    }
+    const combined = await combineShadowMattes(synthetic, src.matteDataUrl);
+    console.log('[Shadow] ombre hybride: source (meanAlpha=' + src.meanAlpha.toFixed(3) + ') + synthétique');
+    return combined;
+  } catch (e) {
+    console.warn('[Shadow] transfert ombre source échoué:', e?.message);
+    return synthetic;
+  }
 }
 
 // Moyenne RGB + luminance sur les pixels opaques d'un ImageData (alpha ≥ 16).
@@ -3749,13 +3815,7 @@ export default function AutoCache() {
 
           let shadowMatteUrl = null;
           if (showroomFloorShadow) {
-            if (USE_SOURCE_SHADOW_TRANSFER) {
-              const shadow = await extractSourceShadow(r.baseDataURL, cutout);
-              shadowMatteUrl = shadow.matteDataUrl;
-            } else {
-              const plateBox = r.yoloBbox ?? null;
-              shadowMatteUrl = await generateShadowFromCarAlpha(cutout, carBounds, plateBox);
-            }
+            shadowMatteUrl = await buildShadowMatte(r.baseDataURL, cutout, carBounds, r.yoloBbox ?? null);
           } else {
             console.log('[Showroom] floor shadow skipped (case décochée)');
           }
@@ -4305,7 +4365,7 @@ export default function AutoCache() {
         }
         const params = { opacity: shadowOpacity, blur: shadowBlur, yOffset: shadowYOffset, spread: shadowSpread, [param]: value };
         const plateBox = lightbox.yoloBbox ?? null;
-        const newMatte = await generateShadowFromCarAlpha(lightbox.cutoutDataURL, carBounds, plateBox, params);
+        const newMatte = await buildShadowMatte(lightbox.baseDataURL, lightbox.cutoutDataURL, carBounds, plateBox, params);
         const logoImgEl = await loadImg(lightbox.logoPreview);
         const wOpts = lightbox.wallLogoSrc ? { src: lightbox.wallLogoSrc, scale: lightbox.wallLogoScale, opacity: lightbox.wallLogoOpacity, x: lightbox.wallLogoPos?.x ?? 0.5, y: lightbox.wallLogoPos?.y ?? 0.25 } : null;
         const sr = await compositeCarOnBg(
@@ -6789,7 +6849,7 @@ export default function AutoCache() {
                   // Respect the "Ombres au sol" choice: don't resurrect a shadow
                   // the user disabled when they re-edit the mask.
                   const newShadow = showroomFloorShadow
-                    ? await generateShadowFromCarAlpha(correctedDataURL, carBounds, lightbox.yoloBbox ?? null)
+                    ? await buildShadowMatte(lightbox.baseDataURL, correctedDataURL, carBounds, lightbox.yoloBbox ?? null)
                     : null;
                   // Recomposite
                   const wOpts = lightbox.wallLogoSrc ? {
