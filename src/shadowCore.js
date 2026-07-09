@@ -24,6 +24,13 @@ export const SHADOW_MODEL = {
   ambientWeight: 0.40,    // halo doux grande échelle (part de la densité)
   ambientBlurMult: 3.2,   // rayon du halo (× flou de finition)
   lateralFeatherFrac: 0.03, // fondu latéral aux extrémités du gabarit (× carW)
+  // ── Défenses contre les débris de détourage sous la voiture ──
+  // Le pixel bas d'une colonne doit appartenir à une masse opaque continue
+  // d'au moins 10 % de la hauteur du véhicule : un pneu est connecté à la
+  // caisse, un débris (reste d'ombre, poussière) est un îlot fin détaché.
+  minThickFrac: 0.10,     // épaisseur opaque minimale d'une colonne du contour (× carH)
+  depthOutlierFrac: 0.05, // tolérance sous la ligne des appuis (percentile 90) avant rejet (× carH)
+  hangCapFrac: 0.20,      // garde au sol maximale utilisée pour peindre (× carH)
 };
 
 // Flou gaussien séparable sur un masque Float32 (bords étirés).
@@ -84,16 +91,25 @@ export function filterContourArtifacts(contour, width, maxGap) {
 }
 
 // Contour bas de la silhouette : pour chaque colonne, le pixel opaque le plus
-// bas. Les colonnes de la plaque (cache posé par-dessus) sont exclues puis
-// interpolées entre leurs voisines pour ne pas creuser le contour.
-export function computeBottomContour(alpha, W, H, carBounds, plateZone, alphaThreshold = SHADOW_MODEL.alphaThreshold) {
+// bas appartenant à une masse d'au moins minThick pixels d'épaisseur — les
+// poussières fines du détourage (restes d'ombre, brins d'herbe) sous la
+// voiture sont ignorées, sinon elles tirent le contour (donc l'ombre) vers
+// le bas. Les colonnes de la plaque (cache posé par-dessus) sont exclues
+// puis interpolées entre leurs voisines pour ne pas creuser le contour.
+export function computeBottomContour(alpha, W, H, carBounds, plateZone, alphaThreshold = SHADOW_MODEL.alphaThreshold, minThick = 1) {
   const carL = Math.max(0, carBounds.x);
   const carR = Math.min(W - 1, carBounds.x + carBounds.w);
   const contour = new Float32Array(W).fill(-1);
   for (let x = carL; x <= carR; x++) {
     if (plateZone && x >= plateZone.x1 && x <= plateZone.x2) continue;
-    for (let y = H - 1; y >= 0; y--) {
-      if (alpha[y * W + x] > alphaThreshold) { contour[x] = y; break; }
+    let y = H - 1;
+    while (y >= 0) {
+      if (alpha[y * W + x] > alphaThreshold) {
+        let run = 1;
+        while (run < minThick && y - run >= 0 && alpha[(y - run) * W + x] > alphaThreshold) run++;
+        if (run >= minThick) { contour[x] = y; break; }
+        y -= run; // amas trop fin (débris) : continue la recherche au-dessus
+      } else y--;
     }
   }
   if (plateZone && plateZone.x1 > carL && plateZone.x2 < carR) {
@@ -128,6 +144,34 @@ export function fillContourGaps(contour, width) {
       const t = (gx - gapStart + 1) / (x - gapStart + 1);
       contour[gx] = leftY + (rightY - leftY) * t;
     }
+  }
+  return contour;
+}
+
+// Rejette les colonnes du contour nettement plus basses que le « niveau
+// d'appui » : la profondeur maximale SOUTENUE sur au moins une largeur de
+// pneu (érosion morphologique 1D puis maximum). Un pneu est large → il
+// soutient sa profondeur ; un débris de détourage (reste d'ombre, poussière)
+// est étroit → il ne la soutient pas et se fait rejeter, sinon il
+// empoisonne la ligne de sol et l'ombre « coule » loin sous la voiture.
+export function rejectDepthOutliers(contour, width, maxBelowRef, supportWidth = 8) {
+  let first = -1, last = -1;
+  for (let x = 0; x < width; x++) if (contour[x] >= 0) { if (first < 0) first = x; last = x; }
+  if (first < 0 || last - first < supportWidth) return contour;
+  // Érosion (filtre min glissant) : une colonne invalide casse la fenêtre.
+  let supportY = -1;
+  for (let x = first; x <= last - supportWidth + 1; x++) {
+    let winMin = Infinity;
+    for (let dx = 0; dx < supportWidth; dx++) {
+      const v = contour[x + dx];
+      if (v < 0) { winMin = -1; break; }
+      if (v < winMin) winMin = v;
+    }
+    if (winMin > supportY) supportY = winMin;
+  }
+  if (supportY < 0) return contour;
+  for (let x = 0; x < width; x++) {
+    if (contour[x] >= 0 && contour[x] > supportY + maxBelowRef) contour[x] = -1;
   }
   return contour;
 }
@@ -168,28 +212,44 @@ export function buildShadowMask(alpha, W, H, carBounds, plateZone, params = {}) 
   const carW = Math.max(1, carBounds.w);
   const carH = Math.max(1, carBounds.h);
 
-  let contour = computeBottomContour(alpha, W, H, carBounds, plateZone, M.alphaThreshold);
+  const minThick = Math.max(2, Math.round(M.minThickFrac * carH));
+  let contour = computeBottomContour(alpha, W, H, carBounds, plateZone, M.alphaThreshold, minThick);
+  rejectDepthOutliers(contour, W, Math.max(3, M.depthOutlierFrac * carH), Math.max(8, Math.round(carW * 0.06)));
   contour = smoothContourMovingAverage(contour, W, Math.max(3, Math.round(carW * 0.02)));
   filterContourArtifacts(contour, W, Math.max(4, carH * 0.06));
   fillContourGaps(contour, W);
 
-  let first = -1, last = -1;
-  for (let x = 0; x < W; x++) if (contour[x] >= 0) { if (first < 0) first = x; last = x; }
+  let first = -1, last = -1, deepestContour = -1;
+  for (let x = 0; x < W; x++) {
+    if (contour[x] >= 0) {
+      if (first < 0) first = x;
+      last = x;
+      if (contour[x] > deepestContour) deepestContour = contour[x];
+    }
+  }
   const mask = new Float32Array(W * H);
   if (first < 0 || last - first < 3) return mask; // silhouette inexploitable
 
   const ground = estimateGroundLine(contour, W, M.groundSlope);
 
-  const H0 = Math.max(2, M.hangFalloffFrac * carH * spread);
-  const penBase = Math.max(1.5, M.penumbraFrac * carH * spread);
-  const overlapPx = Math.max(2, Math.round(M.overlapFrac * carH));
+  // Hauteur effective recalculée depuis le contour nettoyé : carBounds peut
+  // être gonflé par des débris de détourage sous la voiture, ce qui
+  // surdimensionnerait pénombre et garde au sol.
+  const effH = Math.max(10, deepestContour - carBounds.y);
+
+  const H0 = Math.max(2, M.hangFalloffFrac * effH * spread);
+  const penBase = Math.max(1.5, M.penumbraFrac * effH * spread);
+  const overlapPx = Math.max(2, Math.round(M.overlapFrac * effH));
   const featherW = Math.max(3, M.lateralFeatherFrac * carW);
 
+  const hangCap = M.hangCapFrac * effH * spread;
   for (let x = first; x <= last; x++) {
     const c = contour[x];
-    const gl = ground[x];
-    if (c < 0 || gl < 0) continue;
-    const hang = Math.max(0, gl - c);          // garde au sol locale (px)
+    if (c < 0 || ground[x] < 0) continue;
+    // Garde au sol plafonnée : si la ligne de sol a malgré tout été tirée
+    // vers le bas (débris non filtré), l'ombre reste bornée près de la caisse.
+    const hang = Math.min(Math.max(0, ground[x] - c), hangCap);
+    const gl = c + hang;
     const hangK = Math.exp(-hang / H0);        // 1 = contact, →0 = suspendu
     // Densité : maximale au contact, plancher sous les zones suspendues
     // (dessous de caisse jamais totalement éclairé).

@@ -134,3 +134,44 @@ test('silhouette vide → masque vide sans erreur', () => {
   const mask = buildShadowMask(empty, W, H, { x: 0, y: 0, w: 10, h: 10 }, null, {});
   assert.ok(mask.every(v => v === 0));
 });
+
+// ── Défenses contre les débris de détourage (cause du bug « l'ombre
+// coule loin sous la voiture » observé sur photo réelle) ──
+
+function makeCarAlphaWithDebris() {
+  const alpha = makeCarAlpha();
+  const paint = (x1, x2, y1, y2, v = 1) => {
+    for (let y = y1; y <= y2; y++)
+      for (let x = x1; x <= x2; x++) alpha[y * W + x] = v;
+  };
+  paint(250, 300, 320, 334);  // blob détaché (reste d'ombre) sous la caisse
+  paint(340, 344, 300, 345);  // wisp fin qui descend très bas
+  paint(470, 476, 330, 336);  // petit speck isolé
+  return alpha;
+}
+
+test("les débris détachés sous la caisse ne tirent pas l'ombre vers le bas", () => {
+  const mask = buildShadowMask(makeCarAlphaWithDebris(), W, H,
+    { x: 100, y: 120, w: 400, h: 226 }, null, {});
+  // Les roues descendent à y=280. Sans les défenses, les débris (jusqu'à
+  // y=345) créent une nappe bien plus basse. L'ombre doit rester bornée un
+  // peu sous les roues (pénombre comprise), pas au niveau des débris.
+  let deepest = 0;
+  for (let y = H - 1; y >= 0 && !deepest; y--)
+    for (let x = 0; x < W; x++)
+      if (mask[y * W + x] > 0.05) { deepest = y; break; }
+  assert.ok(deepest < 320, `ombre trop profonde: y=${deepest} (débris non filtrés)`);
+});
+
+test('le masque avec débris reste proche du masque propre', () => {
+  const clean = buildShadowMask(makeCarAlpha(), W, H, carBounds, null, {});
+  const noisy = buildShadowMask(makeCarAlphaWithDebris(), W, H,
+    { x: 100, y: 120, w: 400, h: 226 }, null, {});
+  // Écart moyen faible : les débris ne doivent pas remodeler l'ombre.
+  let diff = 0, count = 0;
+  for (let i = 0; i < W * H; i++) {
+    if (clean[i] > 0.02 || noisy[i] > 0.02) { diff += Math.abs(clean[i] - noisy[i]); count++; }
+  }
+  const meanDiff = diff / Math.max(1, count);
+  assert.ok(meanDiff < 0.08, `écart moyen trop grand: ${meanDiff.toFixed(4)}`);
+});

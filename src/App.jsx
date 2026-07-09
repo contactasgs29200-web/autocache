@@ -2262,21 +2262,40 @@ async function detectPlateFable(imageFile) {
       return plausible(corners) ? { corners, touchesEdge } : null;
     };
 
+    // Les deux quads désignent-ils la même plaque ? Centres distants de moins
+    // d'une largeur de plaque. Garde-fou du retry élargi : sur un cadrage
+    // plus large, le modèle peut accrocher un autre objet (calandre basse,
+    // bandeau) — dans ce cas on préfère garder le quad initial, même tronqué,
+    // plutôt que de poser le cache au mauvais endroit.
+    const sameQuad = (a, b) => {
+      const ctr = q => q.reduce((s, p) => ({ x: s.x + p.x / 4, y: s.y + p.y / 4 }), { x: 0, y: 0 });
+      const width = q => Math.max(
+        Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y),
+        Math.hypot(q[2].x - q[3].x, q[2].y - q[3].y));
+      const ca = ctr(a), cb = ctr(b);
+      return Math.hypot(ca.x - cb.x, ca.y - cb.y) <= Math.max(width(a), width(b));
+    };
+
+    // Retry sur cadrage élargi quand le quad colle au bord du crop (plaque
+    // probablement tronquée). N'adopte le nouveau quad que s'il est complet
+    // (ne touche plus le bord) ET cohérent avec l'initial.
+    const retryWider = async (res, box, label) => {
+      if (!res?.touchesEdge) return res;
+      console.log(`[plate] quad ${label} au bord du crop, élargissement de la marge`);
+      const widerCrop = buildCrop(box, 2.5);
+      const res2 = widerCrop ? await refineOnCrop(widerCrop, 'best') : null;
+      if (res2 && !res2.touchesEdge && sameQuad(res.corners, res2.corners)) return res2;
+      if (res2) console.log('[plate] retry élargi incohérent ou tronqué, quad initial conservé');
+      return res;
+    };
+
     // ── Chemin nominal (éco) : locate Haiku → crop → refine Sonnet 5 ──
     let corners = null;
     const locEco = await fablePlateAPI(fullB64, 'locate');
     const cropEco = (locEco && locEco.found) ? buildCrop(locEco.box) : null;
     if (cropEco) {
       let res = await refineOnCrop(cropEco);
-      if (res?.touchesEdge) {
-        // Plaque probablement tronquée par un cadrage trop serré (photo très
-        // rapprochée / bbox locate sous-estimée) → élargit la marge et refait
-        // le refine plutôt que d'accepter des coins coupés.
-        console.log('[plate] quad éco au bord du crop, élargissement de la marge');
-        const widerCrop = buildCrop(locEco.box, 2.5);
-        const res2 = widerCrop ? await refineOnCrop(widerCrop, 'best') : null;
-        if (res2) res = res2;
-      }
+      res = await retryWider(res, locEco.box, 'éco');
       corners = res?.corners ?? null;
       // Le crop éco semble bon mais Sonnet n'a pas donné un quad plausible :
       // retente le même crop avec Fable 5.
@@ -2299,12 +2318,7 @@ async function detectPlateFable(imageFile) {
       // Ne pas re-refiner deux fois le même crop : si la bbox best est quasi
       // identique à la bbox éco déjà tentée en best, inutile d'insister.
       let res = await refineOnCrop(cropBest, 'best');
-      if (res?.touchesEdge) {
-        console.log('[plate] quad best au bord du crop, élargissement de la marge');
-        const widerCrop = buildCrop(locBest.box, 2.5);
-        const res2 = widerCrop ? await refineOnCrop(widerCrop, 'best') : null;
-        if (res2) res = res2;
-      }
+      res = await retryWider(res, locBest.box, 'best');
       corners = res?.corners ?? null;
       if (!corners) {
         console.warn('[plate-corners] refine échoué même après relocalisation, rejeté');
