@@ -4,6 +4,7 @@ import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
 import { orderQuad, quadArea } from "./plateGeometry.js";
+import { buildShadowMask, gaussianBlurMask } from "./shadowCore.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -869,14 +870,7 @@ const DEFAULT_SHOWROOM_ZOOM = 1.25;
 
 // ── Shadow generation constants (tunable) ──
 const SHADOW_STRENGTH = 1.0;
-const CONTACT_SHADOW_OPACITY = 0.35;
-const CONTACT_SHADOW_BLUR = 10;
-const UNDERBODY_SHADOW_OPACITY = 0.24;
-const UNDERBODY_SHADOW_BLUR = 22;
-const FRONT_SHADOW_OPACITY = 0.22;
-const SHADOW_OVERLAP_RATIO = 0.025;
-const SHADOW_VERTICAL_COMPRESSION = 0.35;
-const SHADOW_SHEAR = 0.12;
+// (Le modèle de l'ombre au sol vit dans shadowCore.js — voir SHADOW_MODEL.)
 
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
 function makeShowroomBackground(index, W, H) {
@@ -1026,29 +1020,6 @@ function sepMinFilter(data, W, H, r) {
       const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
       for (let j = y0; j <= y1; j++) { const v = tmp[j * W + x]; if (v < mn) mn = v; }
       out[y * W + x] = mn;
-    }
-  return out;
-}
-
-function gaussianBlurMask(mask, W, H, sigma) {
-  const r = Math.ceil(sigma * 3);
-  const k = [];
-  let s = 0;
-  for (let i = -r; i <= r; i++) { const v = Math.exp(-(i * i) / (2 * sigma * sigma)); k.push(v); s += v; }
-  for (let i = 0; i < k.length; i++) k[i] /= s;
-  const temp = new Float32Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      let val = 0;
-      for (let j = -r; j <= r; j++) val += mask[y * W + Math.min(W - 1, Math.max(0, x + j))] * k[j + r];
-      temp[y * W + x] = val;
-    }
-  const out = new Float32Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      let val = 0;
-      for (let j = -r; j <= r; j++) val += temp[Math.min(H - 1, Math.max(0, y + j)) * W + x] * k[j + r];
-      out[y * W + x] = val;
     }
   return out;
 }
@@ -1277,36 +1248,6 @@ function getShowroomDebugMode() {
 }
 
 // ── Shadow generation from car alpha mask ──
-
-function smoothContourMovingAverage(contour, width, windowSize) {
-  const out = new Float32Array(width);
-  const half = Math.floor(windowSize / 2);
-  for (let x = 0; x < width; x++) {
-    if (contour[x] < 0) { out[x] = -1; continue; }
-    let sum = 0, count = 0;
-    for (let dx = -half; dx <= half; dx++) {
-      const nx = x + dx;
-      if (nx >= 0 && nx < width && contour[nx] >= 0) { sum += contour[nx]; count++; }
-    }
-    out[x] = count > 0 ? sum / count : -1;
-  }
-  return out;
-}
-
-function filterContourArtifacts(contour, width, maxGap) {
-  for (let x = 0; x < width; x++) {
-    if (contour[x] < 0) continue;
-    let leftY = -1, rightY = -1;
-    for (let lx = x - 1; lx >= Math.max(0, x - 5); lx--) {
-      if (contour[lx] >= 0) { leftY = contour[lx]; break; }
-    }
-    for (let rx = x + 1; rx <= Math.min(width - 1, x + 5); rx++) {
-      if (contour[rx] >= 0) { rightY = contour[rx]; break; }
-    }
-    if (leftY >= 0 && Math.abs(contour[x] - leftY) > maxGap) contour[x] = -1;
-    else if (rightY >= 0 && Math.abs(contour[x] - rightY) > maxGap) contour[x] = -1;
-  }
-}
 
 // ── Main vehicle isolation — connected-component filtering ──
 
@@ -1824,9 +1765,6 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
     w: Math.round(carBounds.w * workScale),
     h: Math.round(carBounds.h * workScale),
   };
-  const carL = cb.x, carR = cb.x + cb.w, carT = cb.y, carB = cb.y + cb.h;
-  const carH = cb.h;
-
   // Plate exclusion zone in working coords
   let plateExcluded = false;
   let plateLw = -1, plateRw = -1, plateBw = -1;
@@ -1838,7 +1776,7 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   }
 
   console.log('[Shadow] cutout %dx%d, work %dx%d, scale=' + workScale.toFixed(3) + ', opaquePixels=' + alphaOpaqueCount +
-    ', carBounds=[' + cb.x + ',' + cb.y + ' ' + cb.w + 'x' + cb.h + '], carH=' + carH +
+    ', carBounds=[' + cb.x + ',' + cb.y + ' ' + cb.w + 'x' + cb.h + ']' +
     (plateExcluded ? ', plateExcluded=[' + plateLw + '-' + plateRw + ']' : ', noPlate'));
 
   const opMul = shadowParams.opacity ?? SHADOW_STRENGTH;
@@ -1846,130 +1784,21 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
   const yOff = Math.round((shadowParams.yOffset ?? 0) * workScale);
   const spread = shadowParams.spread ?? 1.0;
 
-  // Extract bottom contour — for each column, find the LOWEST opaque pixel
-  // Exclude columns in plate bbox to avoid plate cache artifacts
-  const bottomContour = new Float32Array(wW).fill(-1);
-  for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
-    // Skip plate columns — will be interpolated from neighbors
-    if (plateExcluded && x >= plateLw && x <= plateRw) continue;
-    for (let y = wH - 1; y >= 0; y--) {
-      if (alpha[y * wW + x] > 0.08) { bottomContour[x] = y; break; }
-    }
-  }
+  // Modèle « occlusion ambiante » dérivé de la silhouette (voir shadowCore.js) :
+  // l'ombre épouse le contour bas du véhicule — dense sous les pneus, présente
+  // sous le bas de caisse, légère sous les porte-à-faux — sans déborder du
+  // gabarit comme le faisait l'ancienne projection cisaillée.
+  const plateZone = plateExcluded ? { x1: plateLw, x2: plateRw, y2: plateBw } : null;
+  const combined = buildShadowMask(alpha, wW, wH, cb, plateZone, {
+    opacity: opMul,
+    spread,
+    yOffsetPx: yOff,
+    extraBlurPx: extraBlur * workScale,
+  });
 
-  // Interpolate contour through plate-excluded zone
-  if (plateExcluded && plateLw > carL && plateRw < carR) {
-    const leftY = bottomContour[Math.max(carL, plateLw - 1)];
-    const rightY = bottomContour[Math.min(carR, plateRw + 1)];
-    if (leftY >= 0 && rightY >= 0) {
-      for (let x = plateLw; x <= plateRw; x++) {
-        const t = (x - plateLw) / (plateRw - plateLw);
-        bottomContour[x] = leftY + (rightY - leftY) * t;
-      }
-    } else if (leftY >= 0) {
-      for (let x = plateLw; x <= plateRw; x++) bottomContour[x] = leftY;
-    } else if (rightY >= 0) {
-      for (let x = plateLw; x <= plateRw; x++) bottomContour[x] = rightY;
-    }
-  }
-
-  const smoothWindow = Math.max(3, Math.round(15 * workScale));
-  const smoothed = smoothContourMovingAverage(bottomContour, wW, smoothWindow);
-  filterContourArtifacts(smoothed, wW, Math.round(20 * workScale));
-
-  let contourCount = 0;
-  for (let x = 0; x < wW; x++) if (smoothed[x] >= 0) contourCount++;
-  console.log('[Shadow] bottomContour: ' + contourCount + ' valid columns out of ' + (carR - carL) + ' (carL=' + carL + ' carR=' + carR + ')');
-
-  // Layer 1: Contact shadow — tight band under car bottom
-  const contactLayer = new Float32Array(wW * wH);
-  const overlapPx = Math.max(2, Math.round(SHADOW_OVERLAP_RATIO * carH));
-  const bandHeight = Math.max(4, Math.round(0.04 * carH * spread));
-  const contactIntensity = CONTACT_SHADOW_OPACITY * opMul;
-
-  for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
-    const cy = smoothed[x];
-    if (cy < 0) continue;
-    const yStart = Math.round(cy - overlapPx) + yOff;
-    const yEnd = Math.round(cy + bandHeight) + yOff;
-    for (let y = Math.max(0, yStart); y <= Math.min(wH - 1, yEnd); y++) {
-      const totalH = yEnd - yStart;
-      if (totalH <= 0) continue;
-      const dist = (y - yStart) / totalH;
-      const falloff = dist < 0.4 ? 1.0 : 1.0 - (dist - 0.4) / 0.6;
-      contactLayer[y * wW + x] = contactIntensity * Math.max(0, falloff);
-    }
-  }
-
-  // Blur sigma in working-scale pixels (do NOT multiply by workScale again)
-  const contactSigma = Math.max(2, CONTACT_SHADOW_BLUR * workScale + extraBlur * workScale);
-  const contactBlurred = gaussianBlurMask(contactLayer, wW, wH, contactSigma);
-
-  // Layer 2: Underbody shadow — projected bottom portion of car
-  const underbodyLayer = new Float32Array(wW * wH);
-  const srcTop = Math.max(0, Math.round(carB - 0.3 * carH));
-  const compression = SHADOW_VERTICAL_COMPRESSION * spread;
-  const underbodyIntensity = UNDERBODY_SHADOW_OPACITY * opMul;
-
-  for (let x = carL; x <= Math.min(carR, wW - 1); x++) {
-    const anchorY = smoothed[x];
-    if (anchorY < 0) continue;
-    for (let sy = srcTop; sy <= Math.min(carB, wH - 1); sy++) {
-      if (alpha[sy * wW + x] < 0.1) continue;
-      const projY = Math.round(anchorY + (sy - srcTop) * compression) + yOff;
-      const shearX = Math.round(x + (projY - anchorY) * SHADOW_SHEAR);
-      if (projY >= 0 && projY < wH && shearX >= 0 && shearX < wW) {
-        const srcAlpha = alpha[sy * wW + x];
-        const val = underbodyIntensity * srcAlpha;
-        const idx = projY * wW + shearX;
-        if (val > underbodyLayer[idx]) underbodyLayer[idx] = val;
-      }
-    }
-  }
-
-  // Layer 3: Front bumper shadow reinforcement
-  // Plate bbox is used ONLY to detect which side is "front" — NOT as a shape.
-  // Reinforce shadow across the front ~30% of the car width, merged into underbody.
-  if (plateBox) {
-    const plateCenterX = Math.round(((plateBox.x1 ?? plateBox.x ?? 0) + (plateBox.x2 ?? ((plateBox.x ?? 0) + (plateBox.w ?? 0)))) / 2 * fullW * workScale);
-    const isFrontLeft = plateCenterX < (carL + carR) / 2;
-    // Front zone: 30% of car width on the front side
-    const frontWidth = Math.round(cb.w * 0.30);
-    const frontL = isFrontLeft ? carL : Math.max(carL, carR - frontWidth);
-    const frontR = isFrontLeft ? Math.min(carR, carL + frontWidth) : carR;
-    const frontIntensity = FRONT_SHADOW_OPACITY * opMul;
-    const frontBand = Math.max(4, Math.round(bandHeight * 1.5));
-    for (let x = frontL; x <= Math.min(wW - 1, frontR); x++) {
-      const cy = smoothed[x];
-      if (cy < 0) continue;
-      // Fade intensity from front edge to back
-      const edgeDist = isFrontLeft
-        ? 1.0 - (x - frontL) / (frontR - frontL)
-        : (x - frontL) / (frontR - frontL);
-      const xFade = 0.3 + 0.7 * edgeDist;
-      const boostStart = Math.round(cy) + yOff;
-      const boostEnd = Math.round(cy + frontBand) + yOff;
-      for (let y = Math.max(0, boostStart); y <= Math.min(wH - 1, boostEnd); y++) {
-        const totalH = boostEnd - boostStart;
-        if (totalH <= 0) continue;
-        const dist = (y - boostStart) / totalH;
-        const falloff = 1.0 - dist * dist;
-        const idx = y * wW + x;
-        underbodyLayer[idx] = Math.min(0.95, underbodyLayer[idx] + frontIntensity * xFade * falloff);
-      }
-    }
-    console.log('[Shadow] frontAnchor: side=' + (isFrontLeft ? 'left' : 'right') + ', range=[' + frontL + '-' + frontR + '], plateExcludedFromShadow=true');
-  }
-
-  const underbodySigma = Math.max(2, UNDERBODY_SHADOW_BLUR * workScale + extraBlur * workScale);
-  const underbodyBlurred = gaussianBlurMask(underbodyLayer, wW, wH, underbodySigma);
-
-  // Compose: max of both layers
-  const combined = new Float32Array(wW * wH);
   let shadowNonZeroCount = 0, shadowMaxAlpha = 0;
   let shadowMinX = wW, shadowMaxX = 0, shadowMinY = wH, shadowMaxY = 0;
   for (let i = 0; i < wW * wH; i++) {
-    combined[i] = Math.max(contactBlurred[i], underbodyBlurred[i]);
     if (combined[i] > 0.003) {
       shadowNonZeroCount++;
       if (combined[i] > shadowMaxAlpha) shadowMaxAlpha = combined[i];
@@ -1983,10 +1812,7 @@ async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, sh
 
   console.log('[Shadow] result: nonZeroPixels=' + shadowNonZeroCount +
     ', maxAlpha=' + shadowMaxAlpha.toFixed(4) +
-    ', bounds=[' + shadowMinX + ',' + shadowMinY + ']->[' + shadowMaxX + ',' + shadowMaxY + ']' +
-    ', contactSigma=' + contactSigma.toFixed(1) +
-    ', underbodySigma=' + underbodySigma.toFixed(1) +
-    ', bandH=' + bandHeight + ', compression=' + compression.toFixed(3));
+    ', bounds=[' + shadowMinX + ',' + shadowMinY + ']->[' + shadowMaxX + ',' + shadowMaxY + ']');
 
   if (shadowNonZeroCount === 0) {
     console.warn('[Shadow] WARNING: shadow is empty! No visible pixels generated.');
