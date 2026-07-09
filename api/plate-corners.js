@@ -1,21 +1,25 @@
 // /api/plate-corners.js
 // Détection interne des coins de la plaque via Claude Vision.
-// Fonctionne en DEUX PASSES pilotées par le frontend :
+// Fonctionne en PASSES pilotées par le frontend :
 //   mode "locate" : image entière → bbox approximative de la plaque.
 //   mode "refine" : crop zoomé sur la plaque → les 4 coins exacts (quadrilatère
 //                   en perspective, pas un rectangle).
+//   mode "verify" : crop recadré sur le quad DÉTECTÉ → contrôle indépendant
+//                   que la plaque est bien entière et centrée dedans (attrape
+//                   les quads posés à côté de la plaque avant la pose du cache).
 //
 // Stratégie de coût : chaque passe utilise par défaut le modèle le moins cher
-// capable de la tâche (locate = trivial → Haiku ; refine = précision → Sonnet 5).
-// Le frontend peut demander tier "best" (Fable 5) en escalade quand le résultat
-// économique échoue au contrôle de plausibilité — la qualité max n'est donc
-// payée que sur les photos difficiles.
+// capable de la tâche (locate/verify = trivial → Haiku ; refine = précision →
+// Sonnet 5). Le frontend peut demander tier "best" (Fable 5) en escalade quand
+// le résultat économique échoue au contrôle de plausibilité — la qualité max
+// n'est donc payée que sur les photos difficiles.
 
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
 const MODELS = {
   locate: { default: 'claude-haiku-4-5', best: 'claude-fable-5' },
   refine: { default: 'claude-sonnet-5', best: 'claude-fable-5' },
+  verify: { default: 'claude-haiku-4-5', best: 'claude-sonnet-5' },
 };
 
 const LOCATE_PROMPT = `Regarde cette photo de véhicule. Trouve la PLAQUE D'IMMATRICULATION : la plaque portant des caractères alphanumériques (ex: "AB-123-CD"), sur fond blanc ou jaune, fixée au pare-choc avant ou arrière du véhicule.
@@ -45,7 +49,10 @@ Vérifie visuellement où se trouve CHAQUE coin : suis le bord supérieur de la 
 
 IMPORTANT : ne "corrige" jamais les coins vers un rectangle aligné sur les axes. Donne les positions RÉELLEMENT observées de chaque coin, même si le quadrilatère est incliné ou déformé.
 
-═══ ÉTAPE 3 — COORDONNÉES ═══
+═══ ÉTAPE 3 — ANCRAGE SUR LE TEXTE ═══
+Lis les caractères de la plaque (ex: "DB-127-DG"). Tes 4 coins délimitent le rectangle qui CONTIENT ces caractères. VÉRIFICATION OBLIGATOIRE avant de répondre : le centre de ton quadrilatère doit tomber SUR le texte lu — pas au-dessus (capot/calandre), pas en dessous (bouclier/entrée d'air). Erreur classique à éviter : donner un quadrilatère décalé d'une hauteur de plaque vers le bas, dont le bord HAUT longe le bord BAS réel de la plaque.
+
+═══ ÉTAPE 4 — COORDONNÉES ═══
 Donne les coordonnées normalisées (0.0–1.0, relatives à CE crop) des 4 coins de la SURFACE de la plaque :
 - tl : coin haut-gauche
 - tr : coin haut-droit
@@ -58,7 +65,14 @@ y=0.0 = bord haut, y=1.0 = bord bas.
 Si aucune plaque n'est identifiable dans ce crop, réponds {"found":false}.
 
 Réponds UNIQUEMENT avec ce JSON (3 décimales, sans markdown) :
-{"found":true,"analysis":"caméra au niveau, voiture tournée à droite, côté gauche plus proche; bord supérieur incliné vers le bas à droite","tl":{"x":0.212,"y":0.334},"tr":{"x":0.741,"y":0.398},"br":{"x":0.735,"y":0.612},"bl":{"x":0.208,"y":0.531}}`;
+{"found":true,"analysis":"caméra au niveau, voiture tournée à droite, côté gauche plus proche; bord supérieur incliné vers le bas à droite","text":"AB-123-CD","tl":{"x":0.212,"y":0.334},"tr":{"x":0.741,"y":0.398},"br":{"x":0.735,"y":0.612},"bl":{"x":0.208,"y":0.531}}`;
+
+const VERIFY_PROMPT = `Cette image est un petit crop qui devrait contenir une plaque d'immatriculation ENTIÈRE (rectangle blanc ou jaune portant des caractères alphanumériques), à peu près centrée et occupant la majeure partie du cadre.
+
+Réponds UNIQUEMENT avec ce JSON (sans markdown) :
+- Plaque entière visible (ses 4 bords dans le cadre), à peu près centrée : {"ok":true}
+- Plaque coupée par un bord, ou entière mais nettement décentrée : {"ok":false,"where":"..."} où "where" indique OÙ se trouve le centre de la plaque par rapport au centre du cadre : "above", "below", "left" ou "right"
+- Aucune plaque visible (carrosserie, calandre, entrée d'air, sol…) : {"ok":false,"where":"absent"}`;
 
 function extractJSON(txt) {
   let depth = 0, start = -1;
@@ -146,10 +160,23 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
-  const passe = mode === 'locate' ? 'locate' : 'refine';
+  const passe = mode === 'locate' ? 'locate' : mode === 'verify' ? 'verify' : 'refine';
   const model = MODELS[passe][tier === 'best' ? 'best' : 'default'];
 
   try {
+    if (passe === 'verify') {
+      const r = await askClaude(apiKey, model, b64, VERIFY_PROMPT);
+      // Contrôle best-effort : en cas d'erreur/refus, on répond "indéterminé"
+      // (ok:null) — le client conserve alors le quad plutôt que de le jeter.
+      if (r.error || r.refused || typeof r.json?.ok !== 'boolean') {
+        console.warn(`plate-corners verify [${model}] indéterminé`);
+        return res.status(200).json({ ok: null });
+      }
+      const where = ['above', 'below', 'left', 'right', 'absent'].includes(r.json.where) ? r.json.where : null;
+      console.log(`plate-corners verify [${model}]:`, JSON.stringify({ ok: r.json.ok, where }));
+      return res.status(200).json({ ok: r.json.ok, where });
+    }
+
     if (passe === 'locate') {
       const r = await askClaude(apiKey, model, b64, LOCATE_PROMPT);
       if (r.error)   return res.status(r.error.status).json(r.error.body);

@@ -2262,18 +2262,23 @@ async function detectPlateFable(imageFile) {
       return plausible(corners) ? { corners, touchesEdge } : null;
     };
 
-    // Les deux quads désignent-ils la même plaque ? Centres distants de moins
-    // d'une largeur de plaque. Garde-fou du retry élargi : sur un cadrage
-    // plus large, le modèle peut accrocher un autre objet (calandre basse,
-    // bandeau) — dans ce cas on préfère garder le quad initial, même tronqué,
-    // plutôt que de poser le cache au mauvais endroit.
+    // Les deux quads désignent-ils la même plaque ? Garde-fou du retry
+    // élargi : sur un cadrage plus large, le modèle peut accrocher un autre
+    // objet (calandre basse, bandeau) ou dériver d'une hauteur de plaque —
+    // dans ce cas on préfère garder le quad initial, même tronqué, plutôt
+    // que de poser le cache au mauvais endroit. Tolérance verticale serrée :
+    // l'erreur classique est un quad décalé d'une hauteur vers le bas.
     const sameQuad = (a, b) => {
       const ctr = q => q.reduce((s, p) => ({ x: s.x + p.x / 4, y: s.y + p.y / 4 }), { x: 0, y: 0 });
       const width = q => Math.max(
         Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y),
         Math.hypot(q[2].x - q[3].x, q[2].y - q[3].y));
+      const height = q => Math.max(
+        Math.hypot(q[3].x - q[0].x, q[3].y - q[0].y),
+        Math.hypot(q[2].x - q[1].x, q[2].y - q[1].y));
       const ca = ctr(a), cb = ctr(b);
-      return Math.hypot(ca.x - cb.x, ca.y - cb.y) <= Math.max(width(a), width(b));
+      return Math.abs(ca.x - cb.x) <= Math.max(width(a), width(b)) * 0.5
+          && Math.abs(ca.y - cb.y) <= Math.max(height(a), height(b)) * 0.8;
     };
 
     // Retry sur cadrage élargi quand le quad colle au bord du crop (plaque
@@ -2322,6 +2327,57 @@ async function detectPlateFable(imageFile) {
       corners = res?.corners ?? null;
       if (!corners) {
         console.warn('[plate-corners] refine échoué même après relocalisation, rejeté');
+        return null;
+      }
+    }
+
+    // ── Vérification indépendante (Haiku) : recadre sur le quad OBTENU et
+    // contrôle que la plaque y est bien entière et centrée. Attrape le mode
+    // d'échec observé en production : un quad plausible en forme mais posé À
+    // CÔTÉ de la plaque (typiquement une hauteur trop bas, sur le bouclier).
+    const quadBbox = (q) => {
+      const qx = q.map(p => p.x), qy = q.map(p => p.y);
+      return { x1: Math.min(...qx), y1: Math.min(...qy), x2: Math.max(...qx), y2: Math.max(...qy) };
+    };
+    const verifyQuad = async (q) => {
+      const b = quadBbox(q);
+      const mx = (b.x2 - b.x1) * 0.30, my = (b.y2 - b.y1) * 0.45;
+      const box = { x1: b.x1 - mx, y1: b.y1 - my, x2: b.x2 + mx, y2: b.y2 + my };
+      const cw = Math.round((Math.min(1, box.x2) - Math.max(0, box.x1)) * W);
+      const ch = Math.round((Math.min(1, box.y2) - Math.max(0, box.y1)) * H);
+      if (cw < 8 || ch < 8) return { ok: null };
+      const scale = Math.min(4, Math.max(1, 700 / Math.max(cw, ch)));
+      const vc = document.createElement('canvas');
+      vc.width = Math.round(cw * scale); vc.height = Math.round(ch * scale);
+      vc.getContext('2d').drawImage(img, Math.max(0, box.x1) * W, Math.max(0, box.y1) * H, cw, ch, 0, 0, vc.width, vc.height);
+      const v = await fablePlateAPI(vc.toDataURL('image/jpeg', 0.9), 'verify');
+      return v ?? { ok: null }; // erreur réseau → indéterminé (on garde le quad)
+    };
+
+    let ver = await verifyQuad(corners);
+    if (ver.ok === false) {
+      if (ver.where && ver.where !== 'absent') {
+        // La plaque est à côté du cadre → recentre le cadrage dans cette
+        // direction et refait un refine haute qualité, puis re-vérifie.
+        console.log('[plate] vérif KO (plaque ' + ver.where + '), correction dirigée');
+        const b = quadBbox(corners);
+        const bw = b.x2 - b.x1, bh = b.y2 - b.y1;
+        const sh = { above: [0, -1], below: [0, 1], left: [-1, 0], right: [1, 0] }[ver.where];
+        const shiftedBox = {
+          x1: b.x1 + sh[0] * bw, x2: b.x2 + sh[0] * bw,
+          y1: b.y1 + sh[1] * bh, y2: b.y2 + sh[1] * bh,
+        };
+        const crop2 = buildCrop(shiftedBox, 1.2);
+        const res2 = crop2 ? await refineOnCrop(crop2, 'best') : null;
+        const ver2 = res2 ? await verifyQuad(res2.corners) : null;
+        if (res2 && ver2 && ver2.ok !== false) {
+          corners = res2.corners;
+        } else {
+          console.warn('[plate] correction dirigée échouée, quad rejeté (repli Plate Recognizer)');
+          return null;
+        }
+      } else {
+        console.warn('[plate] vérif KO (pas de plaque dans le quad), rejeté (repli Plate Recognizer)');
         return null;
       }
     }
