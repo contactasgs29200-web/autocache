@@ -57,16 +57,38 @@ test('fillContourGaps comble les trous internes', () => {
 test('estimateGroundLine touche les appuis et surplombe le bas de caisse', () => {
   const contour = computeBottomContour(makeCarAlpha(), W, H, carBounds, null);
   fillContourGaps(contour, W);
-  const g = estimateGroundLine(contour, W, 0.06);
+  const g = estimateGroundLine(contour, W, 24);
   // Aux roues : le sol touche le contour
-  assert.ok(Math.abs(g[170] - 280) < 1);
-  assert.ok(Math.abs(g[430] - 280) < 1);
+  assert.ok(Math.abs(g[170] - 280) < 2);
+  assert.ok(Math.abs(g[430] - 280) < 2);
   // Entre les roues : le sol reste sous le bas de caisse (garde au sol > 0)
   assert.ok(g[300] > 250, `g[300]=${g[300]}`);
   // Jamais au-dessus du contour
   for (let x = 100; x <= 500; x++) {
     if (contour[x] >= 0) assert.ok(g[x] >= contour[x] - 0.01);
   }
+});
+
+test('estimateGroundLine suit la perspective (roues à hauteurs différentes)', () => {
+  // Vue 3/4 : roue proche caméra plus basse (y=300) que la roue éloignée
+  // (y=260). La ligne de sol doit être INCLINÉE : toucher chaque roue et
+  // interpoler linéairement entre les deux — pas rester au niveau de la
+  // roue la plus basse.
+  const alpha = new Float32Array(W * H);
+  const paint = (x1, x2, y1, y2) => {
+    for (let y = y1; y <= y2; y++)
+      for (let x = x1; x <= x2; x++) alpha[y * W + x] = 1;
+  };
+  paint(100, 500, 100, 230);   // caisse
+  paint(130, 190, 230, 300);   // roue avant (proche, basse)
+  paint(410, 470, 230, 260);   // roue arrière (loin, haute)
+  const contour = computeBottomContour(alpha, W, H, { x: 100, y: 100, w: 400, h: 200 }, null);
+  fillContourGaps(contour, W);
+  const g = estimateGroundLine(contour, W, 24);
+  assert.ok(Math.abs(g[160] - 300) < 3, `roue avant: g=${g[160]}`);
+  assert.ok(Math.abs(g[440] - 260) < 3, `roue arrière: g=${g[440]}`);
+  // Milieu : proche de la droite reliant les deux contacts (~280)
+  assert.ok(Math.abs(g[300] - 280) < 8, `milieu: g=${g[300]}`);
 });
 
 test("l'ombre reste dans l'empreinte du véhicule (± flou)", () => {
