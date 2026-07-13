@@ -1,3 +1,12 @@
+> **⚠️ Document historique — backend Railway décommissionné.**
+> La détection de plaque passe désormais par Claude Vision
+> (`/api/plate-corners`, avec Plate Recognizer en secours) et la détection
+> de véhicules par `/api/detect-vehicles` (Claude Haiku sur Vercel).
+> Plus aucun appel du frontend vers le backend `backend/` : l'abonnement
+> Railway peut être résilié. Ce document décrit l'ancien pipeline YOLO,
+> conservé à titre de référence si un modèle keypoints maison redevenait
+> pertinent.
+
 # Pipeline plaque : de la photo brute au modèle déployé
 
 Vue d'ensemble du chemin complet pour passer de **OpenCV-fallback**

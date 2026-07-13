@@ -2183,31 +2183,6 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   return dataURL;
 }
 
-// Downscale an image before sending it to the YOLO backend. The backend
-// returns normalized coordinates, so the scale factor is irrelevant to the
-// geometry — this only shrinks upload + server-side decode time. Returns the
-// original file when it's already small enough or if anything fails.
-function downscaleForUpload(file, maxPx = 1600, quality = 0.9) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const w = img.naturalWidth || img.width;
-      const h = img.naturalHeight || img.height;
-      const scale = Math.min(1, maxPx / Math.max(w, h));
-      if (scale >= 1) { URL.revokeObjectURL(url); resolve(file); return; }
-      const c = document.createElement('canvas');
-      c.width = Math.round(w * scale);
-      c.height = Math.round(h * scale);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-      URL.revokeObjectURL(url);
-      c.toBlob((blob) => resolve(blob || file), 'image/jpeg', quality);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
-    img.src = url;
-  });
-}
-
 // Réduit l'image (≤ maxSide) et renvoie sa version base64 JPEG + ses dimensions.
 // On envoie une copie réduite à la détection (rapide, sous la limite Vercel) ;
 // les coins renvoyés sont normalisés (÷ dimensions envoyées) → indépendants de
@@ -2495,19 +2470,19 @@ async function detectPlate(imageFile, regions = 'fr') {
 }
 
 // ── Vehicle detection + main vehicle selection ──
+// Claude Vision (Haiku) via /api/detect-vehicles — a remplacé le backend
+// YOLO Railway. En cas d'échec, le pipeline retombe sur les heuristiques
+// locales (plaque + composantes connexes), comme avant.
 
 async function detectVehicles(imageFile) {
-  const backendUrl = import.meta.env.VITE_YOLO_BACKEND_URL;
-  if (!backendUrl) return null;
   try {
-    const upload = await downscaleForUpload(imageFile);
-    const formData = new FormData();
-    formData.append('file', upload, upload.name || 'upload.jpg');
-    const r = await fetch(`${backendUrl}/detect-vehicles`, {
+    const { base64 } = await downscaledImageBase64(imageFile, 1280, 0.8);
+    const r = await fetch('/api/detect-vehicles', {
       method: 'POST',
-      body: formData,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ b64: base64.includes(',') ? base64.split(',')[1] : base64 }),
     });
-    if (!r.ok) { console.warn('[Vehicles] backend HTTP', r.status); return null; }
+    if (!r.ok) { console.warn('[Vehicles] HTTP', r.status); return null; }
     const d = await r.json();
     console.log('[Vehicles] detected ' + d.count + ' vehicles');
     d.vehicles.forEach((v, i) => {
@@ -2520,68 +2495,6 @@ async function detectVehicles(imageFile) {
     console.warn('[Vehicles] detection failed:', e.message);
     return null;
   }
-}
-
-// Backend instance segmentation: returns mask of main vehicle only
-async function segmentMainVehicle(imageFile, plateBox, mainVehicleBox) {
-  const backendUrl = import.meta.env.VITE_YOLO_BACKEND_URL;
-  if (!backendUrl) return null;
-  try {
-    console.time('[Segment] backend');
-    const formData = new FormData();
-    formData.append('file', imageFile);
-    if (plateBox) formData.append('plate_box', JSON.stringify(plateBox));
-    if (mainVehicleBox) formData.append('main_vehicle_box', JSON.stringify(mainVehicleBox));
-    const r = await fetch(`${backendUrl}/segment-main-vehicle`, {
-      method: 'POST',
-      body: formData,
-    });
-    console.timeEnd('[Segment] backend');
-    if (!r.ok) { console.warn('[Segment] backend HTTP', r.status); return null; }
-    const d = await r.json();
-    if (!d.success) {
-      console.warn('[Segment] backend returned error:', d.error);
-      return null;
-    }
-    console.log('[Segment] success: ' + d.instance_class + ' conf=' + d.confidence +
-      ' instances=' + d.instances_found + ' selected=#' + d.selected_index);
-    if (d.scores) d.scores.forEach((s, i) => {
-      console.log('[Segment] score #' + i + ': ' + s.class + ' plate=' + s.plate +
-        ' iou=' + s.iou + ' area=' + s.area + ' → ' + s.score);
-    });
-    return {
-      maskDataURL: 'data:image/png;base64,' + d.mask_base64,
-      confidence: d.confidence,
-      instanceClass: d.instance_class,
-    };
-  } catch (e) {
-    console.warn('[Segment] failed:', e.message);
-    return null;
-  }
-}
-
-// Apply a grayscale mask PNG to the original image as alpha channel
-async function applyMaskToCutout(originalDataURL, maskDataURL) {
-  const [origImg, maskImg] = await Promise.all([loadImg(originalDataURL), loadImg(maskDataURL)]);
-  const W = origImg.naturalWidth || origImg.width;
-  const H = origImg.naturalHeight || origImg.height;
-  const c = document.createElement('canvas');
-  c.width = W; c.height = H;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(origImg, 0, 0);
-  const imgData = ctx.getImageData(0, 0, W, H);
-  // Draw mask at original image dimensions
-  const mc = document.createElement('canvas');
-  mc.width = W; mc.height = H;
-  const mctx = mc.getContext('2d');
-  mctx.drawImage(maskImg, 0, 0, W, H);
-  const maskData = mctx.getImageData(0, 0, W, H).data;
-  // Use first channel of mask (grayscale) as alpha
-  for (let i = 0; i < W * H; i++) {
-    imgData.data[i * 4 + 3] = maskData[i * 4]; // R channel → alpha
-  }
-  ctx.putImageData(imgData, 0, 0);
-  return c.toDataURL('image/png');
 }
 
 function selectMainVehicle(vehicles, plateBox, imgW, imgH) {
