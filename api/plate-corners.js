@@ -10,16 +10,24 @@
 //
 // Stratégie de coût : chaque passe utilise par défaut le modèle le moins cher
 // capable de la tâche (locate/verify = trivial → Haiku ; refine = précision →
-// Sonnet 5). Le frontend peut demander tier "best" (Fable 5) en escalade quand
-// le résultat économique échoue au contrôle de plausibilité — la qualité max
-// n'est donc payée que sur les photos difficiles.
+// Sonnet 5). Le frontend peut demander tier "best" (Opus 4.8) en escalade
+// quand le résultat économique échoue au contrôle de plausibilité — la
+// qualité max n'est donc payée que sur les photos difficiles.
 
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
 const MODELS = {
-  locate: { default: 'claude-haiku-4-5', best: 'claude-fable-5' },
-  refine: { default: 'claude-sonnet-5', best: 'claude-fable-5' },
+  locate: { default: 'claude-haiku-4-5', best: 'claude-opus-4-8' },
+  refine: { default: 'claude-sonnet-5', best: 'claude-opus-4-8' },
   verify: { default: 'claude-haiku-4-5', best: 'claude-sonnet-5' },
+};
+
+// Tarifs USD par MTok (input/output) — uniquement pour le log de coût.
+// NB : Sonnet 5 passe du tarif intro 2/10 au tarif standard 3/15 le 2026-09-01.
+const PRICING = {
+  'claude-haiku-4-5': [1, 5],
+  'claude-sonnet-5': [2, 10],
+  'claude-opus-4-8': [5, 25],
 };
 
 const LOCATE_PROMPT = `Regarde cette photo de véhicule. Trouve la PLAQUE D'IMMATRICULATION : la plaque portant des caractères alphanumériques (ex: "AB-123-CD"), sur fond blanc ou jaune, fixée au pare-choc avant ou arrière du véhicule.
@@ -94,7 +102,7 @@ async function askClaude(apiKey, model, b64, prompt) {
   };
   const body = {
     model,
-    // Sonnet 5 / Fable 5 : le thinking (adaptatif, actif par défaut) compte
+    // Sonnet 5 / Opus 4.8 : le thinking (adaptatif) compte
     // dans max_tokens — un budget trop petit part entièrement en thinking et
     // le JSON final n'est jamais écrit. Haiku ne « pense » pas mais le budget
     // large ne coûte rien (on ne paie que les tokens réellement générés).
@@ -107,19 +115,14 @@ async function askClaude(apiKey, model, b64, prompt) {
       ],
     }],
   };
-  if (model === 'claude-fable-5') {
-    // Repli serveur : si les classifieurs Fable 5 refusent la requête,
-    // l'API relance automatiquement sur Opus 4.8 dans le même appel.
-    headers['anthropic-beta'] = 'server-side-fallback-2026-06-01';
-    body.fallbacks = [{ model: 'claude-opus-4-8' }];
-  }
   if (model !== 'claude-haiku-4-5') {
-    // Latence : en effort "high" (défaut), le thinking adaptatif de Sonnet 5 /
-    // Fable 5 peut durer 15-30 s par photo. "medium" garde une précision quasi
-    // identique sur une tâche ciblée comme celle-ci (et le contrôle de
-    // plausibilité + escalade côté client protège la qualité). Haiku ne
+    // Coût + latence : le thinking adaptatif (sortie facturée) est le premier
+    // poste de coût du pipeline. Sur le chemin nominal (Sonnet 5), "low"
+    // suffit pour une tâche ciblée comme celle-ci — le contrôle de
+    // plausibilité + verify + escalade côté client protège la qualité. Sur
+    // l'escalade (Opus 4.8, photos difficiles), on garde "medium". Haiku ne
     // supporte pas ce paramètre.
-    body.output_config = { effort: 'medium' };
+    body.output_config = { effort: model === 'claude-opus-4-8' ? 'medium' : 'low' };
   }
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -131,6 +134,11 @@ async function askClaude(apiKey, model, b64, prompt) {
     console.error(`plate-corners [${model}] Anthropic error:`, JSON.stringify(data).slice(0, 500));
     return { error: { status: 500, body: { error: 'Anthropic error', details: data } } };
   }
+  // Suivi du coût réel par appel (les tokens de sortie incluent le thinking).
+  const u = data.usage || {};
+  const [pIn, pOut] = PRICING[model] || [0, 0];
+  const cost = ((u.input_tokens || 0) * pIn + (u.output_tokens || 0) * pOut) / 1e6;
+  console.log(`plate-corners [${model}] usage: in=${u.input_tokens} out=${u.output_tokens} cost=$${cost.toFixed(5)}`);
   if (data.stop_reason === 'refusal') {
     console.warn(`plate-corners [${model}]: refusal`, JSON.stringify(data.stop_details || {}));
     return { refused: true };

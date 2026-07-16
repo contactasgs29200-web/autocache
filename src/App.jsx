@@ -2207,7 +2207,7 @@ function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
 }
 
 // Appel bas niveau à /api/plate-corners (Claude Vision).
-// tier "best" force Fable 5 (escalade qualité) ; sinon modèle économique
+// tier "best" force Opus 4.8 (escalade qualité) ; sinon modèle économique
 // (Haiku pour locate, Sonnet 5 pour refine) choisi côté serveur.
 async function fablePlateAPI(b64DataUrl, mode, tier) {
   const b64 = b64DataUrl.includes(',') ? b64DataUrl.split(',')[1] : b64DataUrl;
@@ -2224,7 +2224,7 @@ async function fablePlateAPI(b64DataUrl, mode, tier) {
   return r.json();
 }
 
-// Détection plaque — Claude (Fable 5) Vision en interne, en DEUX PASSES.
+// Détection plaque — Claude Vision en interne, en DEUX PASSES.
 // Sur l'image entière, la plaque est trop petite (~3% de l'image) pour que le
 // modèle place les coins au pixel près : les coordonnées dérivent (cache posé
 // à côté / trop grand). On demande donc d'abord une bbox grossière sur
@@ -2344,9 +2344,9 @@ async function detectPlateFable(imageFile) {
       res = await retryWider(res, locEco.box, 'éco');
       corners = res?.corners ?? null;
       // Le crop éco semble bon mais Sonnet n'a pas donné un quad plausible :
-      // retente le même crop avec Fable 5.
+      // retente le même crop avec Opus 4.8.
       if (!corners) {
-        console.log('[plate] refine éco rejeté, escalade Fable 5 (même crop)');
+        console.log('[plate] refine éco rejeté, escalade Opus 4.8 (même crop)');
         res = await refineOnCrop(cropEco, 'best');
         corners = res?.corners ?? null;
       }
@@ -2354,9 +2354,9 @@ async function detectPlateFable(imageFile) {
 
     // ── Escalade complète : si toujours rien, la LOCALISATION éco était
     // probablement fausse (crop sans plaque) → refaire locate + refine en
-    // Fable 5 sur une nouvelle zone.
+    // Opus 4.8 sur une nouvelle zone.
     if (!corners) {
-      console.log('[plate] échec chemin éco, relocalisation Fable 5');
+      console.log('[plate] échec chemin éco, relocalisation Opus 4.8');
       const locBest = await fablePlateAPI(fullB64, 'locate', 'best');
       if (!locBest || !locBest.found) { console.log('Aucune plaque détectée (Claude)'); return null; }
       const cropBest = buildCrop(locBest.box);
@@ -2433,7 +2433,7 @@ async function detectPlateFable(imageFile) {
   }
 }
 
-// Détection plaque via Plate Recognizer Blur — filet de sécurité si Fable 5
+// Détection plaque via Plate Recognizer Blur — filet de sécurité si Claude
 // échoue (erreur réseau/API), pas utilisé en chemin normal.
 // Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
 // normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
@@ -2465,7 +2465,7 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
 async function detectPlate(imageFile, regions = 'fr') {
   const fable = await detectPlateFable(imageFile);
   if (fable) return fable;
-  console.warn('[plate] Fable 5 indisponible, repli sur Plate Recognizer');
+  console.warn('[plate] Claude indisponible, repli sur Plate Recognizer');
   return detectPlatePlateRecognizer(imageFile, regions);
 }
 
@@ -2476,7 +2476,10 @@ async function detectPlate(imageFile, regions = 'fr') {
 
 async function detectVehicles(imageFile) {
   try {
-    const { base64 } = await downscaledImageBase64(imageFile, 1280, 0.8);
+    // 800px suffit largement pour des bboxes de véhicules (gros objets) :
+    // ~640 tokens d'image au lieu de ~1600 à 1280px (l'API plafonne à
+    // ~1,15 MP), pour une précision identique sur des boîtes normalisées.
+    const { base64 } = await downscaledImageBase64(imageFile, 800, 0.8);
     const r = await fetch('/api/detect-vehicles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

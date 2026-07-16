@@ -9,6 +9,13 @@ export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
 const MODELS = { default: 'claude-haiku-4-5', best: 'claude-sonnet-5' };
 
+// Tarifs USD par MTok (input/output) — uniquement pour le log de coût.
+// NB : Sonnet 5 passe du tarif intro 2/10 au tarif standard 3/15 le 2026-09-01.
+const PRICING = {
+  'claude-haiku-4-5': [1, 5],
+  'claude-sonnet-5': [2, 10],
+};
+
 const PROMPT = `Détecte TOUS les véhicules visibles sur cette photo (voiture, van, camion, moto, bus), même partiellement visibles ou coupés par le bord.
 
 Pour chaque véhicule, donne son rectangle englobant SERRÉ en coordonnées normalisées :
@@ -69,6 +76,11 @@ export default async function handler(req, res) {
       console.error(`detect-vehicles [${model}] Anthropic error:`, JSON.stringify(data).slice(0, 500));
       return res.status(500).json({ error: 'Anthropic error' });
     }
+    // Suivi du coût réel par appel.
+    const u = data.usage || {};
+    const [pIn, pOut] = PRICING[model] || [0, 0];
+    const cost = ((u.input_tokens || 0) * pIn + (u.output_tokens || 0) * pOut) / 1e6;
+    console.log(`detect-vehicles [${model}] usage: in=${u.input_tokens} out=${u.output_tokens} cost=$${cost.toFixed(5)}`);
     const text = data.content?.find(b => b.type === 'text')?.text ?? '';
     const raw = extractJSON(text);
     if (!raw) return res.status(500).json({ error: 'No JSON in response' });
