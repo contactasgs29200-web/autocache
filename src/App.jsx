@@ -4,7 +4,7 @@ import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
 import { orderQuad, quadArea } from "./plateGeometry.js";
-import { buildShadowMask, gaussianBlurMask } from "./shadowCore.js";
+import { computeShadowMatte } from "./shadowCore.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -865,9 +865,12 @@ function polishBodywork(ctx, W, H) {
 // paraissait trop petite par rapport au décor à l'échelle 1.0).
 const DEFAULT_SHOWROOM_ZOOM = 1.25;
 
-// ── Shadow generation constants (tunable) ──
-const SHADOW_STRENGTH = 1.0;
-// (Le modèle de l'ombre au sol vit dans shadowCore.js — voir SHADOW_MODEL.)
+// ── Ombre showroom (extraction de la vraie ombre — voir shadowCore.js) ──
+const SHADOW_STRENGTH = 1.0;      // opacité par défaut du matte transcrit
+const SHADOW_WORK_WIDTH = 1100;   // largeur max de travail de l'extraction (vitesse)
+// Bande au sol analysée autour du bas du véhicule (× dimensions du véhicule).
+const SHADOW_ROI = { sideFrac: 0.15, aboveFrac: 0.28, belowFrac: 0.24 };
+const SHADOW_MIN_MEAN_ALPHA = 0.01; // sous ce niveau → pas d'ombre exploitable
 
 // ── Fonds de showroom virtuels (générés par canvas, pas de dépendance externe) ──────────
 function makeShowroomBackground(index, W, H) {
@@ -976,51 +979,6 @@ async function removeBackground(dataUrl) {
   return await imglyRemoveBackground(dataUrl);
 }
 
-function morphCloseFloat(data, W, H, radius) {
-  const dilated = sepMaxFilter(data, W, H, radius);
-  return sepMinFilter(dilated, W, H, radius);
-}
-
-function sepMaxFilter(data, W, H, r) {
-  const tmp = new Float32Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      let mx = 0;
-      const x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r);
-      for (let i = x0; i <= x1; i++) { const v = data[y * W + i]; if (v > mx) mx = v; }
-      tmp[y * W + x] = mx;
-    }
-  const out = new Float32Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      let mx = 0;
-      const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
-      for (let j = y0; j <= y1; j++) { const v = tmp[j * W + x]; if (v > mx) mx = v; }
-      out[y * W + x] = mx;
-    }
-  return out;
-}
-
-function sepMinFilter(data, W, H, r) {
-  const tmp = new Float32Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      let mn = 1;
-      const x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r);
-      for (let i = x0; i <= x1; i++) { const v = data[y * W + i]; if (v < mn) mn = v; }
-      tmp[y * W + x] = mn;
-    }
-  const out = new Float32Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      let mn = 1;
-      const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
-      for (let j = y0; j <= y1; j++) { const v = tmp[j * W + x]; if (v < mn) mn = v; }
-      out[y * W + x] = mn;
-    }
-  return out;
-}
-
 /**
  * Pre-load the @imgly background-removal module so its ONNX session is
  * ready before the user clicks Lancer le traitement. Safe to call multiple
@@ -1058,175 +1016,131 @@ async function imglyRemoveBackground(dataUrl) {
   });
 }
 
-// ── Shadow transfer — extract real shadow from source photo ──
+// ── Ombre showroom : extraction de la VRAIE ombre de la photo d'origine ──
+// L'ombre visible sur la photo source est détectée (assombrissement local du
+// sol autour du véhicule — toute la logique pixel vit dans shadowCore.js)
+// puis retranscrite telle quelle dans un matte aligné pixel à pixel sur le
+// détourage : composée sous la voiture dans le showroom, c'est littéralement
+// l'ombre d'origine. 100 % local (aucun appel API), travail en résolution
+// réduite et sur la seule bande au sol → quelques dizaines de ms.
 
-async function extractSourceShadow(originalDataUrl, cutoutDataUrl) {
+async function extractSourceShadow(originalDataUrl, cutoutDataUrl, carBounds, params = {}) {
   const [origImg, cutImg] = await Promise.all([loadImg(originalDataUrl), loadImg(cutoutDataUrl)]);
   const W = cutImg.naturalWidth || cutImg.width;
   const H = cutImg.naturalHeight || cutImg.height;
 
-  const origC = document.createElement('canvas');
-  origC.width = W; origC.height = H;
-  const oCtx = origC.getContext('2d');
-  oCtx.drawImage(origImg, 0, 0, W, H);
-  const origPx = oCtx.getImageData(0, 0, W, H).data;
-
-  const maskC = document.createElement('canvas');
-  maskC.width = W; maskC.height = H;
-  const mCtx = maskC.getContext('2d');
-  mCtx.drawImage(cutImg, 0, 0, W, H);
-  const maskPx = mCtx.getImageData(0, 0, W, H).data;
-
-  // Pixels extraits (origPx/maskPx sont des copies) → on peut rendre les deux
-  // canvas pleine résolution tout de suite.
-  freeCanvas(origC, maskC);
-
-  let carL = W, carR = 0, carT = H, carB = 0;
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++)
-      if (maskPx[(y * W + x) * 4 + 3] > 128) {
-        if (x < carL) carL = x; if (x > carR) carR = x;
-        if (y < carT) carT = y; if (y > carB) carB = y;
-      }
-  const carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
-
-  const roiX1 = Math.max(0, Math.floor(carL - W * 0.08));
-  const roiX2 = Math.min(W, Math.ceil(carR + W * 0.08));
-  const roiY1 = Math.max(0, Math.floor(carB - H * 0.18));
-  const roiY2 = Math.min(H, Math.ceil(carB + H * 0.18));
-  const rW = roiX2 - roiX1, rH = roiY2 - roiY1;
-
-  if (rW < 10 || rH < 10) {
-    console.log('[Shadow] ROI too small, skipping');
-    return { matteDataUrl: null, meanAlpha: 0, carBounds };
+  // Bande au sol autour du bas du véhicule, en coordonnées cutout.
+  const carBottom = carBounds.y + carBounds.h;
+  const roiX1 = Math.max(0, Math.floor(carBounds.x - carBounds.w * SHADOW_ROI.sideFrac));
+  const roiX2 = Math.min(W, Math.ceil(carBounds.x + carBounds.w * (1 + SHADOW_ROI.sideFrac)));
+  const roiY1 = Math.max(0, Math.floor(carBottom - carBounds.h * SHADOW_ROI.aboveFrac));
+  const roiY2 = Math.min(H, Math.ceil(carBottom + carBounds.h * SHADOW_ROI.belowFrac));
+  if (roiX2 - roiX1 < 24 || roiY2 - roiY1 < 12) {
+    console.log('[Shadow] ROI trop petit, extraction sautée');
+    return { matteDataUrl: null, meanAlpha: 0 };
   }
+
+  // Échantillonnage du seul ROI, en résolution de travail réduite.
+  const workScale = Math.min(1, SHADOW_WORK_WIDTH / W);
+  const rW = Math.max(2, Math.round((roiX2 - roiX1) * workScale));
+  const rH = Math.max(2, Math.round((roiY2 - roiY1) * workScale));
+  const grabRoi = (img) => {
+    // L'original peut avoir d'autres dimensions que le cutout → remap du ROI.
+    const sx = (img.naturalWidth || img.width) / W;
+    const sy = (img.naturalHeight || img.height) / H;
+    const c = document.createElement('canvas');
+    c.width = rW; c.height = rH;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, roiX1 * sx, roiY1 * sy, (roiX2 - roiX1) * sx, (roiY2 - roiY1) * sy, 0, 0, rW, rH);
+    const d = ctx.getImageData(0, 0, rW, rH).data;
+    freeCanvas(c);
+    return d;
+  };
+  const origPx = grabRoi(origImg);
+  const cutPx = grabRoi(cutImg);
 
   const lum = new Float32Array(rW * rH);
   const isCar = new Uint8Array(rW * rH);
-  for (let ry = 0; ry < rH; ry++)
-    for (let rx = 0; rx < rW; rx++) {
-      const gx = roiX1 + rx, gy = roiY1 + ry;
-      const idx = (gy * W + gx) * 4;
-      lum[ry * rW + rx] = 0.299 * origPx[idx] + 0.587 * origPx[idx + 1] + 0.114 * origPx[idx + 2];
-      isCar[ry * rW + rx] = maskPx[idx + 3] > 128 ? 1 : 0;
-    }
-
-  const SHADOW_CLOSE_RADIUS  = 7;
-  const SHADOW_DENSITY_SIGMA = 5.0;
-  const SHADOW_EDGE_SIGMA    = 7.0;
-  const SHADOW_NOISE_GATE    = 0.02;
-  const SHADOW_MAX_ALPHA     = 0.65;
-
-  const floorRef = estimateFloorBrightness2D(lum, isCar, rW, rH);
-
-  const matte = new Float32Array(rW * rH);
-  let aSum = 0, aCount = 0;
   for (let i = 0; i < rW * rH; i++) {
-    if (isCar[i] || floorRef[i] < 15) { matte[i] = 0; continue; }
-    const raw = (floorRef[i] - lum[i]) / floorRef[i];
-    matte[i] = Math.max(0, Math.min(SHADOW_MAX_ALPHA, raw));
-    if (matte[i] < SHADOW_NOISE_GATE) matte[i] = 0;
-    aSum += matte[i]; aCount++;
+    lum[i] = 0.299 * origPx[i * 4] + 0.587 * origPx[i * 4 + 1] + 0.114 * origPx[i * 4 + 2];
+    isCar[i] = cutPx[i * 4 + 3] > 128 ? 1 : 0;
   }
 
-  const closed = morphCloseFloat(matte, rW, rH, SHADOW_CLOSE_RADIUS);
-  const density = gaussianBlurMask(closed, rW, rH, SHADOW_DENSITY_SIGMA);
-  const smoothed = gaussianBlurMask(density, rW, rH, SHADOW_EDGE_SIGMA);
+  const { matte, meanAlpha } = computeShadowMatte(lum, isCar, rW, rH, {
+    opacity: params.opacity ?? SHADOW_STRENGTH,
+    extraBlurPx: (params.blur ?? 0) * workScale,
+  });
 
-  const fadeMargin = Math.min(rW, rH) * 0.15;
-  for (let ry = 0; ry < rH; ry++)
-    for (let rx = 0; rx < rW; rx++) {
-      const d = Math.min(rx, rW - 1 - rx, ry, rH - 1 - ry);
-      if (d < fadeMargin) {
-        const t = d / fadeMargin;
-        smoothed[ry * rW + rx] *= t * t * (3 - 2 * t);
-      }
-    }
+  // Matte ROI → canvas aux dimensions du cutout, aligné pixel à pixel.
+  const roiCanvas = document.createElement('canvas');
+  roiCanvas.width = rW; roiCanvas.height = rH;
+  const rCtx = roiCanvas.getContext('2d');
+  const roiData = rCtx.createImageData(rW, rH);
+  for (let i = 0; i < rW * rH; i++) {
+    if (matte[i] > 0.004) roiData.data[i * 4 + 3] = Math.round(Math.min(1, matte[i]) * 255);
+  }
+  rCtx.putImageData(roiData, 0, 0);
 
-  const matteCanvas = document.createElement('canvas');
-  matteCanvas.width = W; matteCanvas.height = H;
-  const matteCtx = matteCanvas.getContext('2d');
-  const matteImgData = matteCtx.createImageData(W, H);
-  for (let ry = 0; ry < rH; ry++)
-    for (let rx = 0; rx < rW; rx++) {
-      const a = smoothed[ry * rW + rx];
-      if (a > 0.004) {
-        const gx = roiX1 + rx, gy = roiY1 + ry;
-        matteImgData.data[(gy * W + gx) * 4 + 3] = Math.round(a * 255);
-      }
-    }
-  matteCtx.putImageData(matteImgData, 0, 0);
+  const out = document.createElement('canvas');
+  out.width = W; out.height = H;
+  const oCtx = out.getContext('2d');
+  oCtx.imageSmoothingEnabled = true;
+  oCtx.imageSmoothingQuality = 'high';
+  const yOff = Math.round(params.yOffset ?? 0);
+  oCtx.drawImage(roiCanvas, roiX1, roiY1 + yOff, roiX2 - roiX1, roiY2 - roiY1);
+  const matteDataUrl = out.toDataURL('image/png');
+  freeCanvas(roiCanvas, out);
 
-  const meanAlpha = aCount > 0 ? aSum / aCount : 0;
-  console.log('[Shadow] matte v2: ROI %dx%d [x:%d-%d y:%d-%d] meanAlpha=%.4f',
-    rW, rH, roiX1, roiX2, roiY1, roiY2, meanAlpha);
-
-  const matteDataUrl = matteCanvas.toDataURL('image/png');
-  freeCanvas(matteCanvas);
-  return { matteDataUrl, meanAlpha, carBounds };
+  console.log('[Shadow] extraction: ROI %dx%d (travail %dx%d) meanAlpha=%.4f',
+    roiX2 - roiX1, roiY2 - roiY1, rW, rH, meanAlpha);
+  return { matteDataUrl, meanAlpha };
 }
 
-function estimateFloorBrightness2D(lum, isCar, W, H) {
-  const BLK = 32;
-  const gW = Math.ceil(W / BLK), gH = Math.ceil(H / BLK);
-  const grid = new Float32Array(gW * gH);
+// Garde-fou : si la photo d'origine ne contient aucune ombre exploitable
+// (véhicule déjà détouré sur fond blanc, lumière très diffuse), une simple
+// ellipse de contact douce sous le véhicule pour qu'il ne « flotte » pas.
+function fallbackContactShadow(W, H, carBounds, params = {}) {
+  const opacity = params.opacity ?? SHADOW_STRENGTH;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  const cx = carBounds.x + carBounds.w / 2;
+  const cy = carBounds.y + carBounds.h + (params.yOffset ?? 0);
+  const rx = carBounds.w * 0.46;
+  const ry = Math.max(8, carBounds.h * 0.05);
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(rx, ry);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+  g.addColorStop(0, `rgba(0,0,0,${(0.38 * opacity).toFixed(3)})`);
+  g.addColorStop(0.55, `rgba(0,0,0,${(0.22 * opacity).toFixed(3)})`);
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+  const url = c.toDataURL('image/png');
+  freeCanvas(c);
+  return url;
+}
 
-  for (let gy = 0; gy < gH; gy++)
-    for (let gx = 0; gx < gW; gx++) {
-      const vals = [];
-      const x1 = gx * BLK, x2 = Math.min(x1 + BLK, W);
-      const y1 = gy * BLK, y2 = Math.min(y1 + BLK, H);
-      for (let y = y1; y < y2; y++)
-        for (let x = x1; x < x2; x++)
-          if (!isCar[y * W + x]) vals.push(lum[y * W + x]);
-      vals.sort((a, b) => a - b);
-      grid[gy * gW + gx] = vals.length > 2 ? vals[Math.floor(vals.length * 0.85)] : -1;
+// Point d'entrée unique de l'ombre showroom : la vraie ombre extraite de la
+// photo d'origine, ellipse de contact en secours si elle est inexploitable.
+async function buildShadowMatte(originalDataUrl, cutoutDataURL, carBounds, shadowParams = {}) {
+  const t0 = performance.now();
+  try {
+    if (originalDataUrl) {
+      const src = await extractSourceShadow(originalDataUrl, cutoutDataURL, carBounds, shadowParams);
+      if (src.matteDataUrl && src.meanAlpha >= SHADOW_MIN_MEAN_ALPHA) {
+        console.log('[Shadow] ombre source transcrite en ' + Math.round(performance.now() - t0) + ' ms');
+        return src.matteDataUrl;
+      }
+      console.log('[Shadow] ombre source inexploitable (meanAlpha=' + src.meanAlpha.toFixed(4) + ') → ellipse de contact');
     }
-
-  for (let gy = 0; gy < gH; gy++)
-    for (let gx = 0; gx < gW; gx++) {
-      if (grid[gy * gW + gx] >= 0) continue;
-      let s = 0, c = 0;
-      for (let dy = -3; dy <= 3; dy++)
-        for (let dx = -3; dx <= 3; dx++) {
-          const ny = gy + dy, nx = gx + dx;
-          if (ny >= 0 && ny < gH && nx >= 0 && nx < gW && grid[ny * gW + nx] >= 0) {
-            s += grid[ny * gW + nx]; c++;
-          }
-        }
-      grid[gy * gW + gx] = c > 0 ? s / c : 128;
-    }
-
-  const sg = new Float32Array(gW * gH);
-  for (let gy = 0; gy < gH; gy++)
-    for (let gx = 0; gx < gW; gx++) {
-      let s = 0, c = 0;
-      for (let dy = -1; dy <= 1; dy++)
-        for (let dx = -1; dx <= 1; dx++) {
-          const ny = gy + dy, nx = gx + dx;
-          if (ny >= 0 && ny < gH && nx >= 0 && nx < gW) { s += grid[ny * gW + nx]; c++; }
-        }
-      sg[gy * gW + gx] = s / c;
-    }
-
-  const result = new Float32Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      const gxf = (x + 0.5) / BLK - 0.5;
-      const gyf = (y + 0.5) / BLK - 0.5;
-      const gx0 = Math.max(0, Math.floor(gxf));
-      const gy0 = Math.max(0, Math.floor(gyf));
-      const gx1 = Math.min(gW - 1, gx0 + 1);
-      const gy1 = Math.min(gH - 1, gy0 + 1);
-      const fx = Math.max(0, Math.min(1, gxf - gx0));
-      const fy = Math.max(0, Math.min(1, gyf - gy0));
-      result[y * W + x] =
-        sg[gy0 * gW + gx0] * (1 - fx) * (1 - fy) +
-        sg[gy0 * gW + gx1] * fx * (1 - fy) +
-        sg[gy1 * gW + gx0] * (1 - fx) * fy +
-        sg[gy1 * gW + gx1] * fx * fy;
-    }
-  return result;
+  } catch (e) {
+    console.warn('[Shadow] extraction échouée:', e?.message);
+  }
+  const cutImg = await loadImg(cutoutDataURL);
+  return fallbackContactShadow(cutImg.naturalWidth || cutImg.width, cutImg.naturalHeight || cutImg.height, carBounds, shadowParams);
 }
 
 function getShowroomDebugMode() {
@@ -1732,183 +1646,6 @@ async function separateAttachedSecondary(cutoutDataURL, mainVehicle, plateBox, s
 
   if (removedSec === 0) return cutoutDataURL;
   return c.toDataURL('image/png');
-}
-
-async function generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, shadowParams = {}) {
-  console.time('[Shadow] generateFromAlpha');
-  const img = await loadImg(cutoutDataURL);
-  const fullW = img.naturalWidth || img.width;
-  const fullH = img.naturalHeight || img.height;
-
-  const workScale = Math.min(1, 900 / fullW);
-  const wW = Math.round(fullW * workScale);
-  const wH = Math.round(fullH * workScale);
-
-  const workCanvas = document.createElement('canvas');
-  workCanvas.width = wW; workCanvas.height = wH;
-  const wCtx = workCanvas.getContext('2d');
-  wCtx.drawImage(img, 0, 0, wW, wH);
-  const imgData = wCtx.getImageData(0, 0, wW, wH);
-  const alpha = new Float32Array(wW * wH);
-  let alphaOpaqueCount = 0;
-  for (let i = 0; i < wW * wH; i++) {
-    alpha[i] = imgData.data[i * 4 + 3] / 255;
-    if (alpha[i] > 0.08) alphaOpaqueCount++;
-  }
-
-  const cb = {
-    x: Math.round(carBounds.x * workScale),
-    y: Math.round(carBounds.y * workScale),
-    w: Math.round(carBounds.w * workScale),
-    h: Math.round(carBounds.h * workScale),
-  };
-  // Plate exclusion zone in working coords
-  let plateExcluded = false;
-  let plateLw = -1, plateRw = -1, plateBw = -1;
-  if (plateBox) {
-    plateLw = Math.round((plateBox.x1 ?? plateBox.x ?? 0) * fullW * workScale);
-    plateRw = Math.round((plateBox.x2 ?? ((plateBox.x ?? 0) + (plateBox.w ?? 0))) * fullW * workScale);
-    plateBw = Math.round((plateBox.y2 ?? ((plateBox.y ?? 0) + (plateBox.h ?? 0))) * fullH * workScale);
-    plateExcluded = plateLw >= 0 && plateRw > plateLw;
-  }
-
-  console.log('[Shadow] cutout %dx%d, work %dx%d, scale=' + workScale.toFixed(3) + ', opaquePixels=' + alphaOpaqueCount +
-    ', carBounds=[' + cb.x + ',' + cb.y + ' ' + cb.w + 'x' + cb.h + ']' +
-    (plateExcluded ? ', plateExcluded=[' + plateLw + '-' + plateRw + ']' : ', noPlate'));
-
-  const opMul = shadowParams.opacity ?? SHADOW_STRENGTH;
-  const extraBlur = shadowParams.blur ?? 0;
-  const yOff = Math.round((shadowParams.yOffset ?? 0) * workScale);
-  const spread = shadowParams.spread ?? 1.0;
-
-  // Modèle « occlusion ambiante » dérivé de la silhouette (voir shadowCore.js) :
-  // l'ombre épouse le contour bas du véhicule — dense sous les pneus, présente
-  // sous le bas de caisse, légère sous les porte-à-faux — sans déborder du
-  // gabarit comme le faisait l'ancienne projection cisaillée.
-  const plateZone = plateExcluded ? { x1: plateLw, x2: plateRw, y2: plateBw } : null;
-  const combined = buildShadowMask(alpha, wW, wH, cb, plateZone, {
-    opacity: opMul,
-    spread,
-    yOffsetPx: yOff,
-    extraBlurPx: extraBlur * workScale,
-  });
-
-  let shadowNonZeroCount = 0, shadowMaxAlpha = 0;
-  let shadowMinX = wW, shadowMaxX = 0, shadowMinY = wH, shadowMaxY = 0;
-  for (let i = 0; i < wW * wH; i++) {
-    if (combined[i] > 0.003) {
-      shadowNonZeroCount++;
-      if (combined[i] > shadowMaxAlpha) shadowMaxAlpha = combined[i];
-      const px = i % wW, py = Math.floor(i / wW);
-      if (px < shadowMinX) shadowMinX = px;
-      if (px > shadowMaxX) shadowMaxX = px;
-      if (py < shadowMinY) shadowMinY = py;
-      if (py > shadowMaxY) shadowMaxY = py;
-    }
-  }
-
-  console.log('[Shadow] result: nonZeroPixels=' + shadowNonZeroCount +
-    ', maxAlpha=' + shadowMaxAlpha.toFixed(4) +
-    ', bounds=[' + shadowMinX + ',' + shadowMinY + ']->[' + shadowMaxX + ',' + shadowMaxY + ']');
-
-  if (shadowNonZeroCount === 0) {
-    console.warn('[Shadow] WARNING: shadow is empty! No visible pixels generated.');
-  }
-
-  // Paint to working canvas (alpha only, RGB=0)
-  const shadowCanvas = document.createElement('canvas');
-  shadowCanvas.width = wW; shadowCanvas.height = wH;
-  const sCtx = shadowCanvas.getContext('2d');
-  const shadowImgData = sCtx.createImageData(wW, wH);
-  for (let i = 0; i < wW * wH; i++) {
-    if (combined[i] > 0.003) {
-      shadowImgData.data[i * 4 + 3] = Math.round(Math.min(1, combined[i]) * 255);
-    }
-  }
-  sCtx.putImageData(shadowImgData, 0, 0);
-
-  // Upscale to cutout dimensions
-  const outCanvas = document.createElement('canvas');
-  outCanvas.width = fullW; outCanvas.height = fullH;
-  const oCtx = outCanvas.getContext('2d');
-  oCtx.imageSmoothingEnabled = true;
-  oCtx.imageSmoothingQuality = 'high';
-  oCtx.drawImage(shadowCanvas, 0, 0, fullW, fullH);
-
-  const dataUrl = outCanvas.toDataURL('image/png');
-  freeCanvas(workCanvas, shadowCanvas, outCanvas);
-  console.log('[Shadow] output PNG size=' + dataUrl.length + ' bytes');
-  console.timeEnd('[Shadow] generateFromAlpha');
-  return dataUrl;
-}
-
-// ── Ombre hybride : vraie ombre de la photo d'origine + garde-fou synthétique ──
-// L'ombre EXTRAITE de la photo source (extractSourceShadow) est la plus
-// naturelle possible — c'est littéralement l'ombre réelle du véhicule, avec
-// ses reflets et son dégradé. Mais seule, elle est fragile (elle peut attraper
-// joints de carrelage, ombres d'autres voitures, marquages au sol). On la
-// CONFINE donc à l'empreinte du véhicule via une porte spatiale dérivée de
-// l'ombre synthétique (dilatation douce), et le synthétique reste en plancher
-// (cœur sombre garanti sous la caisse même si l'extraction échoue).
-async function combineShadowMattes(synthUrl, sourceUrl) {
-  const [sImg, oImg] = await Promise.all([loadImg(synthUrl), loadImg(sourceUrl)]);
-  const W0 = sImg.naturalWidth || sImg.width, H0 = sImg.naturalHeight || sImg.height;
-  const scale = Math.min(1, 1200 / W0);
-  const W = Math.round(W0 * scale), H = Math.round(H0 * scale);
-  const grab = (img) => {
-    const c = document.createElement('canvas');
-    c.width = W; c.height = H;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0, W, H);
-    const d = ctx.getImageData(0, 0, W, H).data;
-    freeCanvas(c);
-    return d;
-  };
-  const S = grab(sImg), O = grab(oImg);
-  const sAlpha = new Float32Array(W * H);
-  for (let i = 0; i < W * H; i++) sAlpha[i] = S[i * 4 + 3] / 255;
-  // Porte spatiale = synthétique dilaté (flou large puis gain) : vaut ~1 sur
-  // et autour de l'empreinte, retombe à 0 au-delà.
-  const gate = gaussianBlurMask(sAlpha, W, H, Math.max(4, W * 0.012));
-  const out = document.createElement('canvas');
-  out.width = W; out.height = H;
-  const oCtx = out.getContext('2d');
-  const outData = oCtx.createImageData(W, H);
-  for (let i = 0; i < W * H; i++) {
-    const g = Math.min(1, gate[i] * 5);
-    const v = Math.max(sAlpha[i], (O[i * 4 + 3] / 255) * g);
-    if (v > 0.004) outData.data[i * 4 + 3] = Math.round(Math.min(1, v) * 255);
-  }
-  oCtx.putImageData(outData, 0, 0);
-  // Ré-upscale aux dimensions du cutout
-  const full = document.createElement('canvas');
-  full.width = W0; full.height = H0;
-  const fCtx = full.getContext('2d');
-  fCtx.imageSmoothingEnabled = true; fCtx.imageSmoothingQuality = 'high';
-  fCtx.drawImage(out, 0, 0, W0, H0);
-  const url = full.toDataURL('image/png');
-  freeCanvas(out, full);
-  return url;
-}
-
-// Point d'entrée unique de l'ombre showroom : synthétique (robuste) enrichie
-// de l'ombre réelle extraite de la photo d'origine quand elle est exploitable.
-async function buildShadowMatte(originalDataUrl, cutoutDataURL, carBounds, plateBox, shadowParams = {}) {
-  const synthetic = await generateShadowFromCarAlpha(cutoutDataURL, carBounds, plateBox, shadowParams);
-  if (!originalDataUrl || !synthetic) return synthetic;
-  try {
-    const src = await extractSourceShadow(originalDataUrl, cutoutDataURL);
-    if (!src?.matteDataUrl || (src.meanAlpha ?? 0) < 0.01) {
-      console.log('[Shadow] ombre source inexploitable (meanAlpha=' + (src?.meanAlpha ?? 0).toFixed(3) + '), synthétique seule');
-      return synthetic;
-    }
-    const combined = await combineShadowMattes(synthetic, src.matteDataUrl);
-    console.log('[Shadow] ombre hybride: source (meanAlpha=' + src.meanAlpha.toFixed(3) + ') + synthétique');
-    return combined;
-  } catch (e) {
-    console.warn('[Shadow] transfert ombre source échoué:', e?.message);
-    return synthetic;
-  }
 }
 
 // Moyenne RGB + luminance sur les pixels opaques d'un ImageData (alpha ≥ 16).
@@ -3356,7 +3093,6 @@ export default function AutoCache() {
   const [shadowOpacity, setShadowOpacity] = useState(SHADOW_STRENGTH);
   const [shadowBlur, setShadowBlur] = useState(0);
   const [shadowYOffset, setShadowYOffset] = useState(0);
-  const [shadowSpread, setShadowSpread] = useState(1.0);
   const shadowTimerRef = useRef(null);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -3706,8 +3442,8 @@ export default function AutoCache() {
           const cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
 
           // Scan tight bbox du véhicule UNE seule fois — réutilisé par
-          // generateShadowFromCarAlpha (si shadow synthétique) ET par
-          // compositeCarOnBg (via le hint), évitant un re-scan plein-résolution.
+          // buildShadowMatte (extraction de l'ombre) ET par compositeCarOnBg
+          // (via le hint), évitant un re-scan plein-résolution.
           const cutImg = await loadImg(cutout);
           const cW = cutImg.naturalWidth || cutImg.width, cH = cutImg.naturalHeight || cutImg.height;
           const scanC = document.createElement('canvas');
@@ -3728,7 +3464,7 @@ export default function AutoCache() {
 
           let shadowMatteUrl = null;
           if (showroomFloorShadow) {
-            shadowMatteUrl = await buildShadowMatte(r.baseDataURL, cutout, carBounds, r.yoloBbox ?? null);
+            shadowMatteUrl = await buildShadowMatte(r.baseDataURL, cutout, carBounds);
           } else {
             console.log('[Showroom] floor shadow skipped (case décochée)');
           }
@@ -4180,7 +3916,6 @@ export default function AutoCache() {
     setShadowOpacity(SHADOW_STRENGTH);
     setShadowBlur(0);
     setShadowYOffset(0);
-    setShadowSpread(1.0);
   };
 
   const NUDGE_STEP = 75; // pas de déplacement en px sur canvas 2400×1350
@@ -4250,7 +3985,7 @@ export default function AutoCache() {
   };
 
   const onShadowParamChange = (param, value) => {
-    const setters = { opacity: setShadowOpacity, blur: setShadowBlur, yOffset: setShadowYOffset, spread: setShadowSpread };
+    const setters = { opacity: setShadowOpacity, blur: setShadowBlur, yOffset: setShadowYOffset };
     setters[param](value);
     clearTimeout(shadowTimerRef.current);
     shadowTimerRef.current = setTimeout(async () => {
@@ -4276,9 +4011,8 @@ export default function AutoCache() {
           carBounds = { x: carL, y: carT, w: carR - carL, h: carB - carT };
           freeCanvas(scanC);
         }
-        const params = { opacity: shadowOpacity, blur: shadowBlur, yOffset: shadowYOffset, spread: shadowSpread, [param]: value };
-        const plateBox = lightbox.yoloBbox ?? null;
-        const newMatte = await buildShadowMatte(lightbox.baseDataURL, lightbox.cutoutDataURL, carBounds, plateBox, params);
+        const params = { opacity: shadowOpacity, blur: shadowBlur, yOffset: shadowYOffset, [param]: value };
+        const newMatte = await buildShadowMatte(lightbox.baseDataURL, lightbox.cutoutDataURL, carBounds, params);
         const logoImgEl = await loadImg(lightbox.logoPreview);
         const wOpts = lightbox.wallLogoSrc ? { src: lightbox.wallLogoSrc, scale: lightbox.wallLogoScale, opacity: lightbox.wallLogoOpacity, x: lightbox.wallLogoPos?.x ?? 0.5, y: lightbox.wallLogoPos?.y ?? 0.25 } : null;
         const sr = await compositeCarOnBg(
@@ -6762,7 +6496,7 @@ export default function AutoCache() {
                   // Respect the "Ombres au sol" choice: don't resurrect a shadow
                   // the user disabled when they re-edit the mask.
                   const newShadow = showroomFloorShadow
-                    ? await buildShadowMatte(lightbox.baseDataURL, correctedDataURL, carBounds, lightbox.yoloBbox ?? null)
+                    ? await buildShadowMatte(lightbox.baseDataURL, correctedDataURL, carBounds)
                     : null;
                   // Recomposite
                   const wOpts = lightbox.wallLogoSrc ? {
@@ -6817,7 +6551,6 @@ export default function AutoCache() {
                 { label: "Opacité", param: "opacity", value: shadowOpacity, min: 0, max: 1, step: 0.05 },
                 { label: "Flou", param: "blur", value: shadowBlur, min: 0, max: 40, step: 1 },
                 { label: "Décalage Y", param: "yOffset", value: shadowYOffset, min: -20, max: 20, step: 1 },
-                { label: "Étendue", param: "spread", value: shadowSpread, min: 0.5, max: 2.0, step: 0.05 },
               ].map(({ label, param, value, min, max, step }) => (
                 <div key={param} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", minWidth: 64 }}>{label}</span>

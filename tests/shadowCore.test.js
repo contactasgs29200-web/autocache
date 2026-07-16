@@ -1,199 +1,153 @@
-// Tests du modèle d'ombre showroom (shadowCore) sur une silhouette
-// synthétique de voiture vue de profil : caisse rectangulaire + deux roues
-// qui dépassent + porte-à-faux avant/arrière.
+// Tests du cœur d'extraction de l'ombre réelle (shadowCore) sur des scènes
+// synthétiques : sol uniforme, silhouette de voiture (masque binaire) et
+// zones d'ombre peintes dans la luminance.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildShadowMask,
-  computeBottomContour,
-  estimateGroundLine,
-  fillContourGaps,
+  computeShadowMatte,
+  estimateFloorBrightness,
+  dilateMask,
+  keepConnectedToCar,
+  EXTRACT_MODEL,
 } from '../src/shadowCore.js';
 
-const W = 600, H = 360;
+const W = 400, H = 160;
+const FLOOR = 180, SHADOW = 90; // assombrissement de 50 %
 
-// Silhouette : caisse de x=100 à x=500, bas de caisse à y=240 ;
-// roues (rectangles arrondis grossiers) x∈[140,200] et x∈[400,460]
-// descendant à y=280 ; le reste du canevas est transparent.
-function makeCarAlpha() {
-  const alpha = new Float32Array(W * H);
-  const paint = (x1, x2, y1, y2) => {
-    for (let y = y1; y <= y2; y++)
-      for (let x = x1; x <= x2; x++) alpha[y * W + x] = 1;
-  };
-  paint(100, 500, 120, 240);   // caisse
-  paint(140, 200, 240, 280);   // roue avant
-  paint(400, 460, 240, 280);   // roue arrière
-  return alpha;
-}
-const carBounds = { x: 100, y: 120, w: 400, h: 160 };
-
-test('computeBottomContour suit le bas de la silhouette', () => {
-  const contour = computeBottomContour(makeCarAlpha(), W, H, carBounds, null);
-  assert.equal(contour[170], 280); // sous la roue avant
-  assert.equal(contour[300], 240); // sous la caisse entre les roues
-  assert.equal(contour[430], 280); // sous la roue arrière
-  assert.equal(contour[50], -1);   // hors gabarit
-});
-
-test('computeBottomContour interpole la zone plaque', () => {
-  // Plaque sur la caisse entre les roues : le contour doit rester ~240,
-  // pas -1, pas une valeur aberrante.
-  const contour = computeBottomContour(makeCarAlpha(), W, H, carBounds, { x1: 280, x2: 330 });
-  for (let x = 280; x <= 330; x++) {
-    assert.ok(Math.abs(contour[x] - 240) < 2, `contour[${x}]=${contour[x]}`);
-  }
-});
-
-test('fillContourGaps comble les trous internes', () => {
-  const c = new Float32Array(W).fill(-1);
-  c[100] = 200; c[101] = 200; c[110] = 210;
-  fillContourGaps(c, W);
-  assert.ok(c[105] > 200 && c[105] < 210);
-  assert.equal(c[50], -1);  // hors plage : intact
-  assert.equal(c[200], -1);
-});
-
-test('estimateGroundLine touche les appuis et surplombe le bas de caisse', () => {
-  const contour = computeBottomContour(makeCarAlpha(), W, H, carBounds, null);
-  fillContourGaps(contour, W);
-  const g = estimateGroundLine(contour, W, 24);
-  // Aux roues : le sol touche le contour
-  assert.ok(Math.abs(g[170] - 280) < 2);
-  assert.ok(Math.abs(g[430] - 280) < 2);
-  // Entre les roues : le sol reste sous le bas de caisse (garde au sol > 0)
-  assert.ok(g[300] > 250, `g[300]=${g[300]}`);
-  // Jamais au-dessus du contour
-  for (let x = 100; x <= 500; x++) {
-    if (contour[x] >= 0) assert.ok(g[x] >= contour[x] - 0.01);
-  }
-});
-
-test('estimateGroundLine suit la perspective (roues à hauteurs différentes)', () => {
-  // Vue 3/4 : roue proche caméra plus basse (y=300) que la roue éloignée
-  // (y=260). La ligne de sol doit être INCLINÉE : toucher chaque roue et
-  // interpoler linéairement entre les deux — pas rester au niveau de la
-  // roue la plus basse.
-  const alpha = new Float32Array(W * H);
-  const paint = (x1, x2, y1, y2) => {
-    for (let y = y1; y <= y2; y++)
-      for (let x = x1; x <= x2; x++) alpha[y * W + x] = 1;
-  };
-  paint(100, 500, 100, 230);   // caisse
-  paint(130, 190, 230, 300);   // roue avant (proche, basse)
-  paint(410, 470, 230, 260);   // roue arrière (loin, haute)
-  const contour = computeBottomContour(alpha, W, H, { x: 100, y: 100, w: 400, h: 200 }, null);
-  fillContourGaps(contour, W);
-  const g = estimateGroundLine(contour, W, 24);
-  assert.ok(Math.abs(g[160] - 300) < 3, `roue avant: g=${g[160]}`);
-  assert.ok(Math.abs(g[440] - 260) < 3, `roue arrière: g=${g[440]}`);
-  // Milieu : proche de la droite reliant les deux contacts (~280)
-  assert.ok(Math.abs(g[300] - 280) < 8, `milieu: g=${g[300]}`);
-});
-
-test("l'ombre reste dans l'empreinte du véhicule (± flou)", () => {
-  const mask = buildShadowMask(makeCarAlpha(), W, H, carBounds, null, {});
-  const margin = 40; // tolérance flou ambiant
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      const v = mask[y * W + x];
-      if (v > 0.02) {
-        assert.ok(x >= carBounds.x - margin && x <= carBounds.x + carBounds.w + margin,
-          `ombre hors gabarit en x=${x},y=${y} (v=${v.toFixed(3)})`);
-      }
-    }
-});
-
-test("pas d'ombre au-dessus du bas de caisse", () => {
-  const mask = buildShadowMask(makeCarAlpha(), W, H, carBounds, null, {});
-  // Au-dessus du contour (moins l'overlap + flou), le masque doit être nul :
-  // l'ombre ne doit pas remonter sur la carrosserie.
-  for (let x = 220; x <= 380; x++) {
-    for (let y = 0; y < 225; y++) {
-      assert.ok(mask[y * W + x] < 0.03,
-        `ombre au-dessus de la caisse en x=${x},y=${y}`);
-    }
-  }
-});
-
-test("l'ombre est plus dense au contact des roues qu'en bout de porte-à-faux", () => {
-  const mask = buildShadowMask(makeCarAlpha(), W, H, carBounds, null, {});
-  const colMax = (x) => {
-    let m = 0;
-    for (let y = 0; y < H; y++) m = Math.max(m, mask[y * W + x]);
-    return m;
-  };
-  const wheelDark = colMax(170);         // sous la roue avant
-  const overhangDark = colMax(105);      // sous le porte-à-faux avant
-  assert.ok(wheelDark > overhangDark, `roue=${wheelDark.toFixed(3)} porte-à-faux=${overhangDark.toFixed(3)}`);
-  assert.ok(wheelDark > 0.35, `contact roue trop clair: ${wheelDark.toFixed(3)}`);
-});
-
-test("l'ombre suit le contour : présente sous le bas de caisse entre les roues", () => {
-  const mask = buildShadowMask(makeCarAlpha(), W, H, carBounds, null, {});
-  // Entre les roues, juste sous le bas de caisse (y ≈ 245-275), l'ombre doit
-  // exister (zone occluse) — c'était le cœur du bug : une nappe déconnectée
-  // de la silhouette.
-  let maxBetween = 0;
-  for (let x = 260; x <= 340; x++)
-    for (let y = 245; y <= 275; y++)
-      maxBetween = Math.max(maxBetween, mask[y * W + x]);
-  assert.ok(maxBetween > 0.25, `ombre sous caisse trop faible: ${maxBetween.toFixed(3)}`);
-});
-
-test('opacity=0 → masque vide, spread/yOffset appliqués sans erreur', () => {
-  const alpha = makeCarAlpha();
-  const off = buildShadowMask(alpha, W, H, carBounds, null, { opacity: 0 });
-  assert.ok(off.every(v => v < 0.005));
-  const shifted = buildShadowMask(alpha, W, H, carBounds, null, { yOffsetPx: 10, spread: 1.4, extraBlurPx: 2 });
-  let any = 0;
-  for (let i = 0; i < shifted.length; i++) any = Math.max(any, shifted[i]);
-  assert.ok(any > 0.2);
-});
-
-test('silhouette vide → masque vide sans erreur', () => {
-  const empty = new Float32Array(W * H);
-  const mask = buildShadowMask(empty, W, H, { x: 0, y: 0, w: 10, h: 10 }, null, {});
-  assert.ok(mask.every(v => v === 0));
-});
-
-// ── Défenses contre les débris de détourage (cause du bug « l'ombre
-// coule loin sous la voiture » observé sur photo réelle) ──
-
-function makeCarAlphaWithDebris() {
-  const alpha = makeCarAlpha();
-  const paint = (x1, x2, y1, y2, v = 1) => {
-    for (let y = y1; y <= y2; y++)
-      for (let x = x1; x <= x2; x++) alpha[y * W + x] = v;
-  };
-  paint(250, 300, 320, 334);  // blob détaché (reste d'ombre) sous la caisse
-  paint(340, 344, 300, 345);  // wisp fin qui descend très bas
-  paint(470, 476, 330, 336);  // petit speck isolé
-  return alpha;
+function rect(arr, x1, x2, y1, y2, v) {
+  for (let y = y1; y <= y2; y++)
+    for (let x = x1; x <= x2; x++) arr[y * W + x] = v;
 }
 
-test("les débris détachés sous la caisse ne tirent pas l'ombre vers le bas", () => {
-  const mask = buildShadowMask(makeCarAlphaWithDebris(), W, H,
-    { x: 100, y: 120, w: 400, h: 226 }, null, {});
-  // Les roues descendent à y=280. Sans les défenses, les débris (jusqu'à
-  // y=345) créent une nappe bien plus basse. L'ombre doit rester bornée un
-  // peu sous les roues (pénombre comprise), pas au niveau des débris.
-  let deepest = 0;
-  for (let y = H - 1; y >= 0 && !deepest; y--)
-    for (let x = 0; x < W; x++)
-      if (mask[y * W + x] > 0.05) { deepest = y; break; }
-  assert.ok(deepest < 320, `ombre trop profonde: y=${deepest} (débris non filtrés)`);
+// Scène de référence : sol uniforme, bas de voiture en haut du cadre
+// (x∈[100,300], y∈[0,79]) et vraie ombre au sol sous la voiture
+// (x∈[90,310], y∈[80,112]).
+function makeScene() {
+  const lum = new Float32Array(W * H).fill(FLOOR);
+  const isCar = new Uint8Array(W * H);
+  rect(isCar, 100, 300, 0, 79, 1);
+  rect(lum, 90, 310, 80, 112, SHADOW);
+  return { lum, isCar };
+}
+
+test("l'ombre réelle est détectée avec sa densité d'origine", () => {
+  const { lum, isCar } = makeScene();
+  const { matte, meanAlpha } = computeShadowMatte(lum, isCar, W, H);
+  // Au cœur de l'ombre : densité ≈ (180-90)/180 = 0.5, préservée par le
+  // lissage léger (pas de double flou qui dilue).
+  const v = matte[96 * W + 200];
+  assert.ok(v > 0.35, `ombre trop faible: ${v.toFixed(3)}`);
+  assert.ok(v <= EXTRACT_MODEL.maxAlpha + 0.01, `ombre trop dense: ${v.toFixed(3)}`);
+  assert.ok(meanAlpha > 0.02, `meanAlpha=${meanAlpha.toFixed(4)}`);
 });
 
-test('le masque avec débris reste proche du masque propre', () => {
-  const clean = buildShadowMask(makeCarAlpha(), W, H, carBounds, null, {});
-  const noisy = buildShadowMask(makeCarAlphaWithDebris(), W, H,
-    { x: 100, y: 120, w: 400, h: 226 }, null, {});
-  // Écart moyen faible : les débris ne doivent pas remodeler l'ombre.
-  let diff = 0, count = 0;
-  for (let i = 0; i < W * H; i++) {
-    if (clean[i] > 0.02 || noisy[i] > 0.02) { diff += Math.abs(clean[i] - noisy[i]); count++; }
-  }
-  const meanDiff = diff / Math.max(1, count);
-  assert.ok(meanDiff < 0.08, `écart moyen trop grand: ${meanDiff.toFixed(4)}`);
+test("aucune ombre n'est peinte sur la carrosserie", () => {
+  const { lum, isCar } = makeScene();
+  const { matte } = computeShadowMatte(lum, isCar, W, H);
+  // Profondément dans le masque voiture (loin du bord + flou) : rien.
+  assert.ok(matte[30 * W + 200] < 0.02, `ombre sur la voiture: ${matte[30 * W + 200].toFixed(3)}`);
+});
+
+test('les taches sombres non rattachées au véhicule sont rejetées', () => {
+  const { lum, isCar } = makeScene();
+  // Tache d'huile / joint de carrelage isolé, loin de la voiture.
+  rect(lum, 30, 60, 115, 135, SHADOW);
+  const { matte } = computeShadowMatte(lum, isCar, W, H);
+  assert.ok(matte[125 * W + 45] < 0.02, `tache isolée conservée: ${matte[125 * W + 45].toFixed(3)}`);
+  // La vraie ombre, elle, survit.
+  assert.ok(matte[96 * W + 200] > 0.35);
+});
+
+test("un assombrissement négligeable ne crée pas d'ombre (noise gate)", () => {
+  const lum = new Float32Array(W * H).fill(FLOOR);
+  const isCar = new Uint8Array(W * H);
+  rect(isCar, 100, 300, 0, 79, 1);
+  // Léger voile sous la voiture : 3 % d'assombrissement, sous le seuil.
+  rect(lum, 90, 310, 80, 112, FLOOR * 0.97);
+  const { matte, meanAlpha } = computeShadowMatte(lum, isCar, W, H);
+  assert.ok(meanAlpha < 0.005, `meanAlpha=${meanAlpha.toFixed(4)}`);
+  assert.ok(matte[96 * W + 200] < 0.05);
+});
+
+test('sol uniforme sans ombre → matte vide (meanAlpha ≈ 0)', () => {
+  const lum = new Float32Array(W * H).fill(FLOOR);
+  const isCar = new Uint8Array(W * H);
+  rect(isCar, 100, 300, 0, 79, 1);
+  const { matte, meanAlpha } = computeShadowMatte(lum, isCar, W, H);
+  assert.ok(meanAlpha < 0.005, `meanAlpha=${meanAlpha.toFixed(4)}`);
+  let max = 0;
+  for (let i = 0; i < W * H; i++) max = Math.max(max, matte[i]);
+  assert.ok(max < 0.06, `résidu max=${max.toFixed(3)}`);
+});
+
+test('silhouette vide → matte vide sans erreur (rien de rattaché)', () => {
+  const lum = new Float32Array(W * H).fill(FLOOR);
+  rect(lum, 90, 310, 80, 112, SHADOW); // du sombre, mais pas de voiture
+  const isCar = new Uint8Array(W * H);
+  const { matte, meanAlpha } = computeShadowMatte(lum, isCar, W, H);
+  assert.ok(matte.every(v => v < 0.02));
+  assert.ok(meanAlpha < 0.005);
+});
+
+test("l'ombre meurt en douceur aux bords de la zone analysée", () => {
+  const { lum, isCar } = makeScene();
+  // Ombre prolongée jusqu'au bord gauche du cadre.
+  rect(lum, 0, 310, 80, 112, SHADOW);
+  const { matte } = computeShadowMatte(lum, isCar, W, H);
+  const edge = matte[96 * W + 2], mid = matte[96 * W + 60];
+  assert.ok(edge < 0.08, `bord non fondu: ${edge.toFixed(3)}`);
+  assert.ok(mid > 0.3, `ombre absente hors fondu: ${mid.toFixed(3)}`);
+  assert.ok(edge < mid);
+});
+
+test("une ombre couvrant des blocs entiers ne devient pas sa propre référence sol", () => {
+  const lum = new Float32Array(W * H).fill(FLOOR);
+  const isCar = new Uint8Array(W * H);
+  rect(isCar, 100, 300, 0, 79, 1);
+  // Nappe d'ombre dense sur toute la largeur de la voiture, plus haute
+  // qu'un bloc (32 px) : sans garde-fou, le percentile par bloc renverrait
+  // la luminance de l'ombre et la ferait disparaître du matte.
+  rect(lum, 100, 300, 80, 125, SHADOW);
+  const floorRef = estimateFloorBrightness(lum, isCar, W, H);
+  assert.ok(floorRef[100 * W + 200] > 150,
+    `référence sol contaminée par l'ombre: ${floorRef[100 * W + 200].toFixed(1)}`);
+  const { matte } = computeShadowMatte(lum, isCar, W, H);
+  assert.ok(matte[100 * W + 200] > 0.3, `cœur d'ombre troué: ${matte[100 * W + 200].toFixed(3)}`);
+});
+
+test("opacity et extraBlurPx s'appliquent au matte", () => {
+  const { lum, isCar } = makeScene();
+  const full = computeShadowMatte(lum, isCar, W, H).matte;
+  const half = computeShadowMatte(lum, isCar, W, H, { opacity: 0.5 }).matte;
+  assert.ok(Math.abs(half[96 * W + 200] - full[96 * W + 200] * 0.5) < 0.01);
+  const zero = computeShadowMatte(lum, isCar, W, H, { opacity: 0 }).matte;
+  assert.ok(zero.every(v => v < 0.005));
+  // Flou supplémentaire : la transition au bord de l'ombre s'étale.
+  const blurred = computeShadowMatte(lum, isCar, W, H, { extraBlurPx: 6 }).matte;
+  const outside = 118; // 6 px sous le bord bas de l'ombre (y=112)
+  assert.ok(blurred[outside * W + 200] > full[outside * W + 200],
+    `flou sans effet: ${blurred[outside * W + 200].toFixed(3)} vs ${full[outside * W + 200].toFixed(3)}`);
+});
+
+test('dilateMask étend un pixel isolé en carré (2r+1)²', () => {
+  const m = new Uint8Array(W * H);
+  m[50 * W + 50] = 1;
+  const d = dilateMask(m, W, H, 2);
+  let count = 0;
+  for (let i = 0; i < W * H; i++) count += d[i];
+  assert.equal(count, 25);
+  assert.equal(d[48 * W + 48], 1);
+  assert.equal(d[52 * W + 52], 1);
+  assert.equal(d[47 * W + 50], 0);
+});
+
+test('keepConnectedToCar conserve le connexe et purge le reste', () => {
+  const matte = new Float32Array(W * H);
+  const car = new Uint8Array(W * H);
+  rect(car, 100, 300, 0, 79, 1);
+  rect(matte, 100, 300, 80, 100, 0.5);  // touche la voiture
+  rect(matte, 10, 30, 120, 140, 0.5);   // îlot isolé
+  keepConnectedToCar(matte, car, W, H);
+  assert.ok(matte[90 * W + 200] === 0.5);
+  assert.ok(matte[130 * W + 20] === 0);
 });
