@@ -3197,7 +3197,7 @@ const SUBSCRIPTION_FORMULES = [
 ];
 const FORMULE_LABELS = { weekly: "Hebdomadaire", monthly: "Mensuelle", annual: "Annuelle" };
 const SUBSCRIPTION_FEATURES = [
-  "400 photos / mois",
+  "230 photos / mois",
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
@@ -4006,7 +4006,7 @@ export default function AutoCache() {
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "premium" (ancien : "essential" | "pro")
   const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
-  const PLAN_LIMIT = isPaid ? 400 : TRIAL_LIMIT;
+  const PLAN_LIMIT = isPaid ? 230 : TRIAL_LIMIT;
   const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
   // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
   const canUseShowroom  = isPaid || userPlan === "trial";
@@ -4039,7 +4039,7 @@ export default function AutoCache() {
     setSubInfoLoading(false);
   }, [user?.id, subInfoLoading]);
 
-  // ── Renouvellement mensuel des crédits (400 photos / mois) ──
+  // ── Renouvellement mensuel des crédits (230 photos / mois) ──
   // Indépendant de la cadence de facturation : que l'abonnement soit hebdo,
   // mensuel ou annuel, le quota se réinitialise chaque mois au même jour.
   useEffect(() => {
@@ -4088,7 +4088,8 @@ export default function AutoCache() {
 
   // Grille des 3 formules — même format que les cartes plans (liste cochée par carte)
   const renderFormulesGrid = () => (
-    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 24 }}>
+    <>
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
       {SUBSCRIPTION_FORMULES.map(f => {
         const hot = f.key === "monthly";
         return (
@@ -4124,6 +4125,14 @@ export default function AutoCache() {
         );
       })}
     </div>
+    {/* Plan personnalisé : volumes supérieurs sur devis auprès du service commercial */}
+    <div style={{ textAlign: "center", background: "var(--c-0a0a0a)", border: "1px solid var(--c-1c1c1c)", borderRadius: 4, padding: "12px 16px", marginBottom: 24, fontSize: 11, color: "var(--c-999)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.7 }}>
+      Besoin de plus de 230 photos / mois ? Un <span style={{ color: "var(--c-ddd5c8)", fontWeight: 700 }}>plan personnalisé</span> est possible sur demande auprès de notre service commercial :<br />
+      <a href="mailto:contact.asgs29200@gmail.com" style={{ color: "#f26522", textDecoration: "none", fontWeight: 700 }}>contact.asgs29200@gmail.com</a>
+      <span style={{ margin: "0 8px", color: "var(--c-555)" }}>·</span>
+      <a href="tel:+33756981729" style={{ color: "#f26522", textDecoration: "none", fontWeight: 700 }}>07 56 98 17 29</a>
+    </div>
+    </>
   );
 
   // Close credit popup on click outside
@@ -7071,7 +7080,7 @@ export default function AutoCache() {
                       {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, letterSpacing: 1 }}>
-                      400 photos / mois · Toutes les fonctionnalités incluses
+                      230 photos / mois · Toutes les fonctionnalités incluses
                     </div>
                   </div>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
@@ -7079,6 +7088,10 @@ export default function AutoCache() {
 
                 <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 16 }}>
                   Pour changer de formule (hebdo / mensuel / annuel) ou mettre à jour votre paiement, ouvrez votre espace de facturation ci-dessous.
+                  <br />Besoin de plus de 230 photos / mois ? Un plan personnalisé est possible sur demande auprès de notre service commercial :{" "}
+                  <a href="mailto:contact.asgs29200@gmail.com" style={{ color: "#f26522", textDecoration: "none", fontWeight: 700 }}>contact.asgs29200@gmail.com</a>
+                  <span style={{ margin: "0 6px", color: "var(--c-555)" }}>·</span>
+                  <a href="tel:+33756981729" style={{ color: "#f26522", textDecoration: "none", fontWeight: 700 }}>07 56 98 17 29</a>
                 </div>
 
                 {/* Bouton Factures */}
