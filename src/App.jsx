@@ -3,7 +3,7 @@ import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
-import { orderQuad, quadArea } from "./plateGeometry.js";
+import { orderQuad, quadArea, snapQuadOutward } from "./plateGeometry.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -1740,8 +1740,8 @@ function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
 }
 
 // Appel bas niveau à /api/plate-corners (Claude Vision).
-// tier "best" force Fable 5 (escalade qualité) ; sinon modèle économique
-// (Haiku pour locate, Sonnet 5 pour refine) choisi côté serveur.
+// tier "best" = l'UNIQUE escalade (Sonnet 5 en effort haut) — demandée
+// seulement quand le résultat économique échoue aux contrôles locaux.
 async function fablePlateAPI(b64DataUrl, mode, tier) {
   const b64 = b64DataUrl.includes(',') ? b64DataUrl.split(',')[1] : b64DataUrl;
   const r = await fetch('/api/plate-corners', {
@@ -1757,14 +1757,17 @@ async function fablePlateAPI(b64DataUrl, mode, tier) {
   return r.json();
 }
 
-// Détection plaque — Claude (Fable 5) Vision en interne, en DEUX PASSES.
+// Détection plaque — Claude Vision en DEUX PASSES, au coût minimal.
 // Sur l'image entière, la plaque est trop petite (~3% de l'image) pour que le
-// modèle place les coins au pixel près : les coordonnées dérivent (cache posé
-// à côté / trop grand). On demande donc d'abord une bbox grossière sur
-// l'image entière (passe "locate"), puis on recadre/zoome sur cette zone et
-// on redemande les 4 coins exacts sur le crop (passe "refine"), où la plaque
-// occupe l'essentiel de l'image. Les coins du crop sont ensuite reprojetés
-// dans le repère de la photo complète.
+// modèle place les coins au pixel près. On demande donc une bbox grossière
+// sur l'image entière (passe "locate", Haiku), puis on recadre/zoome sur
+// cette zone et on demande les 4 coins exacts sur le crop (passe "refine",
+// Sonnet 5), où la plaque occupe l'essentiel de l'image. Les coins sont
+// ensuite AIMANTÉS localement sur le vrai contour de la plaque (gradient de
+// luminance, pur JS — voir snapQuadOutward) puis reprojetés dans le repère
+// de la photo complète. Les anciennes passes de vérification LLM et
+// escalades multiples sont remplacées par des contrôles géométriques
+// gratuits + UNE escalade maximum par étape.
 // Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
 // normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
 async function detectPlateFable(imageFile) {
@@ -1774,18 +1777,20 @@ async function detectPlateFable(imageFile) {
     URL.revokeObjectURL(url);
     const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
 
-    // Image entière downscalée (partagée par les deux tentatives de locate).
-    const fullScale = Math.min(1, 1800 / Math.max(W, H));
+    // Image entière downscalée à 1568 px (résolution max de la vision Haiku :
+    // envoyer plus grand ne fait que gonfler l'upload).
+    const fullScale = Math.min(1, 1568 / Math.max(W, H));
     const fc = document.createElement('canvas');
     fc.width = Math.max(1, Math.round(W * fullScale));
     fc.height = Math.max(1, Math.round(H * fullScale));
     fc.getContext('2d').drawImage(img, 0, 0, fc.width, fc.height);
     const fullB64 = fc.toDataURL('image/jpeg', 0.85);
+    freeCanvas(fc);
 
     // Crop zoomé autour d'une bbox locate, avec une large marge (la bbox est
     // approximative, la plaque doit rester entière dans le crop même décalée).
-    // marginMult permet d'élargir encore le cadrage quand le premier essai
-    // s'est révélé trop serré (voir touchesEdge plus bas).
+    // marginMult élargit le cadrage quand le premier essai était trop serré.
+    // Renvoie aussi la luminance du crop pour l'aimantation locale des bords.
     const buildCrop = (box, marginMult = 1) => {
       if (!box || ![box.x1, box.y1, box.x2, box.y2].every(v => typeof v === 'number' && v >= -0.1 && v <= 1.1)
           || box.x2 <= box.x1 || box.y2 <= box.y1) return null;
@@ -1804,7 +1809,15 @@ async function detectPlateFable(imageFile) {
       cctx.imageSmoothingEnabled = true;
       cctx.imageSmoothingQuality = 'high';
       cctx.drawImage(img, cx1 * W, cy1 * H, cropW, cropH, 0, 0, cc.width, cc.height);
-      return { b64: cc.toDataURL('image/jpeg', 0.92), cx1, cy1, cx2, cy2 };
+      const b64 = cc.toDataURL('image/jpeg', 0.92);
+      const px = cctx.getImageData(0, 0, cc.width, cc.height).data;
+      const lum = new Float32Array(cc.width * cc.height);
+      for (let i = 0; i < lum.length; i++) {
+        lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+      }
+      const crop = { b64, cx1, cy1, cx2, cy2, w: cc.width, h: cc.height, lum };
+      freeCanvas(cc);
+      return crop;
     };
 
     // Sanity check : le quad doit être une plaque plausible (plus large que
@@ -1816,11 +1829,10 @@ async function detectPlateFable(imageFile) {
       return qw >= 4 && qh >= 2 && qw / qh >= 1.2 && qw / qh <= 12;
     };
 
-    // Refine sur un crop → coins reprojetés dans le repère de la photo
-    // complète, ou null si absent/implausible. `touchesEdge` signale qu'un
-    // coin colle au bord du crop : la plaque déborde probablement du
-    // cadrage (bbox locate sous-estimée) et les coins renvoyés sont alors
-    // tronqués — le cache posé dessus ne couvre pas toute la plaque.
+    // Refine sur un crop → aimantation locale des bords → coins reprojetés
+    // dans le repère de la photo complète, ou null si absent/implausible.
+    // `touchesEdge` signale qu'un coin colle au bord du crop : la plaque
+    // déborde probablement du cadrage et les coins sont tronqués.
     const refineOnCrop = async (crop, tier) => {
       const ref = await fablePlateAPI(crop.b64, 'refine', tier);
       if (!ref || !ref.found) return null;
@@ -1828,20 +1840,23 @@ async function detectPlateFable(imageFile) {
       const touchesEdge = [ref.tl, ref.tr, ref.br, ref.bl].some(
         p => p.x <= EDGE || p.x >= 1 - EDGE || p.y <= EDGE || p.y >= 1 - EDGE
       );
+      // Aimantation : chaque bord est poussé vers l'extérieur jusqu'au vrai
+      // contour de la plaque (gratuit, garantit la couverture bord à bord).
+      const toPx = p => ({ x: Math.min(1, Math.max(0, p.x)) * crop.w, y: Math.min(1, Math.max(0, p.y)) * crop.h });
+      let quad = { tl: toPx(ref.tl), tr: toPx(ref.tr), br: toPx(ref.br), bl: toPx(ref.bl) };
+      quad = snapQuadOutward(crop.lum, crop.w, crop.h, quad, Math.max(3, Math.round(crop.w * 0.006)));
       const map = p => ({
-        x: crop.cx1 + Math.min(1, Math.max(0, p.x)) * (crop.cx2 - crop.cx1),
-        y: crop.cy1 + Math.min(1, Math.max(0, p.y)) * (crop.cy2 - crop.cy1),
+        x: crop.cx1 + Math.min(1, Math.max(0, p.x / crop.w)) * (crop.cx2 - crop.cx1),
+        y: crop.cy1 + Math.min(1, Math.max(0, p.y / crop.h)) * (crop.cy2 - crop.cy1),
       });
-      const corners = [map(ref.tl), map(ref.tr), map(ref.br), map(ref.bl)];
+      const corners = [map(quad.tl), map(quad.tr), map(quad.br), map(quad.bl)];
       return plausible(corners) ? { corners, touchesEdge } : null;
     };
 
     // Les deux quads désignent-ils la même plaque ? Garde-fou du retry
     // élargi : sur un cadrage plus large, le modèle peut accrocher un autre
-    // objet (calandre basse, bandeau) ou dériver d'une hauteur de plaque —
-    // dans ce cas on préfère garder le quad initial, même tronqué, plutôt
-    // que de poser le cache au mauvais endroit. Tolérance verticale serrée :
-    // l'erreur classique est un quad décalé d'une hauteur vers le bas.
+    // objet ou dériver d'une hauteur de plaque — dans ce cas on garde le quad
+    // initial, même tronqué, plutôt que de poser le cache au mauvais endroit.
     const sameQuad = (a, b) => {
       const ctr = q => q.reduce((s, p) => ({ x: s.x + p.x / 4, y: s.y + p.y / 4 }), { x: 0, y: 0 });
       const width = q => Math.max(
@@ -1857,7 +1872,7 @@ async function detectPlateFable(imageFile) {
 
     // Retry sur cadrage élargi quand le quad colle au bord du crop (plaque
     // probablement tronquée). N'adopte le nouveau quad que s'il est complet
-    // (ne touche plus le bord) ET cohérent avec l'initial.
+    // ET cohérent avec l'initial.
     const retryWider = async (res, box, label) => {
       if (!res?.touchesEdge) return res;
       console.log(`[plate] quad ${label} au bord du crop, élargissement de la marge`);
@@ -1868,7 +1883,7 @@ async function detectPlateFable(imageFile) {
       return res;
     };
 
-    // ── Chemin nominal (éco) : locate Haiku → crop → refine Sonnet 5 ──
+    // ── Chemin nominal (2 appels) : locate Haiku → crop → refine Sonnet 5 ──
     let corners = null;
     const locEco = await fablePlateAPI(fullB64, 'locate');
     const cropEco = (locEco && locEco.found) ? buildCrop(locEco.box) : null;
@@ -1876,82 +1891,28 @@ async function detectPlateFable(imageFile) {
       let res = await refineOnCrop(cropEco);
       res = await retryWider(res, locEco.box, 'éco');
       corners = res?.corners ?? null;
-      // Le crop éco semble bon mais Sonnet n'a pas donné un quad plausible :
-      // retente le même crop avec Fable 5.
+      // Crop localisé mais refine implausible : UNE escalade (même crop,
+      // Sonnet 5 effort haut).
       if (!corners) {
-        console.log('[plate] refine éco rejeté, escalade Fable 5 (même crop)');
+        console.log('[plate] refine éco rejeté, escalade effort haut (même crop)');
         res = await refineOnCrop(cropEco, 'best');
         corners = res?.corners ?? null;
       }
     }
 
-    // ── Escalade complète : si toujours rien, la LOCALISATION éco était
-    // probablement fausse (crop sans plaque) → refaire locate + refine en
-    // Fable 5 sur une nouvelle zone.
+    // ── Relocalisation (rare) : la localisation éco était probablement
+    // fausse (crop sans plaque) → une passe locate/refine en tier best.
     if (!corners) {
-      console.log('[plate] échec chemin éco, relocalisation Fable 5');
+      console.log('[plate] échec chemin éco, relocalisation (tier best)');
       const locBest = await fablePlateAPI(fullB64, 'locate', 'best');
-      if (!locBest || !locBest.found) { console.log('Aucune plaque détectée (Claude)'); return null; }
+      if (!locBest || !locBest.found) { console.log('[plate] aucune plaque détectée (Claude)'); return null; }
       const cropBest = buildCrop(locBest.box);
-      if (!cropBest) { console.warn('[plate-corners] bbox locate best invalide'); return null; }
-      // Ne pas re-refiner deux fois le même crop : si la bbox best est quasi
-      // identique à la bbox éco déjà tentée en best, inutile d'insister.
+      if (!cropBest) { console.warn('[plate] bbox locate best invalide'); return null; }
       let res = await refineOnCrop(cropBest, 'best');
       res = await retryWider(res, locBest.box, 'best');
       corners = res?.corners ?? null;
       if (!corners) {
-        console.warn('[plate-corners] refine échoué même après relocalisation, rejeté');
-        return null;
-      }
-    }
-
-    // ── Vérification indépendante (Haiku) : recadre sur le quad OBTENU et
-    // contrôle que la plaque y est bien entière et centrée. Attrape le mode
-    // d'échec observé en production : un quad plausible en forme mais posé À
-    // CÔTÉ de la plaque (typiquement une hauteur trop bas, sur le bouclier).
-    const quadBbox = (q) => {
-      const qx = q.map(p => p.x), qy = q.map(p => p.y);
-      return { x1: Math.min(...qx), y1: Math.min(...qy), x2: Math.max(...qx), y2: Math.max(...qy) };
-    };
-    const verifyQuad = async (q) => {
-      const b = quadBbox(q);
-      const mx = (b.x2 - b.x1) * 0.30, my = (b.y2 - b.y1) * 0.45;
-      const box = { x1: b.x1 - mx, y1: b.y1 - my, x2: b.x2 + mx, y2: b.y2 + my };
-      const cw = Math.round((Math.min(1, box.x2) - Math.max(0, box.x1)) * W);
-      const ch = Math.round((Math.min(1, box.y2) - Math.max(0, box.y1)) * H);
-      if (cw < 8 || ch < 8) return { ok: null };
-      const scale = Math.min(4, Math.max(1, 700 / Math.max(cw, ch)));
-      const vc = document.createElement('canvas');
-      vc.width = Math.round(cw * scale); vc.height = Math.round(ch * scale);
-      vc.getContext('2d').drawImage(img, Math.max(0, box.x1) * W, Math.max(0, box.y1) * H, cw, ch, 0, 0, vc.width, vc.height);
-      const v = await fablePlateAPI(vc.toDataURL('image/jpeg', 0.9), 'verify');
-      return v ?? { ok: null }; // erreur réseau → indéterminé (on garde le quad)
-    };
-
-    let ver = await verifyQuad(corners);
-    if (ver.ok === false) {
-      if (ver.where && ver.where !== 'absent') {
-        // La plaque est à côté du cadre → recentre le cadrage dans cette
-        // direction et refait un refine haute qualité, puis re-vérifie.
-        console.log('[plate] vérif KO (plaque ' + ver.where + '), correction dirigée');
-        const b = quadBbox(corners);
-        const bw = b.x2 - b.x1, bh = b.y2 - b.y1;
-        const sh = { above: [0, -1], below: [0, 1], left: [-1, 0], right: [1, 0] }[ver.where];
-        const shiftedBox = {
-          x1: b.x1 + sh[0] * bw, x2: b.x2 + sh[0] * bw,
-          y1: b.y1 + sh[1] * bh, y2: b.y2 + sh[1] * bh,
-        };
-        const crop2 = buildCrop(shiftedBox, 1.2);
-        const res2 = crop2 ? await refineOnCrop(crop2, 'best') : null;
-        const ver2 = res2 ? await verifyQuad(res2.corners) : null;
-        if (res2 && ver2 && ver2.ok !== false) {
-          corners = res2.corners;
-        } else {
-          console.warn('[plate] correction dirigée échouée, quad rejeté (repli Plate Recognizer)');
-          return null;
-        }
-      } else {
-        console.warn('[plate] vérif KO (pas de plaque dans le quad), rejeté (repli Plate Recognizer)');
+        console.warn('[plate] refine échoué même après relocalisation, rejeté');
         return null;
       }
     }
@@ -1998,7 +1959,7 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
 async function detectPlate(imageFile, regions = 'fr') {
   const fable = await detectPlateFable(imageFile);
   if (fable) return fable;
-  console.warn('[plate] Fable 5 indisponible, repli sur Plate Recognizer');
+  console.warn('[plate] détection Claude échouée, repli sur Plate Recognizer');
   return detectPlatePlateRecognizer(imageFile, regions);
 }
 

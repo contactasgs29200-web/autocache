@@ -1,25 +1,30 @@
 // /api/plate-corners.js
-// Détection interne des coins de la plaque via Claude Vision.
-// Fonctionne en PASSES pilotées par le frontend :
+// Détection des coins de la plaque via Claude Vision, en DEUX passes pilotées
+// par le frontend :
 //   mode "locate" : image entière → bbox approximative de la plaque.
-//   mode "refine" : crop zoomé sur la plaque → les 4 coins exacts (quadrilatère
-//                   en perspective, pas un rectangle).
-//   mode "verify" : crop recadré sur le quad DÉTECTÉ → contrôle indépendant
-//                   que la plaque est bien entière et centrée dedans (attrape
-//                   les quads posés à côté de la plaque avant la pose du cache).
+//   mode "refine" : crop zoomé sur la plaque → les 4 coins exacts
+//                   (quadrilatère en perspective, pas un rectangle).
 //
-// Stratégie de coût : chaque passe utilise par défaut le modèle le moins cher
-// capable de la tâche (locate/verify = trivial → Haiku ; refine = précision →
-// Sonnet 5). Le frontend peut demander tier "best" (Fable 5) en escalade quand
-// le résultat économique échoue au contrôle de plausibilité — la qualité max
-// n'est donc payée que sur les photos difficiles.
+// Stratégie de coût : le strict minimum d'appels, chacun sur le modèle le
+// moins cher capable de la tâche (locate = trivial → Haiku 4.5 ;
+// refine = précision → Sonnet 5 en effort réduit). Le tier "best" est
+// l'UNIQUE escalade autorisée (même modèle, effort haut — pas de modèle
+// premium) : le frontend ne la demande que quand le résultat économique
+// échoue à ses contrôles de plausibilité locaux. Les vérifications
+// LLM supplémentaires (mode verify, corrections dirigées) ont été
+// remplacées par des contrôles géométriques gratuits côté client.
 
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
 const MODELS = {
-  locate: { default: 'claude-haiku-4-5', best: 'claude-fable-5' },
-  refine: { default: 'claude-sonnet-5', best: 'claude-fable-5' },
-  verify: { default: 'claude-haiku-4-5', best: 'claude-sonnet-5' },
+  locate: { default: 'claude-haiku-4-5', best: 'claude-sonnet-5' },
+  refine: { default: 'claude-sonnet-5', best: 'claude-sonnet-5' },
+};
+// Effort Sonnet 5 : "low" par défaut (latence ~2-4 s, précision suffisante sur
+// un crop zoomé ×4), "high" uniquement en escalade sur les photos difficiles.
+const EFFORT = {
+  locate: { default: null, best: 'low' },   // null = Haiku (pas d'effort)
+  refine: { default: 'low', best: 'high' },
 };
 
 const LOCATE_PROMPT = `Regarde cette photo de véhicule. Trouve la PLAQUE D'IMMATRICULATION : la plaque portant des caractères alphanumériques (ex: "AB-123-CD"), sur fond blanc ou jaune, fixée au pare-choc avant ou arrière du véhicule.
@@ -67,13 +72,6 @@ Si aucune plaque n'est identifiable dans ce crop, réponds {"found":false}.
 Réponds UNIQUEMENT avec ce JSON (3 décimales, sans markdown) :
 {"found":true,"analysis":"caméra au niveau, voiture tournée à droite, côté gauche plus proche; bord supérieur incliné vers le bas à droite","text":"AB-123-CD","tl":{"x":0.212,"y":0.334},"tr":{"x":0.741,"y":0.398},"br":{"x":0.735,"y":0.612},"bl":{"x":0.208,"y":0.531}}`;
 
-const VERIFY_PROMPT = `Cette image est un petit crop qui devrait contenir une plaque d'immatriculation ENTIÈRE (rectangle blanc ou jaune portant des caractères alphanumériques), à peu près centrée et occupant la majeure partie du cadre.
-
-Réponds UNIQUEMENT avec ce JSON (sans markdown) :
-- Plaque entière visible (ses 4 bords dans le cadre), à peu près centrée : {"ok":true}
-- Plaque coupée par un bord, ou entière mais nettement décentrée : {"ok":false,"where":"..."} où "where" indique OÙ se trouve le centre de la plaque par rapport au centre du cadre : "above", "below", "left" ou "right"
-- Aucune plaque visible (carrosserie, calandre, entrée d'air, sol…) : {"ok":false,"where":"absent"}`;
-
 function extractJSON(txt) {
   let depth = 0, start = -1;
   for (let i = 0; i < txt.length; i++) {
@@ -86,17 +84,12 @@ function extractJSON(txt) {
   return null;
 }
 
-async function askClaude(apiKey, model, b64, prompt) {
-  const headers = {
-    'Content-Type': 'application/json',
-    'x-api-key': apiKey,
-    'anthropic-version': '2023-06-01',
-  };
+async function askClaude(apiKey, model, effort, b64, prompt) {
   const body = {
     model,
-    // Sonnet 5 / Fable 5 : le thinking (adaptatif, actif par défaut) compte
-    // dans max_tokens — un budget trop petit part entièrement en thinking et
-    // le JSON final n'est jamais écrit. Haiku ne « pense » pas mais le budget
+    // Sonnet 5 : le thinking adaptatif (actif par défaut) compte dans
+    // max_tokens — un budget trop petit part entièrement en thinking et le
+    // JSON final n'est jamais écrit. Haiku ne « pense » pas mais le budget
     // large ne coûte rien (on ne paie que les tokens réellement générés).
     max_tokens: 8000,
     messages: [{
@@ -107,23 +100,16 @@ async function askClaude(apiKey, model, b64, prompt) {
       ],
     }],
   };
-  if (model === 'claude-fable-5') {
-    // Repli serveur : si les classifieurs Fable 5 refusent la requête,
-    // l'API relance automatiquement sur Opus 4.8 dans le même appel.
-    headers['anthropic-beta'] = 'server-side-fallback-2026-06-01';
-    body.fallbacks = [{ model: 'claude-opus-4-8' }];
-  }
-  if (model !== 'claude-haiku-4-5') {
-    // Latence : en effort "high" (défaut), le thinking adaptatif de Sonnet 5 /
-    // Fable 5 peut durer 15-30 s par photo. "medium" garde une précision quasi
-    // identique sur une tâche ciblée comme celle-ci (et le contrôle de
-    // plausibilité + escalade côté client protège la qualité). Haiku ne
-    // supporte pas ce paramètre.
-    body.output_config = { effort: 'medium' };
-  }
+  if (effort) body.output_config = { effort };
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST', headers, body: JSON.stringify(body),
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(body),
   });
 
   const data = await response.json();
@@ -138,7 +124,7 @@ async function askClaude(apiKey, model, b64, prompt) {
   // Les modèles avec thinking renvoient un bloc "thinking" avant le bloc
   // "text" : ne jamais lire content[0] directement, chercher le bloc texte.
   const text = data.content?.find(b => b.type === 'text')?.text ?? '';
-  console.log(`plate-corners [${model}] stop:`, data.stop_reason, 'raw:', text.slice(0, 300));
+  console.log(`plate-corners [${model}${effort ? ':' + effort : ''}] stop:`, data.stop_reason, 'raw:', text.slice(0, 300));
   const raw = extractJSON(text);
   if (!raw) return { error: { status: 500, body: { error: 'No JSON in response', model, stop_reason: data.stop_reason, text } } };
   try {
@@ -160,25 +146,14 @@ export default async function handler(req, res) {
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' });
   if (!b64)    return res.status(400).json({ error: 'Missing b64' });
 
-  const passe = mode === 'locate' ? 'locate' : mode === 'verify' ? 'verify' : 'refine';
-  const model = MODELS[passe][tier === 'best' ? 'best' : 'default'];
+  const passe = mode === 'locate' ? 'locate' : 'refine';
+  const t = tier === 'best' ? 'best' : 'default';
+  const model = MODELS[passe][t];
+  const effort = EFFORT[passe][t];
 
   try {
-    if (passe === 'verify') {
-      const r = await askClaude(apiKey, model, b64, VERIFY_PROMPT);
-      // Contrôle best-effort : en cas d'erreur/refus, on répond "indéterminé"
-      // (ok:null) — le client conserve alors le quad plutôt que de le jeter.
-      if (r.error || r.refused || typeof r.json?.ok !== 'boolean') {
-        console.warn(`plate-corners verify [${model}] indéterminé`);
-        return res.status(200).json({ ok: null });
-      }
-      const where = ['above', 'below', 'left', 'right', 'absent'].includes(r.json.where) ? r.json.where : null;
-      console.log(`plate-corners verify [${model}]:`, JSON.stringify({ ok: r.json.ok, where }));
-      return res.status(200).json({ ok: r.json.ok, where });
-    }
-
     if (passe === 'locate') {
-      const r = await askClaude(apiKey, model, b64, LOCATE_PROMPT);
+      const r = await askClaude(apiKey, model, effort, b64, LOCATE_PROMPT);
       if (r.error)   return res.status(r.error.status).json(r.error.body);
       if (r.refused || !r.json.found) return res.status(200).json({ found: false });
       const box = r.json.box;
@@ -194,7 +169,7 @@ export default async function handler(req, res) {
     }
 
     // mode "refine" : 4 coins précis sur le crop
-    const r = await askClaude(apiKey, model, b64, REFINE_PROMPT);
+    const r = await askClaude(apiKey, model, effort, b64, REFINE_PROMPT);
     if (r.error)   return res.status(r.error.status).json(r.error.body);
     if (r.refused || !r.json.found) return res.status(200).json({ found: false });
 
@@ -204,7 +179,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Invalid corners', model, c });
     }
 
-    console.log(`plate-corners refine [${model}] OK:`, JSON.stringify({ tl: c.tl, tr: c.tr, br: c.br, bl: c.bl }));
+    console.log(`plate-corners refine [${model}:${effort}] OK:`, JSON.stringify({ tl: c.tl, tr: c.tr, br: c.br, bl: c.bl }));
     return res.status(200).json({ found: true, tl: c.tl, tr: c.tr, br: c.br, bl: c.bl, model });
 
   } catch (e) {
