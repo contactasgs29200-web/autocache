@@ -1739,6 +1739,14 @@ function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
   });
 }
 
+// Dernière erreur SERVEUR de la détection de plaque (HTTP/réseau — pas les
+// « aucune plaque trouvée »). Exposée à l'UI : une clé API invalide ou des
+// crédits épuisés côté Vercel doivent produire un bandeau visible, pas des
+// photos silencieusement sans cache.
+let plateLastApiError = null;
+function resetPlateApiError() { plateLastApiError = null; }
+function getPlateApiError() { return plateLastApiError; }
+
 // Appel bas niveau à /api/plate-corners (Claude Vision).
 // tier "best" = l'UNIQUE escalade (Sonnet 5 en effort haut) — demandée
 // seulement quand le résultat économique échoue aux contrôles locaux.
@@ -1752,6 +1760,7 @@ async function fablePlateAPI(b64DataUrl, mode, tier) {
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     console.warn(`[plate-corners:${mode}${tier ? ':' + tier : ''}] HTTP`, r.status, body.slice(0, 500));
+    plateLastApiError = `plate-corners (${mode}) HTTP ${r.status} — ${body.slice(0, 180) || 'sans détail'}`;
     return null;
   }
   return r.json();
@@ -1884,16 +1893,11 @@ async function detectPlateFable(imageFile) {
     };
 
     // ── Chemin nominal (2 appels) : locate Haiku → crop → refine Sonnet 5 ──
+    // Un « aucune plaque » de Haiku n'est PAS fatal : la relocalisation
+    // (tier best, ~0,5 ct) contre-vérifie avant d'abandonner — un faux
+    // négatif du locate économique coûterait un cache manquant.
     let corners = null;
     const locEco = await fablePlateAPI(fullB64, 'locate');
-    // « Aucune plaque » explicite (photo d'intérieur, vue latérale…) : on fait
-    // confiance au verdict — pas d'escalade payante pour confirmer une absence.
-    // (invalid_box = Haiku a VU une plaque mais donné de mauvaises coordonnées
-    // → là, l'escalade reste justifiée.)
-    if (locEco && locEco.found === false && !locEco.invalid_box) {
-      console.log('[plate] aucune plaque visible (locate éco), photo sans cache');
-      return null;
-    }
     const cropEco = (locEco && locEco.found) ? buildCrop(locEco.box) : null;
     if (cropEco) {
       let res = await refineOnCrop(cropEco);
@@ -1931,6 +1935,7 @@ async function detectPlateFable(imageFile) {
     return { found: true, conf: 1, bbox, corners, source: 'fable' };
   } catch (e) {
     console.error('[plate-corners] erreur:', e.message);
+    plateLastApiError = plateLastApiError ?? ('réseau/exception : ' + e.message);
     return null;
   }
 }
@@ -2713,6 +2718,9 @@ export default function AutoCache() {
   const [photos, setPhotos] = useState([]);
   const [results, setResults] = useState([]);
   const [processing, setProcessing] = useState(false);
+  // Bandeau d'erreur serveur de la détection de plaque (clé API, crédits…) :
+  // visible à l'écran plutôt qu'enfoui dans la console.
+  const [plateErrorBanner, setPlateErrorBanner] = useState(null);
   const [progress, setProgress] = useState({ n: 0, total: 0 });
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showPromoModal, setShowPromoModal] = useState(false);
@@ -3121,6 +3129,8 @@ export default function AutoCache() {
     const maxPhotos = remaining;
     const photosToProcess = photos.slice(0, maxPhotos);
     setProcessing(true);
+    setPlateErrorBanner(null);
+    resetPlateApiError();
     setProgress({ n: 0, total: photosToProcess.length });
     setResults([]);
     const rawLogo = await loadImg(logo.preview);
@@ -3387,6 +3397,12 @@ export default function AutoCache() {
     setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...updateData } } : prev);
     setProcessing(false);
     setTab("results");
+    // Des caches manquants + une erreur serveur pendant le lot → bandeau
+    // explicite (clé Anthropic invalide, crédits API épuisés, panne…).
+    const apiErr = getPlateApiError();
+    if (apiErr && autoPlate && all.some(r => !r.plateFound && !r.autoPlateOff)) {
+      setPlateErrorBanner(apiErr);
+    }
     if (newCount >= PLAN_LIMIT) setShowUpgradeModal(true);
   };
 
@@ -6211,6 +6227,23 @@ export default function AutoCache() {
       )}
 
       {showInstallHelp && <InstallHelpModal ios={isIOS} onClose={() => setShowInstallHelp(false)} />}
+
+      {/* ── Bandeau erreur serveur détection plaque ── */}
+      {plateErrorBanner && (
+        <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 9500, maxWidth: "min(680px, 94vw)", background: "rgba(20,8,4,0.97)", border: "1px solid #c0392b", borderRadius: 6, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
+          <div style={{ fontSize: 18 }}>⚠</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#e74c3c", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Cache plaque non posé — erreur serveur</div>
+            <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5, wordBreak: "break-word" }}>
+              {plateErrorBanner}
+            </div>
+            <div style={{ fontSize: 10, color: "#8a8a8a", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
+              Vérifiez la clé ANTHROPIC_API_KEY et le crédit API (console Anthropic / Vercel), puis relancez le traitement.
+            </div>
+          </div>
+          <button onClick={() => setPlateErrorBanner(null)} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+      )}
 
       {/* ── Modal Nous Contacter ── */}
       {showContactModal && (
