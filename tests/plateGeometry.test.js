@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { orderQuad, quadArea, snapQuadOutward } from '../src/plateGeometry.js';
+import { orderQuad, quadArea, snapQuadOutward, pointInQuad, quadCoversBox, quadFromBox } from '../src/plateGeometry.js';
 
 // orderQuad doit renvoyer les coins dans l'ordre TL, TR, BR, BL quelle que
 // soit la permutation d'entrée (Plate Recognizer ne garantit pas l'ordre).
@@ -103,6 +103,59 @@ test('snapQuadOutward ne rétrécit JAMAIS le quad', () => {
   const areaIn = quadArea([[quad.tl.x, quad.tl.y], [quad.tr.x, quad.tr.y], [quad.br.x, quad.br.y], [quad.bl.x, quad.bl.y]]);
   const areaOut = quadArea([[out.tl.x, out.tl.y], [out.tr.x, out.tr.y], [out.br.x, out.br.y], [out.bl.x, out.bl.y]]);
   assert.ok(areaOut >= areaIn - 0.01, `aire réduite: ${areaIn} → ${areaOut}`);
+});
+
+// ── pointInQuad / quadCoversBox / quadFromBox — ancrage sur les caractères ──
+
+const RECT_QUAD = {
+  tl: { x: 20, y: 20 }, tr: { x: 120, y: 20 },
+  br: { x: 120, y: 50 }, bl: { x: 20, y: 50 },
+};
+
+test('pointInQuad distingue intérieur, extérieur et tolérance', () => {
+  assert.ok(pointInQuad({ x: 70, y: 35 }, RECT_QUAD));
+  assert.ok(!pointInQuad({ x: 70, y: 55 }, RECT_QUAD));       // 5 px sous le bord
+  assert.ok(pointInQuad({ x: 70, y: 55 }, RECT_QUAD, 6));      // toléré à 6 px
+  assert.ok(!pointInQuad({ x: 10, y: 35 }, RECT_QUAD));        // à gauche
+});
+
+test('pointInQuad fonctionne sur un quad en perspective', () => {
+  // Trapèze : côté gauche plus grand (véhicule tourné vers la droite).
+  const trap = {
+    tl: { x: 20, y: 10 }, tr: { x: 110, y: 22 },
+    br: { x: 110, y: 48 }, bl: { x: 20, y: 60 },
+  };
+  assert.ok(pointInQuad({ x: 60, y: 35 }, trap));
+  assert.ok(!pointInQuad({ x: 60, y: 5 }, trap));
+  assert.ok(!pointInQuad({ x: 115, y: 35 }, trap));
+});
+
+test('quadCoversBox accepte un quad englobant la bande de texte', () => {
+  assert.ok(quadCoversBox(RECT_QUAD, { x1: 32, y1: 27, x2: 108, y2: 43 }));
+});
+
+test('quadCoversBox rejette un quad décalé d\'une hauteur de plaque (bug réel)', () => {
+  // Le bug observé : le bord HAUT du quad longe le bord BAS réel de la
+  // plaque — la bande de caractères reste au-dessus, hors du quad.
+  const chars = { x1: 32, y1: 27, x2: 108, y2: 43 };
+  const shifted = {
+    tl: { x: 20, y: 50 }, tr: { x: 120, y: 50 },
+    br: { x: 120, y: 80 }, bl: { x: 20, y: 80 },
+  };
+  assert.ok(!quadCoversBox(shifted, chars, (chars.y2 - chars.y1) * 0.15));
+  // ... et la reconstruction depuis la bande de texte recouvre les caractères.
+  const rebuilt = quadFromBox(chars);
+  assert.ok(quadCoversBox(rebuilt, chars));
+});
+
+test('quadFromBox dilate autour du centre aux proportions plaque', () => {
+  const q = quadFromBox({ x1: 40, y1: 30, x2: 140, y2: 50 }, 1.25, 1.5);
+  // centre préservé
+  assert.equal((q.tl.x + q.br.x) / 2, 90);
+  assert.equal((q.tl.y + q.br.y) / 2, 40);
+  // dimensions ×1.25 / ×1.5
+  assert.equal(q.tr.x - q.tl.x, 125);
+  assert.equal(q.bl.y - q.tl.y, 30);
 });
 
 test('snapQuadOutward rend le quad intact s\'il est dégénéré', () => {

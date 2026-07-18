@@ -43,6 +43,45 @@ function edgeGradient(lum, W, H, a, b, n, d, samples = 24) {
   return s / samples;
 }
 
+// Un point est-il à l'intérieur d'un quad convexe {tl,tr,br,bl} (repère
+// écran, y vers le bas) ? tol > 0 tolère un dépassement de tol pixels.
+export function pointInQuad(pt, quad, tol = 0) {
+  const pts = [quad.tl, quad.tr, quad.br, quad.bl];
+  for (let i = 0; i < 4; i++) {
+    const a = pts[i], b = pts[(i + 1) % 4];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-9) return false;
+    // Parcours TL→TR→BR→BL en y-vers-le-bas : l'intérieur est du côté
+    // cross > 0. Distance signée = cross / longueur de l'arête.
+    const cross = (b.x - a.x) * (pt.y - a.y) - (b.y - a.y) * (pt.x - a.x);
+    if (cross / len < -tol) return false;
+  }
+  return true;
+}
+
+// Le quad couvre-t-il entièrement la boîte {x1,y1,x2,y2} (à tol px près) ?
+// Sert d'ancrage : le quad de la plaque doit contenir la bande des
+// caractères lus par le modèle, sinon il est décalé.
+export function quadCoversBox(quad, box, tol = 0) {
+  return [
+    { x: box.x1, y: box.y1 }, { x: box.x2, y: box.y1 },
+    { x: box.x2, y: box.y2 }, { x: box.x1, y: box.y2 },
+  ].every(p => pointInQuad(p, quad, tol));
+}
+
+// Quad axe-aligné obtenu en dilatant une boîte autour de son centre
+// (kw / kh = facteurs largeur / hauteur). Reconstruction de secours : une
+// plaque UE dépasse de sa bande de caractères d'environ ×1.25 en largeur
+// (bandes bleues) et ×1.5 en hauteur.
+export function quadFromBox(box, kw = 1.25, kh = 1.5) {
+  const cx = (box.x1 + box.x2) / 2, cy = (box.y1 + box.y2) / 2;
+  const hw = (box.x2 - box.x1) / 2 * kw, hh = (box.y2 - box.y1) / 2 * kh;
+  return {
+    tl: { x: cx - hw, y: cy - hh }, tr: { x: cx + hw, y: cy - hh },
+    br: { x: cx + hw, y: cy + hh }, bl: { x: cx - hw, y: cy + hh },
+  };
+}
+
 // Intersection de deux droites (point + direction).
 function intersectLines(p1, d1, p2, d2) {
   const det = d1.x * d2.y - d1.y * d2.x;

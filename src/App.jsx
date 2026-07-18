@@ -3,7 +3,7 @@ import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
-import { orderQuad, quadArea, snapQuadOutward } from "./plateGeometry.js";
+import { orderQuad, quadArea, snapQuadOutward, quadCoversBox, quadFromBox } from "./plateGeometry.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -1846,14 +1846,51 @@ async function detectPlateFable(imageFile) {
       const ref = await fablePlateAPI(crop.b64, 'refine', tier);
       if (!ref || !ref.found) return null;
       const EDGE = 0.02;
-      const touchesEdge = [ref.tl, ref.tr, ref.br, ref.bl].some(
+      let touchesEdge = [ref.tl, ref.tr, ref.br, ref.bl].some(
         p => p.x <= EDGE || p.x >= 1 - EDGE || p.y <= EDGE || p.y >= 1 - EDGE
       );
-      // Aimantation : chaque bord est poussé vers l'extérieur jusqu'au vrai
-      // contour de la plaque (gratuit, garantit la couverture bord à bord).
       const toPx = p => ({ x: Math.min(1, Math.max(0, p.x)) * crop.w, y: Math.min(1, Math.max(0, p.y)) * crop.h });
       let quad = { tl: toPx(ref.tl), tr: toPx(ref.tr), br: toPx(ref.br), bl: toPx(ref.bl) };
-      quad = snapQuadOutward(crop.lum, crop.w, crop.h, quad, Math.max(3, Math.round(crop.w * 0.006)));
+      let snapMax = Math.max(3, Math.round(crop.w * 0.006));
+
+      // ── Ancrage sur les caractères lus ──
+      // La boîte "chars" (bande de texte) est bien plus fiable que les coins :
+      // le modèle doit fixer les glyphes pour les lire. Si le quad ne contient
+      // pas cette boîte (cas typique : quad décalé d'une hauteur de plaque,
+      // posé sur le pare-choc sous la plaque) ou s'il est démesuré par rapport
+      // à elle, on le RECONSTRUIT par dilatation de la bande de texte aux
+      // proportions d'une plaque UE — gratuit, aucune requête en plus —
+      // et l'aimantation élargie recolle ensuite les bords exacts.
+      const cb = ref.chars;
+      if (cb && [cb.x1, cb.y1, cb.x2, cb.y2].every(v => typeof v === 'number')) {
+        const chars = {
+          x1: Math.min(1, Math.max(0, cb.x1)) * crop.w, y1: Math.min(1, Math.max(0, cb.y1)) * crop.h,
+          x2: Math.min(1, Math.max(0, cb.x2)) * crop.w, y2: Math.min(1, Math.max(0, cb.y2)) * crop.h,
+        };
+        const cw = chars.x2 - chars.x1, ch = chars.y2 - chars.y1;
+        // L'ancre n'est utilisée que si elle-même ressemble à une bande de
+        // texte de plaque cadrée dans le crop (large, allongée) — une ancre
+        // douteuse ne doit pas dégrader un quad correct.
+        const charsOK = cw > crop.w * 0.12 && ch > 2 && cw / ch >= 1.2 && cw / ch <= 14;
+        if (charsOK) {
+          const qArea = quadArea([[quad.tl.x, quad.tl.y], [quad.tr.x, quad.tr.y], [quad.br.x, quad.br.y], [quad.bl.x, quad.bl.y]]);
+          const misplaced = !quadCoversBox(quad, chars, ch * 0.15);
+          const oversized = qArea > cw * ch * 4.5;
+          if (misplaced || oversized) {
+            console.log(`[plate] quad ${misplaced ? 'décalé' : 'démesuré'} par rapport au texte lu${ref.text ? ` ("${ref.text}")` : ''} — reconstruction depuis la bande de caractères`);
+            quad = quadFromBox(chars);
+            snapMax = Math.max(snapMax, Math.round(crop.w * 0.02));
+            const ePx = crop.w * EDGE;
+            touchesEdge = [quad.tl, quad.tr, quad.br, quad.bl].some(
+              p => p.x <= ePx || p.x >= crop.w - ePx || p.y <= crop.h * EDGE || p.y >= crop.h - crop.h * EDGE
+            );
+          }
+        }
+      }
+
+      // Aimantation : chaque bord est poussé vers l'extérieur jusqu'au vrai
+      // contour de la plaque (gratuit, garantit la couverture bord à bord).
+      quad = snapQuadOutward(crop.lum, crop.w, crop.h, quad, snapMax);
       const map = p => ({
         x: crop.cx1 + Math.min(1, Math.max(0, p.x / crop.w)) * (crop.cx2 - crop.cx1),
         y: crop.cy1 + Math.min(1, Math.max(0, p.y / crop.h)) * (crop.cy2 - crop.cy1),

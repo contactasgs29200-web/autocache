@@ -42,35 +42,33 @@ Réponds UNIQUEMENT avec ce JSON (3 décimales, sans markdown) :
 
 const REFINE_PROMPT = `Cette image est un CROP zoomé sur la plaque d'immatriculation d'un véhicule (la plaque avec les caractères alphanumériques, entourée de carrosserie/pare-choc).
 
-═══ ÉTAPE 1 — ISOLER LA SURFACE DE LA PLAQUE ═══
-La surface de la plaque est MATE et porte le texte. Le cadre/support en plastique ou chrome autour N'EST PAS la plaque — prends uniquement le rectangle qui contient les caractères, bord à bord, pas le cadre ni le renfoncement du pare-choc.
+═══ ÉTAPE 1 — LIRE LES CARACTÈRES (ton ANCRE) ═══
+Lis le texte de la plaque (ex: "DB-127-DG") et donne la boîte englobante SERRÉE de la bande de caractères : "chars" = {x1,y1,x2,y2} où (x1,y1) = haut-gauche du PREMIER caractère et (x2,y2) = bas-droit du DERNIER caractère, en coordonnées normalisées de CE crop. Si les caractères sont trop petits/flous pour être lus mais que la bande de texte est visible, donne quand même sa boîte (text vide). Tout le reste de ta réponse doit être cohérent avec cette boîte.
 
-═══ ÉTAPE 2 — RAISONNER SUR LA PERSPECTIVE ═══
+═══ ÉTAPE 2 — ISOLER LA SURFACE DE LA PLAQUE ═══
+La surface de la plaque est le rectangle MAT qui porte ces caractères. Le cadre/support en plastique ou chrome autour N'EST PAS la plaque — prends uniquement le rectangle bord à bord, pas le cadre ni le renfoncement du pare-choc.
+
+═══ ÉTAPE 3 — RAISONNER SUR LA PERSPECTIVE ═══
 La plaque est un vrai rectangle (~520×110mm) qui, en perspective, se projette en QUADRILATÈRE DÉFORMÉ (trapèze/parallélogramme) dès que le véhicule n'est pas vu strictement de face. Analyse :
 - Caméra au-dessus / au niveau / en dessous de la plaque ?
 - Véhicule tourné vers la gauche / la droite / de face ?
 - Quel côté de la plaque est le plus proche de la caméra (donc visuellement le plus grand) ?
-Vérifie visuellement où se trouve CHAQUE coin : suis le bord supérieur de la plaque de gauche à droite, puis le bord inférieur. Les bords supérieur et inférieur ne sont PAS forcément horizontaux dans l'image.
+Les bords supérieur et inférieur ne sont PAS forcément horizontaux dans l'image. Ne "corrige" jamais les coins vers un rectangle aligné sur les axes : donne les positions RÉELLEMENT observées.
 
-IMPORTANT : ne "corrige" jamais les coins vers un rectangle aligné sur les axes. Donne les positions RÉELLEMENT observées de chaque coin, même si le quadrilatère est incliné ou déformé.
+═══ ÉTAPE 4 — LES 4 COINS, AUTOUR DE L'ANCRE ═══
+La surface de la plaque dépasse de la bande de caractères d'environ 10-15% en largeur (bandes bleues aux extrémités) et 20-40% en hauteur. Tes 4 coins doivent donc ENTOURER STRICTEMENT la boîte "chars" :
+- tl : plus haut ET plus à gauche que le haut-gauche de "chars"
+- tr : plus haut ET plus à droite que le haut-droit de "chars"
+- br : plus bas ET plus à droite que le bas-droit de "chars"
+- bl : plus bas ET plus à gauche que le bas-gauche de "chars"
+Erreur classique à éviter ABSOLUMENT : un quadrilatère décalé d'une hauteur de plaque vers le bas, dont le bord HAUT longe le bord BAS réel de la plaque. Si ta boîte "chars" n'est pas à l'intérieur de ton quadrilatère, tes coins sont FAUX : recommence.
 
-═══ ÉTAPE 3 — ANCRAGE SUR LE TEXTE ═══
-Lis les caractères de la plaque (ex: "DB-127-DG"). Tes 4 coins délimitent le rectangle qui CONTIENT ces caractères. VÉRIFICATION OBLIGATOIRE avant de répondre : le centre de ton quadrilatère doit tomber SUR le texte lu — pas au-dessus (capot/calandre), pas en dessous (bouclier/entrée d'air). Erreur classique à éviter : donner un quadrilatère décalé d'une hauteur de plaque vers le bas, dont le bord HAUT longe le bord BAS réel de la plaque.
-
-═══ ÉTAPE 4 — COORDONNÉES ═══
-Donne les coordonnées normalisées (0.0–1.0, relatives à CE crop) des 4 coins de la SURFACE de la plaque :
-- tl : coin haut-gauche
-- tr : coin haut-droit
-- br : coin bas-droit
-- bl : coin bas-gauche
-
-x=0.0 = bord gauche de cette image, x=1.0 = bord droit.
-y=0.0 = bord haut, y=1.0 = bord bas.
+Coordonnées normalisées 0.0–1.0 relatives à CE crop : x=0.0 = bord gauche, x=1.0 = bord droit, y=0.0 = bord haut, y=1.0 = bord bas.
 
 Si aucune plaque n'est identifiable dans ce crop, réponds {"found":false}.
 
 Réponds UNIQUEMENT avec ce JSON (3 décimales, sans markdown) :
-{"found":true,"analysis":"caméra au niveau, voiture tournée à droite, côté gauche plus proche; bord supérieur incliné vers le bas à droite","text":"AB-123-CD","tl":{"x":0.212,"y":0.334},"tr":{"x":0.741,"y":0.398},"br":{"x":0.735,"y":0.612},"bl":{"x":0.208,"y":0.531}}`;
+{"found":true,"analysis":"caméra au niveau, voiture tournée à droite, côté gauche plus proche; bord supérieur incliné vers le bas à droite","text":"AB-123-CD","chars":{"x1":0.281,"y1":0.410,"x2":0.663,"y2":0.518},"tl":{"x":0.212,"y":0.334},"tr":{"x":0.741,"y":0.398},"br":{"x":0.735,"y":0.612},"bl":{"x":0.208,"y":0.531}}`;
 
 function extractJSON(txt) {
   let depth = 0, start = -1;
@@ -137,6 +135,9 @@ async function askClaude(apiKey, model, effort, b64, prompt) {
 const okPoint = p => p && typeof p.x === 'number' && typeof p.y === 'number'
   && p.x >= -0.05 && p.x <= 1.05 && p.y >= -0.05 && p.y <= 1.05;
 
+const okBox = b => b && [b.x1, b.y1, b.x2, b.y2].every(v => typeof v === 'number' && v >= -0.05 && v <= 1.05)
+  && b.x2 > b.x1 && b.y2 > b.y1;
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -179,8 +180,18 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Invalid corners', model, c });
     }
 
-    console.log(`plate-corners refine [${model}:${effort}] OK:`, JSON.stringify({ tl: c.tl, tr: c.tr, br: c.br, bl: c.bl }));
-    return res.status(200).json({ found: true, tl: c.tl, tr: c.tr, br: c.br, bl: c.bl, model });
+    // Boîte des caractères : l'ancre du contrôle de cohérence côté client
+    // (le quad doit la contenir, sinon il est décalé et sera reconstruit à
+    // partir d'elle). Optionnelle — si invalide on l'omet, les coins restent
+    // exploitables seuls.
+    const chars = okBox(c.chars) ? c.chars : null;
+    const text = typeof c.text === 'string' ? c.text.slice(0, 16) : null;
+
+    console.log(`plate-corners refine [${model}:${effort}] OK:`, JSON.stringify({ text, chars, tl: c.tl, tr: c.tr, br: c.br, bl: c.bl }));
+    return res.status(200).json({
+      found: true, tl: c.tl, tr: c.tr, br: c.br, bl: c.bl,
+      ...(chars ? { chars } : {}), ...(text ? { text } : {}), model,
+    });
 
   } catch (e) {
     console.error('plate-corners error:', e);
