@@ -1886,6 +1886,14 @@ async function detectPlateFable(imageFile) {
     // ── Chemin nominal (2 appels) : locate Haiku → crop → refine Sonnet 5 ──
     let corners = null;
     const locEco = await fablePlateAPI(fullB64, 'locate');
+    // « Aucune plaque » explicite (photo d'intérieur, vue latérale…) : on fait
+    // confiance au verdict — pas d'escalade payante pour confirmer une absence.
+    // (invalid_box = Haiku a VU une plaque mais donné de mauvaises coordonnées
+    // → là, l'escalade reste justifiée.)
+    if (locEco && locEco.found === false && !locEco.invalid_box) {
+      console.log('[plate] aucune plaque visible (locate éco), photo sans cache');
+      return null;
+    }
     const cropEco = (locEco && locEco.found) ? buildCrop(locEco.box) : null;
     if (cropEco) {
       let res = await refineOnCrop(cropEco);
@@ -2688,7 +2696,7 @@ const SUBSCRIPTION_FORMULES = [
 ];
 const FORMULE_LABELS = { weekly: "Hebdomadaire", monthly: "Mensuelle", annual: "Annuelle" };
 const SUBSCRIPTION_FEATURES = [
-  "400 photos / mois",
+  "300 photos / mois",
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
@@ -3482,7 +3490,7 @@ export default function AutoCache() {
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "premium" (ancien : "essential" | "pro")
   const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
-  const PLAN_LIMIT = isPaid ? 400 : TRIAL_LIMIT;
+  const PLAN_LIMIT = isPaid ? 300 : TRIAL_LIMIT;
   const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
   // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
   const canUseShowroom  = isPaid || userPlan === "trial";
@@ -3515,7 +3523,7 @@ export default function AutoCache() {
     setSubInfoLoading(false);
   }, [user?.id, subInfoLoading]);
 
-  // ── Renouvellement mensuel des crédits (400 photos / mois) ──
+  // ── Renouvellement mensuel des crédits (300 photos / mois) ──
   // Indépendant de la cadence de facturation : que l'abonnement soit hebdo,
   // mensuel ou annuel, le quota se réinitialise chaque mois au même jour.
   useEffect(() => {
@@ -6422,7 +6430,7 @@ export default function AutoCache() {
                       {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, letterSpacing: 1 }}>
-                      400 photos / mois · Toutes les fonctionnalités incluses
+                      300 photos / mois · Toutes les fonctionnalités incluses
                     </div>
                   </div>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
