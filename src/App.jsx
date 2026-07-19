@@ -2043,6 +2043,24 @@ function snapCornersOnImage(img, W, H, corners) {
   }
 }
 
+// File d'attente globale pour Plate Recognizer : le plan gratuit Snapshot est
+// limité à 1 requête/seconde — les photos d'un lot sont traitées en parallèle,
+// donc on sérialise les appels avec un espacement minimal, sinon tout sauf la
+// première photo prend un 429 et bascule sur le chemin Claude dégradé.
+let prQueue = Promise.resolve();
+let prLastCall = 0;
+const PR_MIN_INTERVAL_MS = 1100;
+function throttledPR(fn) {
+  const run = prQueue.then(async () => {
+    const wait = prLastCall + PR_MIN_INTERVAL_MS - Date.now();
+    if (wait > 0) await new Promise(res => setTimeout(res, wait));
+    prLastCall = Date.now();
+    return fn();
+  });
+  prQueue = run.catch(() => {});
+  return run;
+}
+
 // Détection plaque via Plate Recognizer Blur — détecteur SPÉCIALISÉ, renvoie
 // le polygone exact (4 coins) de chaque plaque. C'est le chemin PRINCIPAL :
 // précision au pixel, ~1 s, et aucun appel Claude quand il réussit.
@@ -2051,11 +2069,18 @@ function snapCornersOnImage(img, W, H, corners) {
 async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
   try {
     const { base64, w, h } = await downscaledImageBase64(imageFile, 1600, 0.85);
-    const r = await fetch('/api/detect-plates', {
+    const doFetch = () => fetch('/api/detect-plates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageBase64: base64, regions }),
     });
+    let r = await throttledPR(doFetch);
+    if (r.status === 429) {
+      // Limite 1 req/s malgré l'espacement (latence variable) : on retente
+      // une fois, la file garantit à nouveau l'écart.
+      console.log('[detect-plates] 429 (limite 1 req/s), nouvelle tentative');
+      r = await throttledPR(doFetch);
+    }
     if (!r.ok) {
       const body = await r.text().catch(() => '');
       console.warn('[detect-plates] HTTP', r.status, body.slice(0, 300));
