@@ -1763,7 +1763,10 @@ async function fablePlateAPI(b64DataUrl, mode, tier) {
     plateLastApiError = `plate-corners (${mode}) HTTP ${r.status} — ${body.slice(0, 180) || 'sans détail'}`;
     return null;
   }
-  return r.json();
+  const json = await r.json();
+  // Trace de diagnostic : la réponse brute du modèle, telle que reçue.
+  console.log(`[plate-corners:${mode}${tier ? ':' + tier : ''}] réponse:`, JSON.stringify(json));
+  return json;
 }
 
 // Détection plaque — Claude Vision en DEUX PASSES, au coût minimal.
@@ -1853,24 +1856,33 @@ async function detectPlateFable(imageFile) {
       let quad = { tl: toPx(ref.tl), tr: toPx(ref.tr), br: toPx(ref.br), bl: toPx(ref.bl) };
       let snapMax = Math.max(3, Math.round(crop.w * 0.006));
 
-      // ── Ancrage sur les caractères lus ──
+      // ── Ancrage sur les caractères lus : RÉPARER, jamais rejeter ──
       // La boîte "chars" (bande de texte) est bien plus fiable que les coins
-      // seuls : le modèle doit fixer les glyphes pour les lire. Si elle est
-      // présente et valide, on l'utilise pour un diagnostic précoce : si le
-      // quad ne la contient pas CLAIREMENT, c'est un signe que quelque chose
-      // ne va pas (décalage d'une hauteur de plaque, par ex).
+      // seuls : le modèle doit fixer les glyphes pour les lire. Si le quad ne
+      // contient pas cette boîte (cas typique : quad décalé d'une hauteur de
+      // plaque, posé sur le pare-choc), on le RECONSTRUIT par dilatation de
+      // la bande de texte aux proportions d'une plaque UE — gratuit, aucune
+      // requête en plus, et on garde toujours un cache plutôt que rien.
       const cb = ref.chars;
+      const origQuad = quad;
       if (cb && [cb.x1, cb.y1, cb.x2, cb.y2].every(v => typeof v === 'number')) {
         const chars = {
           x1: Math.min(1, Math.max(0, cb.x1)) * crop.w, y1: Math.min(1, Math.max(0, cb.y1)) * crop.h,
           x2: Math.min(1, Math.max(0, cb.x2)) * crop.w, y2: Math.min(1, Math.max(0, cb.y2)) * crop.h,
         };
         const cw = chars.x2 - chars.x1, ch = chars.y2 - chars.y1;
-        // Caractères bien proportionnés (bande allongée).
-        const charsOK = cw > 2 && ch > 1 && cw / ch >= 2;
+        // L'ancre n'est utilisée que si elle ressemble à une bande de texte
+        // (allongée, taille non dérisoire) — une ancre douteuse ne doit pas
+        // dégrader un quad correct.
+        const charsOK = cw > crop.w * 0.08 && ch > 2 && cw / ch >= 2 && cw / ch <= 14;
         if (charsOK && !quadCoversBox(quad, chars, ch * 0.25)) {
-          console.log(`[plate] quad ne contient pas le texte lu${ref.text ? ` ("${ref.text}")` : ''} — rejet (décalage probable)`);
-          return null;
+          console.log(`[plate] quad décalé par rapport au texte lu${ref.text ? ` ("${ref.text}")` : ''} — reconstruction depuis la bande de caractères`);
+          quad = quadFromBox(chars);
+          snapMax = Math.max(snapMax, Math.round(crop.w * 0.02));
+          const ex = crop.w * EDGE, ey = crop.h * EDGE;
+          touchesEdge = [quad.tl, quad.tr, quad.br, quad.bl].some(
+            p => p.x <= ex || p.x >= crop.w - ex || p.y <= ey || p.y >= crop.h - ey
+          );
         }
       }
 
@@ -1882,7 +1894,18 @@ async function detectPlateFable(imageFile) {
         y: crop.cy1 + Math.min(1, Math.max(0, p.y / crop.h)) * (crop.cy2 - crop.cy1),
       });
       const corners = [map(quad.tl), map(quad.tr), map(quad.br), map(quad.bl)];
-      return plausible(corners) ? { corners, touchesEdge } : null;
+      if (plausible(corners)) return { corners, touchesEdge };
+      // Quad reconstruit implausible ? Repli sur les coins bruts du modèle
+      // plutôt que de finir sans cache.
+      if (quad !== origQuad) {
+        const co = [map(origQuad.tl), map(origQuad.tr), map(origQuad.br), map(origQuad.bl)];
+        if (plausible(co)) {
+          console.log('[plate] reconstruction implausible, coins bruts du modèle conservés');
+          return { corners: co, touchesEdge };
+        }
+      }
+      console.log('[plate] coins implausibles (proportions), refine rejeté');
+      return null;
     };
 
     // Les deux quads désignent-ils la même plaque ? Garde-fou du retry
