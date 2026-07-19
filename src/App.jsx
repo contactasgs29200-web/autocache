@@ -1782,7 +1782,10 @@ async function fablePlateAPI(b64DataUrl, mode, tier) {
 // gratuits + UNE escalade maximum par étape.
 // Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
 // normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
-async function detectPlateFable(imageFile) {
+// presetBox (optionnel) : bbox normalisée fournie par un détecteur spécialisé
+// (Snapshot). Elle remplace la passe locate (Haiku) — localisation garantie,
+// Claude ne fait plus que le refine des 4 coins sur le crop.
+async function detectPlateFable(imageFile, presetBox = null) {
   try {
     const url = URL.createObjectURL(imageFile);
     const img = await loadImg(url);
@@ -1943,7 +1946,9 @@ async function detectPlateFable(imageFile) {
     // (tier best, ~0,5 ct) contre-vérifie avant d'abandonner — un faux
     // négatif du locate économique coûterait un cache manquant.
     let corners = null;
-    const locEco = await fablePlateAPI(fullB64, 'locate');
+    const locEco = presetBox
+      ? { found: true, box: presetBox }
+      : await fablePlateAPI(fullB64, 'locate');
     const cropEco = (locEco && locEco.found) ? buildCrop(locEco.box) : null;
     if (cropEco) {
       let res = await refineOnCrop(cropEco);
@@ -1960,7 +1965,10 @@ async function detectPlateFable(imageFile) {
 
     // ── Relocalisation (rare) : la localisation éco était probablement
     // fausse (crop sans plaque) → une passe locate/refine en tier best.
-    if (!corners) {
+    // Inutile quand la boîte vient d'un détecteur spécialisé (presetBox) :
+    // la localisation est sûre, on passe directement au cache de repli
+    // posé sur cette boîte serrée.
+    if (!corners && !presetBox) {
       console.log('[plate] échec chemin éco, relocalisation (tier best)');
       const locBest = await fablePlateAPI(fullB64, 'locate', 'best');
       const cropBest = (locBest && locBest.found) ? buildCrop(locBest.box) : null;
@@ -2054,9 +2062,23 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
       plateLastApiError = `detect-plates HTTP ${r.status} — ${body.slice(0, 180) || 'sans détail'}`;
       return null;
     }
-    const { polygons } = await r.json();
+    const { polygons, boxes } = await r.json();
     const quads = (polygons || []).filter(p => Array.isArray(p) && p.length === 4);
-    if (!quads.length) { console.log('Aucune plaque détectée (Plate Recognizer)'); return null; }
+    if (!quads.length) {
+      // Repli Snapshot : pas de polygone, mais une boîte SERRÉE et fiable
+      // autour de la plaque. On la renvoie au pipeline Claude qui n'aura
+      // plus qu'à affiner les 4 coins sur un crop garanti correct.
+      const bs = (boxes || []);
+      if (bs.length) {
+        const best = bs.slice().sort((A, B) =>
+          (B.xmax - B.xmin) * (B.ymax - B.ymin) - (A.xmax - A.xmin) * (A.ymax - A.ymin))[0];
+        const box = { x1: best.xmin / w, y1: best.ymin / h, x2: best.xmax / w, y2: best.ymax / h };
+        console.log(`[plate] boîte Snapshot (${box.x1.toFixed(3)},${box.y1.toFixed(3)})-(${box.x2.toFixed(3)},${box.y2.toFixed(3)}) — coins affinés par Claude`);
+        return { boxOnly: true, box };
+      }
+      console.log('Aucune plaque détectée (Plate Recognizer)');
+      return null;
+    }
     // Plaque principale = polygone de plus grande aire (shoelace).
     const best = quads.slice().sort((A, B) => quadArea(B) - quadArea(A))[0];
     let corners = orderQuad(best).map(p => ({ x: p[0] / w, y: p[1] / h }));
@@ -2075,14 +2097,16 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
   }
 }
 
-// Ordre de bataille : détecteur spécialisé d'abord (précision au pixel,
-// coût Claude nul), Claude Vision en secours automatique s'il échoue
-// (clé PR invalide, quota, plaque non reconnue).
+// Ordre de bataille :
+//  1. Plate Recognizer Blur : polygone exact → cache posé, aucun appel Claude.
+//  2. Plate Recognizer Snapshot : boîte serrée → localisation garantie, Claude
+//     n'affine que les 4 coins sur le crop (1 appel Sonnet).
+//  3. Claude seul (locate + refine) si Plate Recognizer est indisponible.
 async function detectPlate(imageFile, regions = 'fr') {
   const pr = await detectPlatePlateRecognizer(imageFile, regions);
-  if (pr) return pr;
-  console.warn('[plate] Plate Recognizer indisponible, bascule sur Claude Vision');
-  return detectPlateFable(imageFile);
+  if (pr && !pr.boxOnly) return pr;
+  if (!pr) console.warn('[plate] Plate Recognizer indisponible, bascule sur Claude Vision');
+  return detectPlateFable(imageFile, pr?.box ?? null);
 }
 
 // ── Vehicle detection + main vehicle selection ──
