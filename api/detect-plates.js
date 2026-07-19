@@ -30,7 +30,8 @@ function buildForm(buf, regions) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST seulement' });
 
-  const token = process.env.PLATE_RECOGNIZER_TOKEN;
+  // Les deux noms coexistent selon l'époque de la config Vercel.
+  const token = process.env.PLATE_RECOGNIZER_TOKEN || process.env.PLATERECOGNIZER_API_KEY;
   if (!token) return res.status(500).json({ error: 'PLATE_RECOGNIZER_TOKEN non configuré' });
 
   try {
