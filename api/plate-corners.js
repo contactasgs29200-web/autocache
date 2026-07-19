@@ -42,28 +42,32 @@ Réponds UNIQUEMENT avec ce JSON (3 décimales, sans markdown) :
 
 const REFINE_PROMPT = `Cette image est un CROP zoomé sur la plaque d'immatriculation d'un véhicule (la plaque avec les caractères alphanumériques, entourée de carrosserie/pare-choc).
 
-═══ ÉTAPE 1 — LIRE LES CARACTÈRES (ton ANCRE) ═══
-Lis le texte de la plaque (ex: "DB-127-DG") et donne la boîte englobante SERRÉE de la bande de caractères : "chars" = {x1,y1,x2,y2} où (x1,y1) = haut-gauche du PREMIER caractère et (x2,y2) = bas-droit du DERNIER caractère, en coordonnées normalisées de CE crop. Si les caractères sont trop petits/flous pour être lus mais que la bande de texte est visible, donne quand même sa boîte (text vide). Tout le reste de ta réponse doit être cohérent avec cette boîte.
+═══ ÉTAPE 1 — ISOLER LA SURFACE DE LA PLAQUE ═══
+La surface de la plaque est MATE et porte le texte. Le cadre/support en plastique ou chrome autour N'EST PAS la plaque — prends uniquement le rectangle qui contient les caractères, bord à bord, pas le cadre ni le renfoncement du pare-choc.
 
-═══ ÉTAPE 2 — ISOLER LA SURFACE DE LA PLAQUE ═══
-La surface de la plaque est le rectangle MAT qui porte ces caractères. Le cadre/support en plastique ou chrome autour N'EST PAS la plaque — prends uniquement le rectangle bord à bord, pas le cadre ni le renfoncement du pare-choc.
-
-═══ ÉTAPE 3 — RAISONNER SUR LA PERSPECTIVE ═══
+═══ ÉTAPE 2 — RAISONNER SUR LA PERSPECTIVE ═══
 La plaque est un vrai rectangle (~520×110mm) qui, en perspective, se projette en QUADRILATÈRE DÉFORMÉ (trapèze/parallélogramme) dès que le véhicule n'est pas vu strictement de face. Analyse :
 - Caméra au-dessus / au niveau / en dessous de la plaque ?
 - Véhicule tourné vers la gauche / la droite / de face ?
 - Quel côté de la plaque est le plus proche de la caméra (donc visuellement le plus grand) ?
-Les bords supérieur et inférieur ne sont PAS forcément horizontaux dans l'image. Ne "corrige" jamais les coins vers un rectangle aligné sur les axes : donne les positions RÉELLEMENT observées.
+Vérifie visuellement où se trouve CHAQUE coin : suis le bord supérieur de la plaque de gauche à droite, puis le bord inférieur. Les bords supérieur et inférieur ne sont PAS forcément horizontaux dans l'image.
 
-═══ ÉTAPE 4 — LES 4 COINS, AUTOUR DE L'ANCRE ═══
-La surface de la plaque dépasse de la bande de caractères d'environ 10-15% en largeur (bandes bleues aux extrémités) et 20-40% en hauteur. Tes 4 coins doivent donc ENTOURER STRICTEMENT la boîte "chars" :
-- tl : plus haut ET plus à gauche que le haut-gauche de "chars"
-- tr : plus haut ET plus à droite que le haut-droit de "chars"
-- br : plus bas ET plus à droite que le bas-droit de "chars"
-- bl : plus bas ET plus à gauche que le bas-gauche de "chars"
-Erreur classique à éviter ABSOLUMENT : un quadrilatère décalé d'une hauteur de plaque vers le bas, dont le bord HAUT longe le bord BAS réel de la plaque. Si ta boîte "chars" n'est pas à l'intérieur de ton quadrilatère, tes coins sont FAUX : recommence.
+IMPORTANT : ne "corrige" jamais les coins vers un rectangle aligné sur les axes. Donne les positions RÉELLEMENT observées de chaque coin, même si le quadrilatère est incliné ou déformé.
 
-Coordonnées normalisées 0.0–1.0 relatives à CE crop : x=0.0 = bord gauche, x=1.0 = bord droit, y=0.0 = bord haut, y=1.0 = bord bas.
+═══ ÉTAPE 3 — ANCRAGE SUR LE TEXTE ═══
+Lis les caractères de la plaque (ex: "DB-127-DG"). Tes 4 coins délimitent le rectangle qui CONTIENT ces caractères. VÉRIFICATION OBLIGATOIRE avant de répondre : le centre de ton quadrilatère doit tomber SUR le texte lu — pas au-dessus (capot/calandre), pas en dessous (bouclier/entrée d'air). Erreur classique à éviter : donner un quadrilatère décalé d'une hauteur de plaque vers le bas, dont le bord HAUT longe le bord BAS réel de la plaque.
+
+De plus, donne aussi la boîte englobante SERRÉE de la bande de caractères dans le champ "chars" : {x1,y1,x2,y2} où (x1,y1) = haut-gauche du PREMIER caractère et (x2,y2) = bas-droit du DERNIER caractère.
+
+═══ ÉTAPE 4 — COORDONNÉES ═══
+Donne les coordonnées normalisées (0.0–1.0, relatives à CE crop) des 4 coins de la SURFACE de la plaque :
+- tl : coin haut-gauche
+- tr : coin haut-droit
+- br : coin bas-droit
+- bl : coin bas-gauche
+
+x=0.0 = bord gauche de cette image, x=1.0 = bord droit.
+y=0.0 = bord haut, y=1.0 = bord bas.
 
 Si aucune plaque n'est identifiable dans ce crop, réponds {"found":false}.
 

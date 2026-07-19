@@ -1854,13 +1854,11 @@ async function detectPlateFable(imageFile) {
       let snapMax = Math.max(3, Math.round(crop.w * 0.006));
 
       // ── Ancrage sur les caractères lus ──
-      // La boîte "chars" (bande de texte) est bien plus fiable que les coins :
-      // le modèle doit fixer les glyphes pour les lire. Si le quad ne contient
-      // pas cette boîte (cas typique : quad décalé d'une hauteur de plaque,
-      // posé sur le pare-choc sous la plaque) ou s'il est démesuré par rapport
-      // à elle, on le RECONSTRUIT par dilatation de la bande de texte aux
-      // proportions d'une plaque UE — gratuit, aucune requête en plus —
-      // et l'aimantation élargie recolle ensuite les bords exacts.
+      // La boîte "chars" (bande de texte) est bien plus fiable que les coins
+      // seuls : le modèle doit fixer les glyphes pour les lire. Si elle est
+      // présente et valide, on l'utilise pour un diagnostic précoce : si le
+      // quad ne la contient pas CLAIREMENT, c'est un signe que quelque chose
+      // ne va pas (décalage d'une hauteur de plaque, par ex).
       const cb = ref.chars;
       if (cb && [cb.x1, cb.y1, cb.x2, cb.y2].every(v => typeof v === 'number')) {
         const chars = {
@@ -1868,23 +1866,11 @@ async function detectPlateFable(imageFile) {
           x2: Math.min(1, Math.max(0, cb.x2)) * crop.w, y2: Math.min(1, Math.max(0, cb.y2)) * crop.h,
         };
         const cw = chars.x2 - chars.x1, ch = chars.y2 - chars.y1;
-        // L'ancre n'est utilisée que si elle-même ressemble à une bande de
-        // texte de plaque cadrée dans le crop (large, allongée) — une ancre
-        // douteuse ne doit pas dégrader un quad correct.
-        const charsOK = cw > crop.w * 0.12 && ch > 2 && cw / ch >= 1.2 && cw / ch <= 14;
-        if (charsOK) {
-          const qArea = quadArea([[quad.tl.x, quad.tl.y], [quad.tr.x, quad.tr.y], [quad.br.x, quad.br.y], [quad.bl.x, quad.bl.y]]);
-          const misplaced = !quadCoversBox(quad, chars, ch * 0.15);
-          const oversized = qArea > cw * ch * 4.5;
-          if (misplaced || oversized) {
-            console.log(`[plate] quad ${misplaced ? 'décalé' : 'démesuré'} par rapport au texte lu${ref.text ? ` ("${ref.text}")` : ''} — reconstruction depuis la bande de caractères`);
-            quad = quadFromBox(chars);
-            snapMax = Math.max(snapMax, Math.round(crop.w * 0.02));
-            const ePx = crop.w * EDGE;
-            touchesEdge = [quad.tl, quad.tr, quad.br, quad.bl].some(
-              p => p.x <= ePx || p.x >= crop.w - ePx || p.y <= crop.h * EDGE || p.y >= crop.h - crop.h * EDGE
-            );
-          }
+        // Caractères bien proportionnés (bande allongée).
+        const charsOK = cw > 2 && ch > 1 && cw / ch >= 2;
+        if (charsOK && !quadCoversBox(quad, chars, ch * 0.25)) {
+          console.log(`[plate] quad ne contient pas le texte lu${ref.text ? ` ("${ref.text}")` : ''} — rejet (décalage probable)`);
+          return null;
         }
       }
 
