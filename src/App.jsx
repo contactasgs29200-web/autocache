@@ -3,7 +3,7 @@ import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
-import { orderQuad, quadArea, snapQuadOutward, quadCoversBox, quadFromBox } from "./plateGeometry.js";
+import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox } from "./plateGeometry.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -1868,6 +1868,7 @@ async function detectPlateFable(imageFile, presetBox = null) {
       // requête en plus, et on garde toujours un cache plutôt que rien.
       const cb = ref.chars;
       const origQuad = quad;
+      let charsPx = null;
       if (cb && [cb.x1, cb.y1, cb.x2, cb.y2].every(v => typeof v === 'number')) {
         const chars = {
           x1: Math.min(1, Math.max(0, cb.x1)) * crop.w, y1: Math.min(1, Math.max(0, cb.y1)) * crop.h,
@@ -1878,6 +1879,7 @@ async function detectPlateFable(imageFile, presetBox = null) {
         // (allongée, taille non dérisoire) — une ancre douteuse ne doit pas
         // dégrader un quad correct.
         const charsOK = cw > crop.w * 0.08 && ch > 2 && cw / ch >= 2 && cw / ch <= 14;
+        if (charsOK) charsPx = chars;
         if (charsOK && !quadCoversBox(quad, chars, ch * 0.25)) {
           console.log(`[plate] quad décalé par rapport au texte lu${ref.text ? ` ("${ref.text}")` : ''} — reconstruction depuis la bande de caractères`);
           quad = quadFromBox(chars);
@@ -1889,9 +1891,16 @@ async function detectPlateFable(imageFile, presetBox = null) {
         }
       }
 
-      // Aimantation : chaque bord est poussé vers l'extérieur jusqu'au vrai
-      // contour de la plaque (gratuit, garantit la couverture bord à bord).
-      quad = snapQuadOutward(crop.lum, crop.w, crop.h, quad, snapMax);
+      // Ajustement local des bords sur le vrai contour de la plaque (gratuit).
+      // Avec l'ancre texte : chaque bord peut se DÉCALER ET S'INCLINER
+      // (le modèle renvoie souvent un rectangle droit même sur une plaque en
+      // perspective), vers l'intérieur comme l'extérieur tant que la bande de
+      // caractères reste couverte. Sans ancre : poussée vers l'extérieur
+      // uniquement (comportement prudent d'origine).
+      quad = charsPx
+        ? fitQuadEdges(crop.lum, crop.w, crop.h, quad, charsPx,
+            Math.max(8, Math.round(crop.w * 0.03)), Math.max(6, Math.round(crop.w * 0.02)))
+        : snapQuadOutward(crop.lum, crop.w, crop.h, quad, snapMax);
       const map = p => ({
         x: crop.cx1 + Math.min(1, Math.max(0, p.x / crop.w)) * (crop.cx2 - crop.cx1),
         y: crop.cy1 + Math.min(1, Math.max(0, p.y / crop.h)) * (crop.cy2 - crop.cy1),
@@ -2101,8 +2110,10 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
         console.log(`[plate] boîte Snapshot (${box.x1.toFixed(3)},${box.y1.toFixed(3)})-(${box.x2.toFixed(3)},${box.y2.toFixed(3)}) — coins affinés par Claude`);
         return { boxOnly: true, box };
       }
+      // Réponse SAINE de l'API mais zéro plaque : verdict fiable d'un
+      // détecteur spécialisé — à distinguer d'une erreur (null).
       console.log('Aucune plaque détectée (Plate Recognizer)');
-      return null;
+      return { noPlate: true };
     }
     // Plaque principale = polygone de plus grande aire (shoelace).
     const best = quads.slice().sort((A, B) => quadArea(B) - quadArea(A))[0];
@@ -2129,6 +2140,13 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
 //  3. Claude seul (locate + refine) si Plate Recognizer est indisponible.
 async function detectPlate(imageFile, regions = 'fr') {
   const pr = await detectPlatePlateRecognizer(imageFile, regions);
+  // Verdict « aucune plaque » du détecteur spécialisé : on le CROIT.
+  // Repartir sur Claude ici produirait des caches fantômes (le locate
+  // hallucine volontiers une zone sur un flanc ou une calandre).
+  if (pr?.noPlate) {
+    console.log('[plate] aucune plaque sur la photo — aucun cache posé');
+    return null;
+  }
   if (pr && !pr.boxOnly) return pr;
   if (!pr) console.warn('[plate] Plate Recognizer indisponible, bascule sur Claude Vision');
   return detectPlateFable(imageFile, pr?.box ?? null);

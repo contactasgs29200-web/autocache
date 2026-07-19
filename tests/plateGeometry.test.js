@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { orderQuad, quadArea, snapQuadOutward, pointInQuad, quadCoversBox, quadFromBox } from '../src/plateGeometry.js';
+import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, pointInQuad, quadCoversBox, quadFromBox } from '../src/plateGeometry.js';
 
 // orderQuad doit renvoyer les coins dans l'ordre TL, TR, BR, BL quelle que
 // soit la permutation d'entrée (Plate Recognizer ne garantit pas l'ordre).
@@ -156,6 +156,65 @@ test('quadFromBox dilate autour du centre aux proportions plaque', () => {
   // dimensions ×1.25 / ×1.5
   assert.equal(q.tr.x - q.tl.x, 125);
   assert.equal(q.bl.y - q.tl.y, 30);
+});
+
+// ── fitQuadEdges — ajustement avec inclinaison (perspective) ──
+
+// Plaque sombre INCLINÉE (vue 3/4) : le bord haut descend de y=20 à y=26,
+// le bord bas de y=38 à y=44 (parallélogramme).
+function makeTiltedPlateLum() {
+  const plate = {
+    tl: { x: 20, y: 20 }, tr: { x: 80, y: 26 },
+    br: { x: 80, y: 44 }, bl: { x: 20, y: 38 },
+  };
+  const lum = new Float32Array(SW * SH).fill(200);
+  for (let y = 0; y < SH; y++)
+    for (let x = 0; x < SW; x++)
+      if (pointInQuad({ x: x + 0.5, y: y + 0.5 }, plate)) lum[y * SW + x] = 40;
+  return lum;
+}
+
+test('fitQuadEdges retrouve la perspective d\'une plaque inclinée', () => {
+  const lum = makeTiltedPlateLum();
+  // Le modèle a renvoyé un rectangle DROIT (bbox de la plaque) : les bords
+  // haut/bas doivent s'incliner pour épouser le vrai contour.
+  const quad = {
+    tl: { x: 20, y: 20 }, tr: { x: 80, y: 20 },
+    br: { x: 80, y: 44 }, bl: { x: 20, y: 44 },
+  };
+  const chars = { x1: 30, y1: 28, x2: 70, y2: 36 };
+  const out = fitQuadEdges(lum, SW, SH, quad, chars, 8, 8);
+  assert.ok(Math.abs(out.tl.y - 20) <= 3, `tl.y: ${out.tl.y.toFixed(1)}`);
+  assert.ok(Math.abs(out.tr.y - 26) <= 3, `tr.y: ${out.tr.y.toFixed(1)}`);
+  assert.ok(Math.abs(out.bl.y - 38) <= 3, `bl.y: ${out.bl.y.toFixed(1)}`);
+  assert.ok(Math.abs(out.br.y - 44) <= 3, `br.y: ${out.br.y.toFixed(1)}`);
+  // La bande de caractères reste couverte.
+  assert.ok(quadCoversBox(out, chars, 1));
+});
+
+test('fitQuadEdges ne rogne jamais la bande de caractères', () => {
+  const lum = makeTiltedPlateLum();
+  const quad = {
+    tl: { x: 20, y: 20 }, tr: { x: 80, y: 20 },
+    br: { x: 80, y: 44 }, bl: { x: 20, y: 44 },
+  };
+  // Ancre presque aussi grande que le quad : aucun mouvement intérieur possible.
+  const chars = { x1: 21, y1: 21, x2: 79, y2: 43 };
+  const out = fitQuadEdges(lum, SW, SH, quad, chars, 8, 8);
+  assert.ok(quadCoversBox(out, chars, 1.5), 'bande de caractères rognée');
+});
+
+test('fitQuadEdges reste stable sur une image uniforme', () => {
+  const lum = new Float32Array(SW * SH).fill(128);
+  const quad = {
+    tl: { x: 30, y: 22 }, tr: { x: 70, y: 22 },
+    br: { x: 70, y: 38 }, bl: { x: 30, y: 38 },
+  };
+  const out = fitQuadEdges(lum, SW, SH, quad, { x1: 35, y1: 26, x2: 65, y2: 34 }, 8, 8);
+  for (const k of ['tl', 'tr', 'br', 'bl']) {
+    assert.ok(Math.abs(out[k].x - quad[k].x) < 0.01 && Math.abs(out[k].y - quad[k].y) < 0.01,
+      `coin ${k} déplacé sans gradient`);
+  }
 });
 
 test('snapQuadOutward rend le quad intact s\'il est dégénéré', () => {
