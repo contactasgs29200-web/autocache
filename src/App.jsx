@@ -1963,17 +1963,30 @@ async function detectPlateFable(imageFile) {
     if (!corners) {
       console.log('[plate] échec chemin éco, relocalisation (tier best)');
       const locBest = await fablePlateAPI(fullB64, 'locate', 'best');
-      if (!locBest || !locBest.found) { console.log('[plate] aucune plaque détectée (Claude)'); return null; }
-      const cropBest = buildCrop(locBest.box);
-      if (!cropBest) { console.warn('[plate] bbox locate best invalide'); return null; }
-      let res = await refineOnCrop(cropBest, 'best');
-      res = await retryWider(res, locBest.box, 'best');
-      corners = res?.corners ?? null;
-      if (!corners) {
-        console.warn('[plate] refine échoué même après relocalisation, rejeté');
-        return null;
+      const cropBest = (locBest && locBest.found) ? buildCrop(locBest.box) : null;
+      if (cropBest) {
+        let res = await refineOnCrop(cropBest, 'best');
+        res = await retryWider(res, locBest.box, 'best');
+        corners = res?.corners ?? null;
       }
     }
+
+    // ── Dernier recours : les refine n'ont rien confirmé mais le locate éco
+    // avait trouvé une zone. On pose le cache sur cette bbox (demandée
+    // volontairement généreuse au modèle, donc couvrante) : un cache un peu
+    // large et droit vaut mieux que pas de cache — ajustable à la main.
+    if (!corners && cropEco) {
+      const fb = locEco.box;
+      const c = [
+        { x: fb.x1, y: fb.y1 }, { x: fb.x2, y: fb.y1 },
+        { x: fb.x2, y: fb.y2 }, { x: fb.x1, y: fb.y2 },
+      ].map(p => ({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) }));
+      if (plausible(c)) {
+        console.warn('[plate] refine muet partout — cache de repli posé sur la zone locate');
+        corners = c;
+      }
+    }
+    if (!corners) { console.log('[plate] aucune plaque détectée (Claude)'); return null; }
 
     const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
     const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };

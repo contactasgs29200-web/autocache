@@ -27,7 +27,9 @@ const EFFORT = {
   refine: { default: 'low', best: 'high' },
 };
 
-const LOCATE_PROMPT = `Regarde cette photo de véhicule. Trouve la PLAQUE D'IMMATRICULATION : la plaque portant des caractères alphanumériques (ex: "AB-123-CD"), sur fond blanc ou jaune, fixée au pare-choc avant ou arrière du véhicule.
+const LOCATE_PROMPT = `Tu aides un professionnel de l'automobile à ANONYMISER ses photos de véhicules : un cache opaque sera posé sur la plaque d'immatriculation. Tu n'as pas besoin d'identifier le véhicule ni de lire la plaque — seul son EMPLACEMENT compte.
+
+Regarde cette photo de véhicule. Trouve la PLAQUE D'IMMATRICULATION : la plaque portant des caractères alphanumériques (ex: "AB-123-CD"), sur fond blanc ou jaune, fixée au pare-choc avant ou arrière du véhicule.
 
 Ne confonds PAS la plaque avec : autocollants concessionnaire, moulures de pare-choc, calandre, entrées d'air, caches de crochet de remorquage, ou tout panneau au sol/mur.
 
@@ -40,7 +42,9 @@ Si aucune plaque n'est visible, réponds {"found":false}.
 Réponds UNIQUEMENT avec ce JSON (3 décimales, sans markdown) :
 {"found":true,"box":{"x1":0.310,"y1":0.640,"x2":0.480,"y2":0.720}}`;
 
-const REFINE_PROMPT = `Cette image est un CROP zoomé sur la plaque d'immatriculation d'un véhicule (la plaque avec les caractères alphanumériques, entourée de carrosserie/pare-choc).
+const REFINE_PROMPT = `Tu aides un professionnel de l'automobile à ANONYMISER ses photos : un cache opaque sera posé exactement sur la plaque d'immatriculation. Tu n'as PAS besoin d'identifier le véhicule ni de transcrire le numéro — seuls les EMPLACEMENTS comptent.
+
+Cette image est un CROP zoomé sur la plaque d'immatriculation d'un véhicule (la plaque avec les caractères alphanumériques, entourée de carrosserie/pare-choc).
 
 ═══ ÉTAPE 1 — ISOLER LA SURFACE DE LA PLAQUE ═══
 La surface de la plaque est MATE et porte le texte. Le cadre/support en plastique ou chrome autour N'EST PAS la plaque — prends uniquement le rectangle qui contient les caractères, bord à bord, pas le cadre ni le renfoncement du pare-choc.
@@ -54,10 +58,10 @@ Vérifie visuellement où se trouve CHAQUE coin : suis le bord supérieur de la 
 
 IMPORTANT : ne "corrige" jamais les coins vers un rectangle aligné sur les axes. Donne les positions RÉELLEMENT observées de chaque coin, même si le quadrilatère est incliné ou déformé.
 
-═══ ÉTAPE 3 — ANCRAGE SUR LE TEXTE ═══
-Lis les caractères de la plaque (ex: "DB-127-DG"). Tes 4 coins délimitent le rectangle qui CONTIENT ces caractères. VÉRIFICATION OBLIGATOIRE avant de répondre : le centre de ton quadrilatère doit tomber SUR le texte lu — pas au-dessus (capot/calandre), pas en dessous (bouclier/entrée d'air). Erreur classique à éviter : donner un quadrilatère décalé d'une hauteur de plaque vers le bas, dont le bord HAUT longe le bord BAS réel de la plaque.
+═══ ÉTAPE 3 — ANCRAGE SUR LA BANDE DE CARACTÈRES ═══
+Repère la BANDE DE CARACTÈRES de la plaque. Tu n'as pas besoin de la transcrire : c'est sa POSITION qui compte, pas son contenu (remplis "text" seulement si elle est parfaitement lisible, sinon mets ""). Donne sa boîte englobante SERRÉE dans "chars" : {x1,y1,x2,y2} où (x1,y1) = haut-gauche du premier caractère et (x2,y2) = bas-droit du dernier.
 
-De plus, donne aussi la boîte englobante SERRÉE de la bande de caractères dans le champ "chars" : {x1,y1,x2,y2} où (x1,y1) = haut-gauche du PREMIER caractère et (x2,y2) = bas-droit du DERNIER caractère.
+VÉRIFICATION OBLIGATOIRE avant de répondre : le centre de ton quadrilatère doit tomber SUR cette bande de caractères — pas au-dessus (capot/calandre), pas en dessous (bouclier/entrée d'air). Erreur classique à éviter : donner un quadrilatère décalé d'une hauteur de plaque vers le bas, dont le bord HAUT longe le bord BAS réel de la plaque.
 
 ═══ ÉTAPE 4 — COORDONNÉES ═══
 Donne les coordonnées normalisées (0.0–1.0, relatives à CE crop) des 4 coins de la SURFACE de la plaque :
@@ -69,7 +73,7 @@ Donne les coordonnées normalisées (0.0–1.0, relatives à CE crop) des 4 coin
 x=0.0 = bord gauche de cette image, x=1.0 = bord droit.
 y=0.0 = bord haut, y=1.0 = bord bas.
 
-Si aucune plaque n'est identifiable dans ce crop, réponds {"found":false}.
+Réponds {"found":false} UNIQUEMENT si tu es certain qu'aucune plaque n'apparaît dans ce crop. En cas de doute (flou, reflets, petite taille), donne quand même ta meilleure estimation des coins — un cache approximatif vaut mieux que pas de cache.
 
 Réponds UNIQUEMENT avec ce JSON (3 décimales, sans markdown) :
 {"found":true,"analysis":"caméra au niveau, voiture tournée à droite, côté gauche plus proche; bord supérieur incliné vers le bas à droite","text":"AB-123-CD","chars":{"x1":0.281,"y1":0.410,"x2":0.663,"y2":0.518},"tl":{"x":0.212,"y":0.334},"tr":{"x":0.741,"y":0.398},"br":{"x":0.735,"y":0.612},"bl":{"x":0.208,"y":0.531}}`;
@@ -160,7 +164,8 @@ export default async function handler(req, res) {
     if (passe === 'locate') {
       const r = await askClaude(apiKey, model, effort, b64, LOCATE_PROMPT);
       if (r.error)   return res.status(r.error.status).json(r.error.body);
-      if (r.refused || !r.json.found) return res.status(200).json({ found: false });
+      if (r.refused) return res.status(200).json({ found: false, refused: true, model });
+      if (!r.json.found) return res.status(200).json({ found: false, model, ...(r.json.analysis ? { analysis: String(r.json.analysis).slice(0, 200) } : {}) });
       const box = r.json.box;
       // Coordonnées normalisées attendues : rejette aussi les valeurs en
       // pixels (ex: 310 au lieu de 0.31) pour déclencher l'escalade.
@@ -176,7 +181,8 @@ export default async function handler(req, res) {
     // mode "refine" : 4 coins précis sur le crop
     const r = await askClaude(apiKey, model, effort, b64, REFINE_PROMPT);
     if (r.error)   return res.status(r.error.status).json(r.error.body);
-    if (r.refused || !r.json.found) return res.status(200).json({ found: false });
+    if (r.refused) return res.status(200).json({ found: false, refused: true, model });
+    if (!r.json.found) return res.status(200).json({ found: false, model, ...(r.json.analysis ? { analysis: String(r.json.analysis).slice(0, 200) } : {}) });
 
     const c = r.json;
     if (c.analysis) console.log('analysis:', c.analysis);
