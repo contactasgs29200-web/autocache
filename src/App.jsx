@@ -1999,8 +1999,45 @@ async function detectPlateFable(imageFile) {
   }
 }
 
-// Détection plaque via Plate Recognizer Blur — filet de sécurité si Fable 5
-// échoue (erreur réseau/API), pas utilisé en chemin normal.
+// Aimante des coins (normalisés image entière) sur le contour réel de la
+// plaque : crop local autour du quad, luminance, snapQuadOutward — purement
+// local et gratuit. Garantit un cache couvrant bord à bord même si le
+// détecteur a donné un polygone légèrement à l'intérieur de la plaque.
+function snapCornersOnImage(img, W, H, corners) {
+  try {
+    const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
+    const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+    const cx1 = Math.max(0, Math.min(...xs) - bw * 0.4), cx2 = Math.min(1, Math.max(...xs) + bw * 0.4);
+    const cy1 = Math.max(0, Math.min(...ys) - bh * 0.6), cy2 = Math.min(1, Math.max(...ys) + bh * 0.6);
+    const cw = Math.round((cx2 - cx1) * W), ch = Math.round((cy2 - cy1) * H);
+    if (cw < 16 || ch < 8) return corners;
+    const scale = Math.min(3, Math.max(1, 700 / cw));
+    const c = document.createElement('canvas');
+    c.width = Math.round(cw * scale); c.height = Math.round(ch * scale);
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, cx1 * W, cy1 * H, cw, ch, 0, 0, c.width, c.height);
+    const px = ctx.getImageData(0, 0, c.width, c.height).data;
+    const lum = new Float32Array(c.width * c.height);
+    for (let i = 0; i < lum.length; i++) {
+      lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+    }
+    const toPx = p => ({ x: (p.x - cx1) / (cx2 - cx1) * c.width, y: (p.y - cy1) / (cy2 - cy1) * c.height });
+    let quad = { tl: toPx(corners[0]), tr: toPx(corners[1]), br: toPx(corners[2]), bl: toPx(corners[3]) };
+    quad = snapQuadOutward(lum, c.width, c.height, quad, Math.max(3, Math.round(c.width * 0.012)));
+    const back = p => ({ x: cx1 + p.x / c.width * (cx2 - cx1), y: cy1 + p.y / c.height * (cy2 - cy1) });
+    const out = [back(quad.tl), back(quad.tr), back(quad.br), back(quad.bl)];
+    freeCanvas(c);
+    return out;
+  } catch (e) {
+    console.warn('[plate] snap local échoué:', e.message);
+    return corners;
+  }
+}
+
+// Détection plaque via Plate Recognizer Blur — détecteur SPÉCIALISÉ, renvoie
+// le polygone exact (4 coins) de chaque plaque. C'est le chemin PRINCIPAL :
+// précision au pixel, ~1 s, et aucun appel Claude quand il réussit.
 // Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
 // normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
 async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
@@ -2011,13 +2048,23 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageBase64: base64, regions }),
     });
-    if (!r.ok) { console.warn('[detect-plates] HTTP', r.status); return null; }
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      console.warn('[detect-plates] HTTP', r.status, body.slice(0, 300));
+      plateLastApiError = `detect-plates HTTP ${r.status} — ${body.slice(0, 180) || 'sans détail'}`;
+      return null;
+    }
     const { polygons } = await r.json();
     const quads = (polygons || []).filter(p => Array.isArray(p) && p.length === 4);
-    if (!quads.length) { console.log('Aucune plaque détectée'); return null; }
+    if (!quads.length) { console.log('Aucune plaque détectée (Plate Recognizer)'); return null; }
     // Plaque principale = polygone de plus grande aire (shoelace).
     const best = quads.slice().sort((A, B) => quadArea(B) - quadArea(A))[0];
-    const corners = orderQuad(best).map(p => ({ x: p[0] / w, y: p[1] / h }));
+    let corners = orderQuad(best).map(p => ({ x: p[0] / w, y: p[1] / h }));
+    // Aimantation locale : pousse chaque bord jusqu'au vrai contour.
+    const url = URL.createObjectURL(imageFile);
+    const img = await loadImg(url);
+    URL.revokeObjectURL(url);
+    corners = snapCornersOnImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height, corners);
     const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
     const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
     console.log(`Plaque détectée (Plate Recognizer): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
@@ -2028,11 +2075,14 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
   }
 }
 
+// Ordre de bataille : détecteur spécialisé d'abord (précision au pixel,
+// coût Claude nul), Claude Vision en secours automatique s'il échoue
+// (clé PR invalide, quota, plaque non reconnue).
 async function detectPlate(imageFile, regions = 'fr') {
-  const fable = await detectPlateFable(imageFile);
-  if (fable) return fable;
-  console.warn('[plate] détection Claude échouée, repli sur Plate Recognizer');
-  return detectPlatePlateRecognizer(imageFile, regions);
+  const pr = await detectPlatePlateRecognizer(imageFile, regions);
+  if (pr) return pr;
+  console.warn('[plate] Plate Recognizer indisponible, bascule sur Claude Vision');
+  return detectPlateFable(imageFile);
 }
 
 // ── Vehicle detection + main vehicle selection ──
