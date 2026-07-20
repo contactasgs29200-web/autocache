@@ -212,3 +212,305 @@ export function snapQuadOutward(lum, W, H, quad, maxOut = 6) {
   }
   return { tl: out[0], tr: out[1], br: out[2], bl: out[3] };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Extraction du quad plaque par SEGMENTATION (zone claire + bandes bleues).
+// Bien plus robuste que l'ajustement bord à bord : retrouve la plaque même
+// si le quad du modèle est décalé ou aplati, tant qu'elle est dans le crop.
+// Développé et validé sur photos réelles (voir tests).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Extracteur de quad plaque par segmentation : la plaque est la région
+// CLAIRE (blanc) + bandes BLEUES (eurobande / vignette dépt) la plus
+// cohérente avec le quad-graine (modèle) et la bande de caractères.
+// Pur JS, pensé pour être porté tel quel dans src/plateGeometry.js.
+
+// Seuil d'Otsu sur un histogramme de luminance 0-255.
+export function otsuThreshold(lum) {
+  const hist = new Float64Array(256);
+  for (let i = 0; i < lum.length; i++) hist[Math.max(0, Math.min(255, lum[i] | 0))]++;
+  const total = lum.length;
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, best = 127, bestVar = -1;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > bestVar) { bestVar = v; best = t; }
+  }
+  return best;
+}
+
+// Masque « plaque » : pixels clairs OU bleu franc. Le seuil de clarté est
+// ANCRÉ sur la luminosité de la plaque elle-même : percentile élevé de la
+// zone des caractères (le fond blanc entre les glyphes), moins une marge.
+// Bien plus fiable qu'un Otsu global quand la plaque n'occupe qu'une petite
+// fraction du crop (sol carrelé et carrosserie claire fusionnent sinon).
+export function plateMask(lum, rgb, W, H, anchorBox, fixedT = null, erode = 1) {
+  let T;
+  if (fixedT) {
+    T = fixedT;
+  } else if (anchorBox) {
+    const vals = [];
+    const x1 = Math.max(0, anchorBox.x1 | 0), x2 = Math.min(W - 1, anchorBox.x2 | 0);
+    const y1 = Math.max(0, anchorBox.y1 | 0), y2 = Math.min(H - 1, anchorBox.y2 | 0);
+    for (let y = y1; y <= y2; y += 2) for (let x = x1; x <= x2; x += 2) vals.push(lum[y * W + x]);
+    vals.sort((a, b) => a - b);
+    const p70 = vals[Math.floor(vals.length * 0.7)] ?? 170;
+    T = Math.max(120, p70 - 22);
+  } else {
+    T = Math.max(120, Math.min(210, otsuThreshold(lum)));
+  }
+  const mask = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    if (lum[i] >= T) { mask[i] = 1; continue; }
+    if (rgb) {
+      const r = rgb[i * 4], g = rgb[i * 4 + 1], b = rgb[i * 4 + 2];
+      if (b > 60 && b > r + 25 && b > g + 8) mask[i] = 1; // bleu plaque
+    }
+  }
+  // Érosion (1 px par passe) : coupe les ponts fins (jonc chromé, reflet)
+  // entre la plaque et d'autres zones claires.
+  let cur = mask;
+  for (let e = 0; e < erode; e++) {
+    const er = new Uint8Array(W * H);
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      if (cur[i] && cur[i - 1] && cur[i + 1] && cur[i - W] && cur[i + W]) er[i] = 1;
+    }
+    cur = er;
+  }
+  return cur;
+}
+
+// Composantes connexes (4-voisinage) sur le masque ; renvoie labels + stats.
+export function components(mask, W, H) {
+  const labels = new Int32Array(W * H); // 0 = fond
+  const stats = [null];
+  const qx = new Int32Array(W * H), qy = new Int32Array(W * H);
+  let next = 1;
+  for (let sy = 0; sy < H; sy++) for (let sx = 0; sx < W; sx++) {
+    const si = sy * W + sx;
+    if (!mask[si] || labels[si]) continue;
+    const id = next++;
+    let head = 0, tail = 0;
+    qx[tail] = sx; qy[tail] = sy; tail++;
+    labels[si] = id;
+    let area = 0, minX = sx, maxX = sx, minY = sy, maxY = sy, cx = 0, cy = 0;
+    while (head < tail) {
+      const x = qx[head], y = qy[head]; head++;
+      area++; cx += x; cy += y;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (x > 0 && mask[y * W + x - 1] && !labels[y * W + x - 1]) { labels[y * W + x - 1] = id; qx[tail] = x - 1; qy[tail] = y; tail++; }
+      if (x < W - 1 && mask[y * W + x + 1] && !labels[y * W + x + 1]) { labels[y * W + x + 1] = id; qx[tail] = x + 1; qy[tail] = y; tail++; }
+      if (y > 0 && mask[(y - 1) * W + x] && !labels[(y - 1) * W + x]) { labels[(y - 1) * W + x] = id; qx[tail] = x; qy[tail] = y - 1; tail++; }
+      if (y < H - 1 && mask[(y + 1) * W + x] && !labels[(y + 1) * W + x]) { labels[(y + 1) * W + x] = id; qx[tail] = x; qy[tail] = y + 1; tail++; }
+    }
+    stats.push({ id, area, minX, maxX, minY, maxY, cx: cx / area, cy: cy / area });
+  }
+  return { labels, stats };
+}
+
+// Enveloppe convexe (Andrew monotone chain) d'un nuage de points [[x,y],…].
+export function convexHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length <= 2) return p;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower = [];
+  for (const pt of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], pt) <= 0) lower.pop();
+    lower.push(pt);
+  }
+  const upper = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const pt = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
+    upper.push(pt);
+  }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+
+// Quad à partir d'une composante : contour → hull → axes PCA → 4 coins =
+// extrêmes (±u ±v), puis ajustement fin de chaque bord par moindres carrés
+// sur les points du hull proches de ce bord.
+export function quadFromComponent(labels, id, W, H) {
+  // Points de contour de la composante (bord du masque).
+  const pts = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (labels[y * W + x] !== id) continue;
+    if (x === 0 || y === 0 || x === W - 1 || y === H - 1 ||
+        labels[y * W + x - 1] !== id || labels[y * W + x + 1] !== id ||
+        labels[(y - 1) * W + x] !== id || labels[(y + 1) * W + x] !== id) {
+      pts.push([x, y]);
+    }
+  }
+  if (pts.length < 8) return null;
+  const hull = convexHull(pts);
+  if (hull.length < 4) return null;
+
+  // Axes principaux (PCA 2x2).
+  let mx = 0, my = 0;
+  for (const [x, y] of hull) { mx += x; my += y; }
+  mx /= hull.length; my /= hull.length;
+  let sxx = 0, sxy = 0, syy = 0;
+  for (const [x, y] of hull) {
+    const dx = x - mx, dy = y - my;
+    sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+  }
+  const tr = sxx + syy, det = sxx * syy - sxy * sxy;
+  const l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - det));
+  let ux = sxy, uy = l1 - sxx;
+  let un = Math.hypot(ux, uy);
+  if (un < 1e-6) {
+    // Cas dégénéré (rectangle aligné aux axes : sxy = 0) : axe long = axe
+    // dominant du nuage.
+    ux = sxx >= syy ? 1 : 0; uy = sxx >= syy ? 0 : 1; un = 1;
+  }
+  ux /= un; uy /= un;                                        // axe long
+  if (ux < 0) { ux = -ux; uy = -uy; }                        // u ≈ +x écran
+  let vx = -uy, vy = ux;                                     // axe court
+  if (vy < 0) { vx = -vx; vy = -vy; }                        // v ≈ +y écran
+
+  // Points du hull projetés dans le repère (u = axe long, v = axe court).
+  const proj = hull.map(([x, y]) => ({ x, y, u: (x - mx) * ux + (y - my) * uy, v: (x - mx) * vx + (y - my) * vy }));
+  let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+  for (const p of proj) {
+    if (p.u < uMin) uMin = p.u; if (p.u > uMax) uMax = p.u;
+    if (p.v < vMin) vMin = p.v; if (p.v > vMax) vMax = p.v;
+  }
+  const uSpan = uMax - uMin || 1, vSpan = vMax - vMin || 1;
+
+  // Chaque bord = droite ajustée (PCA 1D) sur la BANDE de points du hull
+  // proche de ce côté — indépendant de coins initiaux, robuste aux coins
+  // rongés par une ombre (le reste de la bande porte la droite).
+  const fitBand = (sel, fallbackDir) => {
+    if (sel.length === 0) return null;
+    if (sel.length < 3) {
+      // Hull très épuré (rectangle net) : droite passant par la moyenne des
+      // points de la bande, orientée selon l'axe attendu.
+      let mx2 = 0, my2 = 0;
+      for (const p of sel) { mx2 += p.x; my2 += p.y; }
+      return { p: { x: mx2 / sel.length, y: my2 / sel.length }, d: fallbackDir };
+    }
+    let m2x = 0, m2y = 0;
+    for (const p of sel) { m2x += p.x; m2y += p.y; }
+    m2x /= sel.length; m2y /= sel.length;
+    let a2 = 0, b2 = 0, c2 = 0;
+    for (const p of sel) {
+      const ddx = p.x - m2x, ddy = p.y - m2y;
+      a2 += ddx * ddx; b2 += ddx * ddy; c2 += ddy * ddy;
+    }
+    const tr_ = a2 + c2, det_ = a2 * c2 - b2 * b2;
+    const lam = tr_ / 2 + Math.sqrt(Math.max(0, tr_ * tr_ / 4 - det_));
+    let ex = b2, ey = lam - a2;
+    const en = Math.hypot(ex, ey);
+    if (en < 1e-6) return { p: { x: m2x, y: m2y }, d: fallbackDir };
+    // Garde-fou : la droite d'un bord haut/bas doit rester proche de l'axe
+    // long (et gauche/droit de l'axe court) — sinon la bande a capté un coin.
+    const d = { x: ex / en, y: ey / en };
+    if (Math.abs(d.x * fallbackDir.x + d.y * fallbackDir.y) < 0.8) return { p: { x: m2x, y: m2y }, d: fallbackDir };
+    return { p: { x: m2x, y: m2y }, d };
+  };
+  const U = { x: ux, y: uy }, V = { x: vx, y: vy };
+  const top    = fitBand(proj.filter(p => p.v <= vMin + vSpan * 0.25), U);
+  const bottom = fitBand(proj.filter(p => p.v >= vMax - vSpan * 0.25), U);
+  const left   = fitBand(proj.filter(p => p.u <= uMin + uSpan * 0.10), V);
+  const right  = fitBand(proj.filter(p => p.u >= uMax - uSpan * 0.10), V);
+  if (!top || !bottom || !left || !right) return null;
+  const inter = (L1, L2) => {
+    const dt = L1.d.x * L2.d.y - L1.d.y * L2.d.x;
+    if (Math.abs(dt) < 1e-9) return null;
+    const t = ((L2.p.x - L1.p.x) * L2.d.y - (L2.p.y - L1.p.y) * L2.d.x) / dt;
+    return { x: L1.p.x + L1.d.x * t, y: L1.p.y + L1.d.y * t };
+  };
+  const qtl = inter(top, left), qtr = inter(top, right), qbr = inter(bottom, right), qbl = inter(bottom, left);
+  if (!qtl || !qtr || !qbr || !qbl) return null;
+  return { tl: qtl, tr: qtr, br: qbr, bl: qbl };
+}
+
+
+// Extraction complète : masque → composantes → choix de la meilleure
+// candidate (géométrie plaque + cohérence avec graine/chars) → quad.
+// Renvoie null si aucune candidate plausible (l'appelant garde son quad).
+export function plateQuadFromCrop(lum, rgb, W, H, seedQuad, charsBox) {
+  const seedBBox = seedQuad ? {
+    x1: Math.min(seedQuad.tl.x, seedQuad.bl.x), y1: Math.min(seedQuad.tl.y, seedQuad.tr.y),
+    x2: Math.max(seedQuad.tr.x, seedQuad.br.x), y2: Math.max(seedQuad.bl.y, seedQuad.br.y),
+  } : null;
+  // Cascade : seuil ancré sur la zone de texte, puis seuils fixes de secours
+  // (utile quand la graine est décalée et que l'ancre tombe sur la carrosserie).
+  const attempts = [
+    { anchor: charsBox ?? seedBBox, fixedT: null, erode: 1 },
+    { anchor: null, fixedT: 175, erode: 2 },
+    { anchor: null, fixedT: 150, erode: 3 },
+  ];
+  for (const at of attempts) {
+    const q = plateQuadAttempt(lum, rgb, W, H, seedQuad, charsBox, seedBBox, at.anchor, at.fixedT, at.erode);
+    if (q) return q;
+  }
+  return null;
+}
+
+function plateQuadAttempt(lum, rgb, W, H, seedQuad, charsBox, seedBBox, anchorBox, fixedT, erode = 1) {
+  const mask = plateMask(lum, rgb, W, H, anchorBox, fixedT, erode);
+  const { labels, stats } = components(mask, W, H);
+  const seedC = seedQuad
+    ? { x: (seedQuad.tl.x + seedQuad.tr.x + seedQuad.br.x + seedQuad.bl.x) / 4,
+        y: (seedQuad.tl.y + seedQuad.tr.y + seedQuad.br.y + seedQuad.bl.y) / 4 }
+    : { x: W / 2, y: H / 2 };
+  const charsC = charsBox ? { x: (charsBox.x1 + charsBox.x2) / 2, y: (charsBox.y1 + charsBox.y2) / 2 } : null;
+  const charsArea = charsBox ? Math.max(1, (charsBox.x2 - charsBox.x1) * (charsBox.y2 - charsBox.y1)) : null;
+
+  let best = null, bestScore = -Infinity;
+  for (let i = 1; i < stats.length; i++) {
+    const s = stats[i];
+    const bw = s.maxX - s.minX + 1, bh = s.maxY - s.minY + 1;
+    if (s.area < W * H * 0.002 || s.area > W * H * 0.5) continue;   // trop petit / trop grand
+    if (bw / bh < 1.3 || bw / bh > 14) continue;                      // pas une bande
+    // Remplissage : les glyphes/vignettes trouent la plaque (~35-45 % pleins
+    // après érosion) ; en dessous de 0,32 c'est du bruit épars.
+    if (s.area / (bw * bh) < 0.32) continue;
+    if (bw < W * 0.12) continue;                                      // trop étroit
+    if (seedBBox && bw > (seedBBox.x2 - seedBBox.x1) * 1.8) continue; // bien plus large que la graine : fusion
+    if (charsArea && (s.area < charsArea * 0.5 || s.area > charsArea * 8)) continue;
+    // Score : proximité de la graine + contenir le centre des chars + taille.
+    const d = Math.hypot(s.cx - seedC.x, s.cy - seedC.y) / Math.max(W, H);
+    let score = -d * 3 + Math.min(1, s.area / (W * H * 0.05));
+    if (charsC && s.minX <= charsC.x && charsC.x <= s.maxX && s.minY <= charsC.y && charsC.y <= s.maxY) score += 2;
+    if (plateQuadFromCrop.debug) plateQuadFromCrop.debug.push({ id: s.id, bbox: `${bw}x${bh}@(${s.minX},${s.minY})`, score: score.toFixed(2) });
+    if (score > bestScore) { bestScore = score; best = s; }
+  }
+  if (!best) return null;
+  if (plateQuadFromCrop.debug) plateQuadFromCrop.debug.push({ chosen: best.id });
+  const quad = quadFromComponent(labels, best.id, W, H);
+  if (!quad) return null;
+  // Sanity : proportions de plaque + chars couvert (si fourni).
+  const w = (Math.hypot(quad.tr.x - quad.tl.x, quad.tr.y - quad.tl.y) + Math.hypot(quad.br.x - quad.bl.x, quad.br.y - quad.bl.y)) / 2;
+  const h = (Math.hypot(quad.bl.x - quad.tl.x, quad.bl.y - quad.tl.y) + Math.hypot(quad.br.x - quad.tr.x, quad.br.y - quad.tr.y)) / 2;
+  if (h < 4 || w / h < 1.3 || w / h > 12) return null;
+  // Cohérence : le quad contient le texte lu, OU (graine décalée) reste à
+  // portée de la graine — jamais un objet à l'autre bout du crop.
+  const qc = { x: (quad.tl.x + quad.tr.x + quad.br.x + quad.bl.x) / 4, y: (quad.tl.y + quad.tr.y + quad.br.y + quad.bl.y) / 4 };
+  const seedH = seedBBox ? (seedBBox.y2 - seedBBox.y1) : h;
+  const okChars = charsC && pointInQuad(charsC, quad, 2);
+  // Graine décalée tolérée jusqu'à ~1,3 hauteur de plaque — au-delà c'est un
+  // autre objet (reflet, sol) et on laisse la cascade continuer.
+  const okSeed = Math.hypot(qc.x - seedC.x, qc.y - seedC.y) <= Math.max(seedH, h) * 1.3;
+  if (!okChars && !okSeed) return null;
+  return quad;
+}
+
+// Dilate un quad autour de son centre (marge de sécurité du cache : couvre
+// bord à bord même si l'extraction est au pixel près).
+export function expandQuad(quad, kx = 1.03, ky = 1.08) {
+  const cx = (quad.tl.x + quad.tr.x + quad.br.x + quad.bl.x) / 4;
+  const cy = (quad.tl.y + quad.tr.y + quad.br.y + quad.bl.y) / 4;
+  const m = p => ({ x: cx + (p.x - cx) * kx, y: cy + (p.y - cy) * ky });
+  return { tl: m(quad.tl), tr: m(quad.tr), br: m(quad.br), bl: m(quad.bl) };
+}

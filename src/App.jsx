@@ -3,7 +3,7 @@ import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
-import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox } from "./plateGeometry.js";
+import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -1830,7 +1830,8 @@ async function detectPlateFable(imageFile, presetBox = null) {
       for (let i = 0; i < lum.length; i++) {
         lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
       }
-      const crop = { b64, cx1, cy1, cx2, cy2, w: cc.width, h: cc.height, lum };
+      // rgb conservé pour la segmentation locale de la plaque (bandes bleues).
+      const crop = { b64, cx1, cy1, cx2, cy2, w: cc.width, h: cc.height, lum, rgb: px };
       freeCanvas(cc);
       return crop;
     };
@@ -1891,16 +1892,39 @@ async function detectPlateFable(imageFile, presetBox = null) {
         }
       }
 
-      // Ajustement local des bords sur le vrai contour de la plaque (gratuit).
-      // Avec l'ancre texte : chaque bord peut se DÉCALER ET S'INCLINER
-      // (le modèle renvoie souvent un rectangle droit même sur une plaque en
-      // perspective), vers l'intérieur comme l'extérieur tant que la bande de
-      // caractères reste couverte. Sans ancre : poussée vers l'extérieur
-      // uniquement (comportement prudent d'origine).
-      quad = charsPx
-        ? fitQuadEdges(crop.lum, crop.w, crop.h, quad, charsPx,
-            Math.max(8, Math.round(crop.w * 0.03)), Math.max(6, Math.round(crop.w * 0.02)))
-        : snapQuadOutward(crop.lum, crop.w, crop.h, quad, snapMax);
+      // ── Extraction locale par SEGMENTATION (prioritaire, gratuite) ──
+      // La plaque est la région claire (+ bandes bleues) du crop : on en
+      // déduit les 4 coins exacts, perspective comprise — validé sur photos
+      // réelles à quelques pixels près. Retrouve la plaque même si le quad
+      // du modèle ou la boîte de localisation sont décalés.
+      const seg = plateQuadFromCrop(crop.lum, crop.rgb, crop.w, crop.h, quad, charsPx);
+      if (seg) {
+        console.log('[plate] coins extraits par segmentation locale');
+        // Finition : chaque bord peut encore s'étendre/s'incliner VERS
+        // L'EXTÉRIEUR sur le vrai contour (jamais rétrécir), puis marge de
+        // sécurité — couverture bord à bord garantie, calibrée sur photos
+        // réelles.
+        const out = fitQuadEdges(crop.lum, crop.w, crop.h, seg, null,
+          Math.max(8, Math.round(crop.w * 0.025)), 0);
+        quad = expandQuad(out, 1.02, 1.08);
+      } else {
+        // Repli : ajustement des bords sur le gradient. Avec l'ancre texte,
+        // chaque bord peut se décaler et s'incliner ; sans ancre, poussée
+        // vers l'extérieur uniquement (comportement prudent).
+        quad = charsPx
+          ? fitQuadEdges(crop.lum, crop.w, crop.h, quad, charsPx,
+              Math.max(8, Math.round(crop.w * 0.03)), Math.max(6, Math.round(crop.w * 0.02)))
+          : snapQuadOutward(crop.lum, crop.w, crop.h, quad, snapMax);
+        quad = expandQuad(quad, 1.02, 1.06);
+      }
+      // Le quad final colle-t-il au bord du crop (plaque probablement
+      // tronquée) ? Recalculé sur le résultat, tous chemins confondus.
+      {
+        const ex = crop.w * EDGE, ey = crop.h * EDGE;
+        touchesEdge = [quad.tl, quad.tr, quad.br, quad.bl].some(
+          p => p.x <= ex || p.x >= crop.w - ex || p.y <= ey || p.y >= crop.h - ey
+        );
+      }
       const map = p => ({
         x: crop.cx1 + Math.min(1, Math.max(0, p.x / crop.w)) * (crop.cx2 - crop.cx1),
         y: crop.cy1 + Math.min(1, Math.max(0, p.y / crop.h)) * (crop.cy2 - crop.cy1),

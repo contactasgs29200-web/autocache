@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, pointInQuad, quadCoversBox, quadFromBox } from '../src/plateGeometry.js';
+import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, pointInQuad, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from '../src/plateGeometry.js';
 
 // orderQuad doit renvoyer les coins dans l'ordre TL, TR, BR, BL quelle que
 // soit la permutation d'entrée (Plate Recognizer ne garantit pas l'ordre).
@@ -215,6 +215,80 @@ test('fitQuadEdges reste stable sur une image uniforme', () => {
     assert.ok(Math.abs(out[k].x - quad[k].x) < 0.01 && Math.abs(out[k].y - quad[k].y) < 0.01,
       `coin ${k} déplacé sans gradient`);
   }
+});
+
+// ── plateQuadFromCrop — extraction par segmentation (zone claire + bleue) ──
+
+// Scène réaliste : plaque CLAIRE (210) avec bande bleue à gauche et glyphes
+// sombres, sur carrosserie grise (110). Optionnellement inclinée.
+function makeScene(tilt = 0) {
+  const W = 200, H = 100;
+  const lum = new Float32Array(W * H).fill(110);
+  const rgb = new Uint8ClampedArray(W * H * 4);
+  const put = (i, r, g, b) => { rgb[i * 4] = r; rgb[i * 4 + 1] = g; rgb[i * 4 + 2] = b; rgb[i * 4 + 3] = 255; };
+  for (let i = 0; i < W * H; i++) put(i, 110, 110, 110);
+  // plaque : x 40..160, y haut = 30 + tilt*(x-40)/120, hauteur 34
+  for (let x = 40; x <= 160; x++) {
+    const yTop = 30 + tilt * (x - 40) / 120;
+    for (let y = Math.round(yTop); y <= Math.round(yTop) + 34; y++) {
+      const i = y * W + x;
+      if (x <= 52) { lum[i] = 70; put(i, 30, 60, 200); }        // bande bleue
+      else { lum[i] = 210; put(i, 210, 210, 210); }               // fond blanc
+    }
+  }
+  // glyphes sombres
+  for (let gx = 65; gx <= 145; gx += 16) {
+    const yTop = 30 + tilt * (gx - 40) / 120;
+    for (let y = Math.round(yTop) + 8; y <= Math.round(yTop) + 26; y++)
+      for (let x = gx; x < gx + 8; x++) { const i = y * W + x; lum[i] = 40; put(i, 40, 40, 40); }
+  }
+  return { lum, rgb, W, H };
+}
+
+test('plateQuadFromCrop retrouve une plaque droite à ~3 px près', () => {
+  const { lum, rgb, W, H } = makeScene(0);
+  const seed = { tl: { x: 38, y: 28 }, tr: { x: 162, y: 28 }, br: { x: 162, y: 66 }, bl: { x: 38, y: 66 } };
+  const chars = { x1: 60, y1: 36, x2: 150, y2: 58 };
+  const q = plateQuadFromCrop(lum, rgb, W, H, seed, chars);
+  assert.ok(q, 'extraction échouée');
+  assert.ok(Math.abs(q.tl.x - 40) <= 3 && Math.abs(q.tl.y - 30) <= 3, `tl (${q.tl.x.toFixed(1)},${q.tl.y.toFixed(1)})`);
+  assert.ok(Math.abs(q.br.x - 160) <= 3 && Math.abs(q.br.y - 64) <= 3, `br (${q.br.x.toFixed(1)},${q.br.y.toFixed(1)})`);
+});
+
+test('plateQuadFromCrop retrouve l\'inclinaison d\'une plaque en perspective', () => {
+  const { lum, rgb, W, H } = makeScene(-12); // bord haut qui MONTE vers la droite
+  const seed = { tl: { x: 38, y: 20 }, tr: { x: 162, y: 20 }, br: { x: 162, y: 66 }, bl: { x: 38, y: 66 } };
+  const chars = { x1: 60, y1: 30, x2: 150, y2: 50 };
+  const q = plateQuadFromCrop(lum, rgb, W, H, seed, chars);
+  assert.ok(q, 'extraction échouée');
+  // tl à y≈30, tr à y≈18 : l'inclinaison doit être retrouvée (~12 px)
+  const tiltFound = q.tl.y - q.tr.y;
+  assert.ok(tiltFound > 7, `inclinaison non retrouvée: tl.y=${q.tl.y.toFixed(1)} tr.y=${q.tr.y.toFixed(1)}`);
+});
+
+test('plateQuadFromCrop récupère une graine décalée d\'une hauteur de plaque', () => {
+  const { lum, rgb, W, H } = makeScene(0);
+  const seed = { tl: { x: 38, y: 62 }, tr: { x: 162, y: 62 }, br: { x: 162, y: 98 }, bl: { x: 38, y: 98 } };
+  const chars = { x1: 60, y1: 70, x2: 150, y2: 92 };
+  const q = plateQuadFromCrop(lum, rgb, W, H, seed, chars);
+  assert.ok(q, 'extraction échouée malgré la plaque présente');
+  const cy = (q.tl.y + q.br.y) / 2;
+  assert.ok(Math.abs(cy - 47) <= 6, `centre vertical: ${cy.toFixed(1)} (attendu ~47)`);
+});
+
+test('plateQuadFromCrop rend null sur un crop sans plaque', () => {
+  const W = 200, H = 100;
+  const lum = new Float32Array(W * H).fill(115);
+  const rgb = new Uint8ClampedArray(W * H * 4).fill(115);
+  const seed = { tl: { x: 40, y: 30 }, tr: { x: 160, y: 30 }, br: { x: 160, y: 64 }, bl: { x: 40, y: 64 } };
+  assert.equal(plateQuadFromCrop(lum, rgb, W, H, seed, null), null);
+});
+
+test('expandQuad dilate autour du centre et contient l\'original', () => {
+  const q = { tl: { x: 40, y: 30 }, tr: { x: 160, y: 30 }, br: { x: 160, y: 64 }, bl: { x: 40, y: 64 } };
+  const e = expandQuad(q, 1.03, 1.10);
+  assert.ok(e.tl.x < 40 && e.tl.y < 30 && e.br.x > 160 && e.br.y > 64);
+  for (const k of ['tl', 'tr', 'br', 'bl']) assert.ok(pointInQuad(q[k], e, 0.01), `coin ${k} hors du quad dilaté`);
 });
 
 test('snapQuadOutward rend le quad intact s\'il est dégénéré', () => {
