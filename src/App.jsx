@@ -2969,6 +2969,10 @@ export default function AutoCache() {
   const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
   const [manualPlateMode, setManualPlateMode] = useState(false); // true = pose manuelle (plaque non détectée)
+  // Dimensions réelles de l'image affichée dans la lightbox (mesurées au
+  // chargement) : sert à dessiner l'aperçu du format d'export (zones rognées
+  // assombries), y compris pendant l'ajustement du cache plaque.
+  const [lbMediaDims, setLbMediaDims] = useState(null); // { w, h }
   const [lbZoom, setLbZoom] = useState(1);            // zoom de la lightbox (1 = normal, max 8)
   const [lbPan,  setLbPan]  = useState({ x: 0, y: 0 }); // décalage (px) du calque zoomé
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
@@ -3848,6 +3852,7 @@ export default function AutoCache() {
 
   const openLightbox  = (r) => {
     setLightbox(r);
+    setLbMediaDims(null); // re-mesurée au chargement de l'image
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
     setShowMaskEditor(false);
@@ -5685,9 +5690,45 @@ export default function AutoCache() {
               <img
                 ref={cropImgRef}
                 src={(lightbox.signImageUrl && lightbox.signBaseUrl) ? lightbox.signBaseUrl : (lightbox.showroomDataURL || lightbox.processed)}
+                onLoad={e => setLbMediaDims({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
               />
             )}
+
+            {/* ── Aperçu du format d'export : les zones qui seront recadrées au
+                téléchargement sont assombries — visible aussi pendant
+                l'ajustement du cache, pour travailler sur le rendu final. ── */}
+            {!cropMode && (() => {
+              const fr = OUTPUT_FORMATS[outputFormat]?.ratio;
+              if (!fr) return null;
+              const iw = lbMediaDims?.w ?? (lightbox.showroomDataURL ? lightbox.showroomTransform?.W : lightbox.imgW);
+              const ih = lbMediaDims?.h ?? (lightbox.showroomDataURL ? lightbox.showroomTransform?.H : lightbox.imgH);
+              if (!iw || !ih) return null;
+              const rImg = iw / ih;
+              const shade = "rgba(4,4,4,0.78)";
+              const line = "1px dashed rgba(242,101,34,0.9)";
+              let bands = null;
+              if (rImg > fr * 1.002) {
+                const b = (1 - fr / rImg) / 2 * 100;
+                bands = (<>
+                  <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: `${b}%`, background: shade, borderRight: line, pointerEvents: "none", zIndex: 5 }} />
+                  <div style={{ position: "absolute", top: 0, bottom: 0, right: 0, width: `${b}%`, background: shade, borderLeft: line, pointerEvents: "none", zIndex: 5 }} />
+                </>);
+              } else if (rImg < fr * 0.998) {
+                const b = (1 - rImg / fr) / 2 * 100;
+                bands = (<>
+                  <div style={{ position: "absolute", left: 0, right: 0, top: 0, height: `${b}%`, background: shade, borderBottom: line, pointerEvents: "none", zIndex: 5 }} />
+                  <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: `${b}%`, background: shade, borderTop: line, pointerEvents: "none", zIndex: 5 }} />
+                </>);
+              }
+              if (!bands) return null;
+              return (<>
+                {bands}
+                <div style={{ position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.82)", color: "#f26522", fontSize: 10, fontFamily: "var(--font-apple)", letterSpacing: 1, textTransform: "uppercase", padding: "3px 9px", borderRadius: 2, pointerEvents: "none", zIndex: 6, whiteSpace: "nowrap" }}>
+                  Format {OUTPUT_FORMATS[outputFormat].label} · zone claire conservée
+                </div>
+              </>);
+            })()}
 
             {/* ── Enseigne déplaçable (calque par-dessus l'image) ── */}
             {!cropMode && !adjustMode && lightbox.signImageUrl && (() => {
