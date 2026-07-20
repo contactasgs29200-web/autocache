@@ -2881,7 +2881,6 @@ const SUBSCRIPTION_FEATURES = [
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
-  "Lustrage carrosserie",
   "Showroom Virtuel (fonds IA)",
   "Enseigne murale",
 ];
