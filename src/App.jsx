@@ -1008,6 +1008,44 @@ async function imglyRemoveBackground(dataUrl) {
   });
 }
 
+// ── Détourage Pro (API serveur — Photoroom / remove.bg, ombre IA incluse) ──
+// Renvoie { dataUrl, provider, shadow } ou null → l'appelant retombe sur le
+// pipeline local (@imgly + heuristiques). Un 501 signifie « endpoint non
+// configuré » : on mémorise pour ne pas re-tenter à chaque photo du batch.
+let proCutoutUnavailable = false;
+async function proShowroomCutout(dataUrl) {
+  if (proCutoutUnavailable) return null;
+  if (window.location.search.includes('proCutout=off')) return null; // debug
+  try {
+    // Résolution supérieure au pipeline local (2000 px) : le détourage se
+    // fait côté serveur, seule la taille du payload compte (limite 12 Mo).
+    const small = await shrinkDataUrl(dataUrl, isMobileDevice() ? 2000 : 3000, 0.92);
+    const b64 = small.includes(',') ? small.split(',')[1] : small;
+    const r = await fetch('/api/showroom-cutout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ b64 }),
+    });
+    if (r.status === 501) {
+      proCutoutUnavailable = true;
+      console.log('[ProCutout] non configuré — pipeline local @imgly');
+      return null;
+    }
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      console.warn('[ProCutout] HTTP', r.status, body.slice(0, 300));
+      return null;
+    }
+    const json = await r.json();
+    if (!json?.dataUrl || json.dataUrl.length < 1000) return null;
+    console.log(`[ProCutout] ok — ${json.provider}${json.shadow ? ' + ombre IA' : ''}`);
+    return json;
+  } catch (e) {
+    console.warn('[ProCutout] échec:', e?.message);
+    return null;
+  }
+}
+
 function getShowroomDebugMode() {
   const url = window.location.search;
   if (url.includes('showroomDebug=mainVehicleBoxes')) return 'mainVehicleBoxes';
@@ -1572,9 +1610,13 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       const imgData = scanCtx.getImageData(0, 0, carImg.width, carImg.height);
       const data = imgData.data;
       let minX = carImg.width, maxX = -1, minY = carImg.height, maxY = -1;
+      // Seuil aligné sur le scan du pipeline (alpha > 128) : l'ombre IA du
+      // détourage Pro est semi-transparente et ne doit pas entrer dans le
+      // bbox, sinon la voiture bouge entre le rendu initial (hint) et les
+      // recomposites sans hint (Ajuster, logo mural, correction de masque).
       for (let y = 0; y < carImg.height; y++) {
         for (let x = 0; x < carImg.width; x++) {
-          if (data[(y * carImg.width + x) * 4 + 3] > 20) {
+          if (data[(y * carImg.width + x) * 4 + 3] > 128) {
             if (x < minX) minX = x;
             if (x > maxX) maxX = x;
             if (y < minY) minY = y;
@@ -3405,14 +3447,25 @@ export default function AutoCache() {
             ', secondary=' + secondaryVehicles.length +
             (secondaryVehicles.length > 0 ? ' [' + secondaryVehicles.map(s => s.class).join(',') + ']' : ''));
 
-          // @imgly background removal + heuristic isolation (primary pipeline)
+          // Détourage : API Pro serveur (Photoroom / remove.bg) en priorité,
+          // repli local @imgly + heuristiques sinon.
           const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
           const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
-          const croppedCutout = await removeBackground(croppedUrl);
-          const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
-          const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
-          const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
-          const cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
+          const pro = await proShowroomCutout(croppedUrl);
+          let cutout;
+          if (pro) {
+            // Le cutout Pro isole déjà le sujet principal (dans la ROI qui
+            // écarte les voisins) et embarque son ombre IA dans l'alpha : les
+            // nettoyages heuristiques (composantes connexes, séparation,
+            // gate bbox) rogneraient l'ombre — on les court-circuite.
+            cutout = await uncropCutout(pro.dataUrl, appliedROI, r.imgW, r.imgH);
+          } else {
+            const croppedCutout = await removeBackground(croppedUrl);
+            const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
+            const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
+            const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
+            cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
+          }
 
           // Scan tight bbox du véhicule UNE seule fois — réutilisé par
           // compositeCarOnBg (via le hint), évitant un re-scan plein-résolution.

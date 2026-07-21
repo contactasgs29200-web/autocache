@@ -139,7 +139,7 @@ Proposition :
 | Phase | Contenu | Durée estimée |
 |---|---|---|
 | **0 — Bench** | Prendre 10 vraies photos à problème (découpage raté, ombres dures, voisins collés) et les passer dans Photoroom, remove.bg, Gemini image, Flux Kontext. Comparer rendu/coût/latence sur un tableau. **Décision fournisseur sur preuves, pas sur plaquette.** | 1–2 jours |
-| **1 — Étage A en prod** | `/api/showroom-cutout` + calque ombre dans `compositeCarOnBg`, derrière un flag ; @imgly en repli. | ~1 semaine |
+| **1 — Étage A en prod** | ✅ Implémenté : `/api/showroom-cutout` (Photoroom ou remove.bg, ombre IA dans l'alpha du cutout) ; @imgly en repli automatique. Activation par variable d'environnement Vercel : `PHOTOROOM_API_KEY` **ou** `REMOVEBG_API_KEY` (+ options `SHOWROOM_CUTOUT_PROVIDER`, `SHOWROOM_CUTOUT_SHADOW=off`). Débrayable côté client avec `?proCutout=off`. ⚠️ Smoke-test à faire avec une vraie clé : les paramètres exacts des APIs n'ont pas pu être vérifiés en ligne depuis l'environnement de dev. | ~1 semaine |
 | **2 — Palier Stripe** | Price « Showroom Pro », webhook, gating UI, compteur de rendus. | 2–3 jours |
 | **3 — Étage B en bêta** | `/api/showroom-render` + garde-fous fidélité + re-détection plaque + UI (Regénérer, choix décor). Bêta sur comptes volontaires. | 1–2 semaines |
 | **4 — Finitions** | Décors additionnels adaptés à la perspective, décors personnalisés à l'image de la concession (logo/couleurs), presets d'export. | continu |
