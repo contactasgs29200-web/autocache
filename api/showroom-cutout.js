@@ -13,10 +13,46 @@
 // le pipeline local (@imgly + heuristiques), comme avant.
 //
 // Entrée  : POST { b64 }  (JPEG base64, sans préfixe data:)
+//           + header Authorization: Bearer <access_token Supabase>
 // Sortie  : { dataUrl: "data:image/png;base64,...", provider, shadow }
 //           Le PNG contient le véhicule détouré, ombre incluse dans l'alpha.
+//
+// GATING : chaque appel coûte un crédit fournisseur → l'accès est contrôlé
+// ICI, pas seulement dans l'UI. Autorisés :
+//  - plan "premium_showroom" : SHOWROOM_MONTHLY_QUOTA photos/mois (compteur
+//    showroom_used, remis à zéro avec le quota photos mensuel)
+//  - plan "trial" : TRIAL_SHOWROOM_LIMIT photos offertes à vie (compteur
+//    showroom_trial_used, jamais remis à zéro)
+// Les autres plans (pro, anciens premium/essential) → 403 : leur pipeline
+// showroom éventuel reste 100 % local (@imgly), sans coût.
+
+import { createClient } from "@supabase/supabase-js";
 
 export const config = { api: { bodyParser: { sizeLimit: '12mb' } }, maxDuration: 60 };
+
+export const SHOWROOM_MONTHLY_QUOTA = 150;
+export const TRIAL_SHOWROOM_LIMIT   = 3;
+
+// Décision d'accès d'après les métadonnées utilisateur. Pure — exportée pour
+// les tests. Renvoie { allowed, counterKey, used } ou { allowed:false, status, error }.
+export function authorizeShowroom(meta) {
+  const plan = meta?.plan ?? "trial";
+  if (plan === "premium_showroom") {
+    const used = meta?.showroom_used ?? 0;
+    if (used >= SHOWROOM_MONTHLY_QUOTA) {
+      return { allowed: false, status: 402, error: `Quota showroom mensuel atteint (${SHOWROOM_MONTHLY_QUOTA} photos)` };
+    }
+    return { allowed: true, counterKey: "showroom_used", used };
+  }
+  if (plan === "trial") {
+    const used = meta?.showroom_trial_used ?? 0;
+    if (used >= TRIAL_SHOWROOM_LIMIT) {
+      return { allowed: false, status: 402, error: `Photos showroom d'essai épuisées (${TRIAL_SHOWROOM_LIMIT} offertes)` };
+    }
+    return { allowed: true, counterKey: "showroom_trial_used", used };
+  }
+  return { allowed: false, status: 403, error: "Le détourage Showroom nécessite l'abonnement Premium" };
+}
 
 // Choix du fournisseur d'après l'environnement. Exporté pour les tests.
 export function pickProvider(env) {
@@ -84,6 +120,17 @@ export default async function handler(req, res) {
     return res.status(501).json({ error: 'Détourage Pro non configuré' });
   }
 
+  // ── Authentification + droit d'accès (l'appel coûte de l'argent) ──
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token) return res.status(401).json({ error: 'Authentification requise' });
+  const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: userData, error: authError } = await sb.auth.getUser(token);
+  if (authError || !userData?.user) return res.status(401).json({ error: 'Session invalide' });
+  const authz = authorizeShowroom(userData.user.user_metadata);
+  if (!authz.allowed) return res.status(authz.status).json({ error: authz.error, code: 'showroom_gate' });
+
   const { b64 } = req.body || {};
   if (!b64 || typeof b64 !== 'string') return res.status(400).json({ error: 'Missing b64' });
 
@@ -94,7 +141,17 @@ export default async function handler(req, res) {
     const pngB64 = provider === 'photoroom'
       ? await photoroomCutout(b64, process.env.PHOTOROOM_API_KEY, shadow)
       : await removebgCutout(b64, process.env.REMOVEBG_API_KEY, shadow);
-    console.log(`showroom-cutout [${provider}] ok en ${Date.now() - t0} ms (${Math.round(pngB64.length * 0.75 / 1024)} Ko)`);
+    // Décompte APRÈS succès fournisseur : un échec (panne, crédits épuisés)
+    // ne consomme pas le quota de l'utilisateur. Les appels d'un même lot
+    // sont séquentiels côté client — pas de course sur le compteur.
+    try {
+      await sb.auth.admin.updateUserById(userData.user.id, {
+        user_metadata: { [authz.counterKey]: authz.used + 1 },
+      });
+    } catch (e2) {
+      console.error('showroom-cutout: incrément quota échoué:', e2?.message);
+    }
+    console.log(`showroom-cutout [${provider}] ok en ${Date.now() - t0} ms (${Math.round(pngB64.length * 0.75 / 1024)} Ko) — ${authz.counterKey}=${authz.used + 1}`);
     return res.status(200).json({ dataUrl: `data:image/png;base64,${pngB64}`, provider, shadow });
   } catch (e) {
     // L'erreur fournisseur (clé invalide, crédits épuisés…) est loguée côté

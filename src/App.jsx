@@ -1021,14 +1021,26 @@ async function proShowroomCutout(dataUrl) {
     // fait côté serveur, seule la taille du payload compte (limite 12 Mo).
     const small = await shrinkDataUrl(dataUrl, isMobileDevice() ? 2000 : 3000, 0.92);
     const b64 = small.includes(',') ? small.split(',')[1] : small;
+    // L'endpoint est payant → il exige la session Supabase et vérifie le
+    // quota côté serveur (l'UI fait le même contrôle en amont).
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+    if (!accessToken) { console.warn('[ProCutout] pas de session — pipeline local'); return null; }
     const r = await fetch('/api/showroom-cutout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ b64 }),
     });
     if (r.status === 501) {
       proCutoutUnavailable = true;
       console.log('[ProCutout] non configuré — pipeline local @imgly');
+      return null;
+    }
+    if (r.status === 401 || r.status === 402 || r.status === 403) {
+      // Refus de droit/quota (le budget client aurait dû l'empêcher) : pas
+      // de détourage payant pour ce lot.
+      const body = await r.json().catch(() => null);
+      console.warn('[ProCutout] accès refusé:', r.status, body?.error);
       return null;
     }
     if (!r.ok) {
@@ -2935,21 +2947,45 @@ function SettingsIcon({ name, size = 16 }) {
   }
 }
 
-// ── Abonnement unique AutoCache, décliné en 3 formules de facturation ──
-const SUBSCRIPTION_FORMULES = [
-  { key: "weekly",  name: "Hebdomadaire", tag: "Découverte", price: "5,90 €",   period: "/semaine", note: "Renouvelé tous les 7 jours", badge: null },
-  { key: "monthly", name: "Mensuel",      tag: "Conseillé",  price: "14,90 €",  period: "/mois",     note: "Renouvelé chaque mois, le même jour", badge: "Conseillé" },
-  { key: "annual",  name: "Annuel",       tag: "Économies",  price: "129,90 €", period: "/an",       note: "au lieu de 178,80 € en mensuel", badge: "Économies" },
-];
+// ── Deux abonnements AutoCache (Pro / Premium), chacun en 3 formules ──
+// Quota showroom Premium : garde la marge même en pire cas (150 × ~0,10 € de
+// coût Photoroom + URSSAF ≈ 21,60 € pour 29,90 € encaissés).
+const SHOWROOM_MONTHLY_QUOTA = 150;
+const TRIAL_SHOWROOM_LIMIT   = 3;
+const SUBSCRIPTION_PLANS = {
+  pro: {
+    label: "Pro",
+    tagline: "L'essentiel pour vos annonces",
+    features: [
+      "300 photos / mois",
+      "Cache plaque personnalisé",
+      "Logo importé ou généré",
+      "Ajustements couleurs & amélioration auto",
+      "Enseigne murale",
+    ],
+    formules: [
+      { key: "weekly",  name: "Hebdomadaire", tag: "Découverte", price: "5,90 €",   period: "/semaine", note: "Renouvelé tous les 7 jours", badge: null },
+      { key: "monthly", name: "Mensuel",      tag: "Conseillé",  price: "14,90 €",  period: "/mois",     note: "Renouvelé chaque mois, le même jour", badge: "Conseillé" },
+      { key: "annual",  name: "Annuel",       tag: "Économies",  price: "129,90 €", period: "/an",       note: "au lieu de 178,80 € en mensuel", badge: "Économies" },
+    ],
+  },
+  premium: {
+    label: "Premium",
+    tagline: "Pro + Showroom professionnel",
+    features: [
+      "Tout l'abonnement Pro",
+      "Showroom Virtuel — détourage professionnel",
+      "Ombre au sol IA réaliste",
+      `${SHOWROOM_MONTHLY_QUOTA} photos showroom / mois`,
+    ],
+    formules: [
+      { key: "weekly",  name: "Hebdomadaire", tag: "Découverte", price: "9,90 €",   period: "/semaine", note: "Renouvelé tous les 7 jours", badge: null },
+      { key: "monthly", name: "Mensuel",      tag: "Conseillé",  price: "29,90 €",  period: "/mois",     note: "Renouvelé chaque mois, le même jour", badge: "Conseillé" },
+      { key: "annual",  name: "Annuel",       tag: "Économies",  price: "259,90 €", period: "/an",       note: "au lieu de 358,80 € en mensuel", badge: "Économies" },
+    ],
+  },
+};
 const FORMULE_LABELS = { weekly: "Hebdomadaire", monthly: "Mensuelle", annual: "Annuelle" };
-const SUBSCRIPTION_FEATURES = [
-  "300 photos / mois",
-  "Cache plaque personnalisé",
-  "Logo importé ou généré",
-  "Ajustements couleurs & amélioration auto",
-  "Showroom Virtuel (fonds IA)",
-  "Enseigne murale",
-];
 
 export default function AutoCache() {
   const [user, setUser] = useState(null);
@@ -2962,6 +2998,8 @@ export default function AutoCache() {
   // Bandeau d'erreur serveur de la détection de plaque (clé API, crédits…) :
   // visible à l'écran plutôt qu'enfoui dans la console.
   const [plateErrorBanner, setPlateErrorBanner] = useState(null);
+  // Bandeau showroom (quota atteint pendant un lot)
+  const [showroomBanner, setShowroomBanner] = useState(null);
   const [progress, setProgress] = useState({ n: 0, total: 0 });
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showPromoModal, setShowPromoModal] = useState(false);
@@ -2980,7 +3018,8 @@ export default function AutoCache() {
   const [subInfoLoading, setSubInfoLoading] = useState(false);
   const creditPopupRef = useRef(null);
   const [hoveredPlan, setHoveredPlan] = useState(null);
-  const [checkoutLoading, setCheckoutLoading] = useState(null); // "weekly" | "monthly" | "annual" | null
+  const [plansTier, setPlansTier] = useState("premium"); // palier affiché dans la grille d'abonnement : "pro" | "premium"
+  const [checkoutLoading, setCheckoutLoading] = useState(null); // "<plan>:<formule>" | null
   const [portalLoading, setPortalLoading] = useState(null); // null | "invoices" | "cancel" | "upgrade"
   const [portalError, setPortalError] = useState("");
   const [promoCode, setPromoCode] = useState("");
@@ -3375,6 +3414,7 @@ export default function AutoCache() {
     const photosToProcess = photos.slice(0, maxPhotos);
     setProcessing(true);
     setPlateErrorBanner(null);
+    setShowroomBanner(null);
     resetPlateApiError();
     setProgress({ n: 0, total: photosToProcess.length });
     setResults([]);
@@ -3411,6 +3451,10 @@ export default function AutoCache() {
       signImageUrl = sm.url; signRatio = sm.ratio;
     }
     const all = [];
+    // Comptage showroom du lot : photos réellement passées par le détourage
+    // Photoroom (payant), et photos sorties sans décor faute de quota.
+    let proUsedInBatch  = 0;
+    let showroomSkipped = 0;
     const showroomBgDataUrl = showroomEnabled
       ? (showroomSetupBg === 'custom' && showroomSetupCustomBg
           ? showroomSetupCustomBg
@@ -3436,7 +3480,14 @@ export default function AutoCache() {
       const plateResult = await plateJobs[i];
       const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate, plateResult);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
-      if (showroomEnabled && showroomBgDataUrl) {
+      // Showroom : Premium et essai passent par le détourage Photoroom
+      // (payant, budgété) ; les anciens abonnés "premium" gardent le pipeline
+      // local. Budget épuisé en cours de lot → photos suivantes sans décor.
+      const proTierBatch = isPremiumTier || userPlan === "trial";
+      if (showroomEnabled && showroomBgDataUrl && proTierBatch && proUsedInBatch >= proCutoutBudget) {
+        showroomSkipped++;
+      }
+      if (showroomEnabled && showroomBgDataUrl && (isLegacyShowroom || (proTierBatch && proUsedInBatch < proCutoutBudget))) {
         try {
           // Vehicle detection + instance segmentation (backend) or fallback (@imgly + heuristics)
           const vehicleResult = await detectVehicles(photosToProcess[i].file);
@@ -3447,11 +3498,12 @@ export default function AutoCache() {
             ', secondary=' + secondaryVehicles.length +
             (secondaryVehicles.length > 0 ? ' [' + secondaryVehicles.map(s => s.class).join(',') + ']' : ''));
 
-          // Détourage : API Pro serveur (Photoroom / remove.bg) en priorité,
-          // repli local @imgly + heuristiques sinon.
+          // Détourage : API Pro serveur (Photoroom / remove.bg) pour les
+          // paliers qui y ont droit, repli local @imgly + heuristiques sinon.
           const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
           const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
-          const pro = await proShowroomCutout(croppedUrl);
+          const pro = proTierBatch ? await proShowroomCutout(croppedUrl) : null;
+          if (pro) proUsedInBatch++; // le serveur a incrémenté le compteur en base
           let cutout;
           if (pro) {
             // Le cutout Pro isole déjà le sujet principal (dans la ROI qui
@@ -3650,7 +3702,22 @@ export default function AutoCache() {
     const newCount = photosUsed + photosToProcess.length;
     const updateData = { photos_used: newCount };
     await supabase.auth.updateUser({ data: updateData });
-    setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...updateData } } : prev);
+    // Compteurs showroom : le serveur (/api/showroom-cutout) les a déjà
+    // incrémentés en base à chaque succès — on ne fait que rafraîchir
+    // l'état local pour que l'UI (quota restant) soit juste immédiatement.
+    const showroomLocal = proUsedInBatch > 0
+      ? { [isPremiumTier ? 'showroom_used' : 'showroom_trial_used']:
+          (isPremiumTier ? showroomUsed : trialShowroomUsed) + proUsedInBatch }
+      : {};
+    setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...updateData, ...showroomLocal } } : prev);
+    if (showroomSkipped > 0) {
+      setShowroomBanner(
+        `${showroomSkipped} photo${showroomSkipped > 1 ? 's' : ''} traitée${showroomSkipped > 1 ? 's' : ''} sans décor showroom : ` +
+        (isPremiumTier
+          ? `quota mensuel de ${SHOWROOM_MONTHLY_QUOTA} photos showroom atteint.`
+          : `vos ${TRIAL_SHOWROOM_LIMIT} photos showroom d'essai sont épuisées — passez en Premium pour continuer.`)
+      );
+    }
     setProcessing(false);
     setTab("results");
     // Des caches manquants + une erreur serveur pendant le lot → bandeau
@@ -3760,12 +3827,24 @@ export default function AutoCache() {
     }
   };
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
-  const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "premium" (ancien : "essential" | "pro")
-  const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
+  // Plans : "trial" | "pro" (base) | "premium_showroom" (Pro + Showroom)
+  // | "premium" (anciens abonnés du plan unique — conservent le showroom
+  // LOCAL @imgly qu'ils avaient, sans détourage Photoroom ni coût API)
+  // | anciens : "essential" pré-refonte, traité comme la base.
+  const userPlan = user?.user_metadata?.plan ?? "trial";
+  const isPaid = userPlan !== "trial";
   const PLAN_LIMIT = isPaid ? 300 : TRIAL_LIMIT;
   const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
-  // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
-  const canUseShowroom  = isPaid || userPlan === "trial";
+
+  const isPremiumTier    = userPlan === "premium_showroom";
+  const isLegacyShowroom = userPlan === "premium"; // grand-père : showroom local conservé
+  const showroomUsed      = user?.user_metadata?.showroom_used ?? 0;
+  const showroomLeft      = Math.max(0, SHOWROOM_MONTHLY_QUOTA - showroomUsed);
+  const trialShowroomUsed = user?.user_metadata?.showroom_trial_used ?? 0;
+  const trialShowroomLeft = Math.max(0, TRIAL_SHOWROOM_LIMIT - trialShowroomUsed);
+  // Photos du prochain lot qui passeront par le détourage Photoroom (payant)
+  const proCutoutBudget = isPremiumTier ? showroomLeft : (userPlan === "trial" ? trialShowroomLeft : 0);
+  const canUseShowroom  = isLegacyShowroom || proCutoutBudget > 0;
   const canUseBodyPolish  = isPaid;
   const canStart = logo && photos.length > 0 && !processing;
 
@@ -3817,20 +3896,22 @@ export default function AutoCache() {
     if (months >= 1) {
       const newAnchor = new Date(anchor);
       newAnchor.setMonth(newAnchor.getMonth() + months);
-      const data = { photos_used: 0, photos_period_start: newAnchor.toISOString() };
+      const data = { photos_used: 0, showroom_used: 0, photos_period_start: newAnchor.toISOString() };
       supabase.auth.updateUser({ data });
       setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...data } } : prev);
     }
   }, [user?.id]);
 
-  // Lance le paiement Stripe pour une formule donnée (weekly | monthly | annual)
-  const startCheckout = async (formule) => {
-    setCheckoutLoading(formule);
+  // Lance le paiement Stripe pour un plan (pro | premium) et une formule
+  // (weekly | monthly | annual)
+  const startCheckout = async (plan, formule) => {
+    const loadKey = `${plan}:${formule}`;
+    setCheckoutLoading(loadKey);
     try {
       const res = await fetch("/api/create-checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ formule, userId: user.id, userEmail: user.email }),
+        body: JSON.stringify({ plan, formule, userId: user.id, userEmail: user.email }),
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
@@ -3842,45 +3923,64 @@ export default function AutoCache() {
     }
   };
 
-  // Grille des 3 formules — même format que les cartes plans (liste cochée par carte)
-  const renderFormulesGrid = () => (
-    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 24 }}>
-      {SUBSCRIPTION_FORMULES.map(f => {
-        const hot = f.key === "monthly";
-        return (
-          <div key={f.key}
-            onMouseEnter={() => setHoveredPlan(f.key)}
-            onMouseLeave={() => setHoveredPlan(null)}
-            style={{ display: "flex", flexDirection: "column", background: hot ? "rgba(242,101,34,0.05)" : "var(--c-0e0e0e)", border: `1px solid ${hot ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 6, padding: "24px 20px", position: "relative", transform: hoveredPlan === f.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
-            {f.badge && (
-              <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "var(--font-apple)", textTransform: "uppercase", whiteSpace: "nowrap" }}>{f.badge}</div>
-            )}
-            <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: hot ? "#f26522" : "var(--c-aaa)", textTransform: "uppercase", marginBottom: 2 }}>{f.name}</div>
-            <div style={{ fontSize: 9, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>{f.tag}</div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 4 }}>
-              <span style={{ fontSize: 22, fontWeight: 700, color: hot ? "#f26522" : "var(--c-e0dbd4)" }}>{f.price}</span>
-              <span style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", letterSpacing: 1 }}>{f.period}</span>
-            </div>
-            <div style={{ fontSize: 9.5, color: "var(--c-888)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, marginBottom: 16, minHeight: 26 }}>{f.note}</div>
-            <div style={{ marginBottom: 20 }}>
-              {SUBSCRIPTION_FEATURES.map((label, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-                  <span style={{ fontSize: 12, color: "#27ae60", flexShrink: 0 }}>✓</span>
-                  <span style={{ fontSize: 11, color: "var(--c-bbb)", fontFamily: "var(--font-apple)", letterSpacing: 0.5 }}>{label}</span>
+  // Grille d'abonnement : sélecteur Pro / Premium + les 3 formules du plan choisi
+  const renderFormulesGrid = () => {
+    const plan = SUBSCRIPTION_PLANS[plansTier];
+    return (
+      <>
+        {/* Sélecteur de palier */}
+        <div style={{ display: "flex", justifyContent: "center", gap: 0, marginBottom: 20 }}>
+          {Object.entries(SUBSCRIPTION_PLANS).map(([key, p], idx) => {
+            const active = plansTier === key;
+            return (
+              <button key={key} onClick={() => setPlansTier(key)}
+                style={{ minWidth: 150, background: active ? "#f26522" : "var(--c-0e0e0e)", color: active ? "#090909" : "var(--c-999)", border: `1px solid ${active ? "#f26522" : "var(--c-2a2a2a)"}`, padding: "10px 18px", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", cursor: "pointer", borderRadius: idx === 0 ? "4px 0 0 4px" : "0 4px 4px 0" }}>
+                {p.label}
+                <div style={{ fontSize: 8, fontWeight: 400, letterSpacing: 1, marginTop: 3, color: active ? "rgba(9,9,9,0.7)" : "var(--c-666)" }}>{p.tagline}</div>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 24 }}>
+          {plan.formules.map(f => {
+            const hot = f.key === "monthly";
+            const loadKey = `${plansTier}:${f.key}`;
+            return (
+              <div key={f.key}
+                onMouseEnter={() => setHoveredPlan(f.key)}
+                onMouseLeave={() => setHoveredPlan(null)}
+                style={{ display: "flex", flexDirection: "column", background: hot ? "rgba(242,101,34,0.05)" : "var(--c-0e0e0e)", border: `1px solid ${hot ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 6, padding: "24px 20px", position: "relative", transform: hoveredPlan === f.key ? "scale(1.03)" : "scale(1)", transition: "transform 0.15s ease" }}>
+                {f.badge && (
+                  <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#f26522", color: "#090909", fontSize: 9, fontWeight: 700, letterSpacing: 2, padding: "3px 10px", borderRadius: 10, fontFamily: "var(--font-apple)", textTransform: "uppercase", whiteSpace: "nowrap" }}>{f.badge}</div>
+                )}
+                <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2, color: hot ? "#f26522" : "var(--c-aaa)", textTransform: "uppercase", marginBottom: 2 }}>{f.name}</div>
+                <div style={{ fontSize: 9, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>{f.tag}</div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 4 }}>
+                  <span style={{ fontSize: 22, fontWeight: 700, color: hot ? "#f26522" : "var(--c-e0dbd4)" }}>{f.price}</span>
+                  <span style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", letterSpacing: 1 }}>{f.period}</span>
                 </div>
-              ))}
-            </div>
-            <button
-              disabled={checkoutLoading === f.key}
-              onClick={() => startCheckout(f.key)}
-              style={{ width: "100%", marginTop: "auto", background: hot ? "#f26522" : "transparent", color: hot ? "#090909" : "var(--c-888)", border: `1px solid ${hot ? "#f26522" : "var(--c-333)"}`, padding: "11px 0", fontFamily: "var(--font-apple)", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
-              {checkoutLoading === f.key ? "Redirection..." : `Choisir ${f.name}`}
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
+                <div style={{ fontSize: 9.5, color: "var(--c-888)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, marginBottom: 16, minHeight: 26 }}>{f.note}</div>
+                <div style={{ marginBottom: 20 }}>
+                  {plan.features.map((label, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                      <span style={{ fontSize: 12, color: "#27ae60", flexShrink: 0 }}>✓</span>
+                      <span style={{ fontSize: 11, color: "var(--c-bbb)", fontFamily: "var(--font-apple)", letterSpacing: 0.5 }}>{label}</span>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  disabled={checkoutLoading === loadKey}
+                  onClick={() => startCheckout(plansTier, f.key)}
+                  style={{ width: "100%", marginTop: "auto", background: hot ? "#f26522" : "transparent", color: hot ? "#090909" : "var(--c-888)", border: `1px solid ${hot ? "#f26522" : "var(--c-333)"}`, padding: "11px 0", fontFamily: "var(--font-apple)", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
+                  {checkoutLoading === loadKey ? "Redirection..." : `Choisir ${f.name}`}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </>
+    );
+  };
 
   // Close credit popup on click outside
   useEffect(() => {
@@ -5273,17 +5373,25 @@ export default function AutoCache() {
               {/* ── 04 — Showroom Virtuel ── */}
               <section data-tutorial="showroom">
                 <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "var(--font-apple)" }}>04 — Showroom Virtuel</div>
-                <div onClick={() => { if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); }}
+                <div onClick={() => { if (!canUseShowroom) { if (!isPremiumTier) setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); }}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
                   <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-444)"}`, background: showroomEnabled && canUseShowroom ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "var(--c-ddd)", fontSize: 11 }}>🔒</span>}
                   </div>
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>
-                      ⬡ Showroom Virtuel {!canUseShowroom && <span style={{ fontSize: 9, color: "#f26522", fontFamily: "var(--font-apple)", letterSpacing: 1, marginLeft: 6 }}>ABONNEMENT PRO</span>}
+                      ⬡ Showroom Virtuel {!canUseShowroom && <span style={{ fontSize: 9, color: "#f26522", fontFamily: "var(--font-apple)", letterSpacing: 1, marginLeft: 6 }}>{isPremiumTier ? "QUOTA ATTEINT" : "ABONNEMENT PREMIUM"}</span>}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 2 }}>
-                      {canUseShowroom ? "Détourage IA · Fond de showroom · Inclus au traitement" : "Disponible avec l'abonnement Pro — cliquez pour en savoir plus"}
+                      {isPremiumTier
+                        ? (showroomLeft > 0
+                            ? `Détourage professionnel + ombre IA · ${showroomLeft}/${SHOWROOM_MONTHLY_QUOTA} photos ce mois-ci`
+                            : "Quota mensuel atteint — renouvelé automatiquement le mois prochain")
+                        : isLegacyShowroom
+                          ? "Détourage IA · Fond de showroom · Inclus au traitement"
+                          : userPlan === "trial" && trialShowroomLeft > 0
+                            ? `Rendu professionnel + ombre IA · ${trialShowroomLeft} photo${trialShowroomLeft > 1 ? "s" : ""} offerte${trialShowroomLeft > 1 ? "s" : ""} avec l'essai`
+                            : "Disponible avec l'abonnement Premium — cliquez pour en savoir plus"}
                     </div>
                   </div>
                 </div>
@@ -6522,6 +6630,19 @@ export default function AutoCache() {
       {showInstallHelp && <InstallHelpModal ios={isIOS} onClose={() => setShowInstallHelp(false)} />}
 
       {/* ── Bandeau erreur serveur détection plaque ── */}
+      {showroomBanner && (
+        <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 9500, maxWidth: "min(680px, 94vw)", background: "rgba(20,12,4,0.97)", border: "1px solid #f26522", borderRadius: 6, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
+          <div style={{ fontSize: 18 }}>⬡</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#f26522", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Quota showroom</div>
+            <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
+              {showroomBanner}
+            </div>
+          </div>
+          <button onClick={() => setShowroomBanner(null)} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+      )}
+
       {plateErrorBanner && (
         <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 9500, maxWidth: "min(680px, 94vw)", background: "rgba(20,8,4,0.97)", border: "1px solid #c0392b", borderRadius: 6, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
           <div style={{ fontSize: 18 }}>⚠</div>
@@ -6634,7 +6755,7 @@ export default function AutoCache() {
         const meta = user?.user_metadata ?? {};
         const planLabel = (meta.plan ?? "trial") === "trial"
           ? "Essai gratuit"
-          : `Abonnement${meta.formule ? " · " + (FORMULE_LABELS[meta.formule] ?? "") : ""}`;
+          : `${isPremiumTier ? "Premium" : "Pro"}${meta.formule ? " · " + (FORMULE_LABELS[meta.formule] ?? "") : ""}`;
         const photosUsed = meta.photos_used ?? 0;
         const joined = user?.created_at ? new Date(user.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" }) : "—";
         const rows = [
@@ -6644,6 +6765,8 @@ export default function AutoCache() {
           { label: "Adresse de facturation", value: meta.billing_address ?? "—" },
           { label: "Plan actuel",            value: planLabel },
           { label: "Photos utilisées",       value: `${photosUsed} / ${PLAN_LIMIT}` },
+          ...(isPremiumTier ? [{ label: "Photos showroom", value: `${showroomUsed} / ${SHOWROOM_MONTHLY_QUOTA}` }] : []),
+          ...(userPlan === "trial" ? [{ label: "Showroom offert", value: `${trialShowroomUsed} / ${TRIAL_SHOWROOM_LIMIT}` }] : []),
           { label: "Membre depuis",          value: joined },
         ];
         return (
@@ -6753,14 +6876,25 @@ export default function AutoCache() {
                 <div style={{ background: "rgba(242,101,34,0.08)", border: "1px solid #f26522", borderRadius: 6, padding: "20px 24px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <div>
                     <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: 2, color: "#f26522", textTransform: "uppercase" }}>
-                      {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
+                      {isPremiumTier ? "Premium" : "Pro"} · {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, letterSpacing: 1 }}>
-                      300 photos / mois · Toutes les fonctionnalités incluses
+                      {isPremiumTier
+                        ? `300 photos / mois · Showroom ${showroomUsed}/${SHOWROOM_MONTHLY_QUOTA} ce mois-ci`
+                        : isLegacyShowroom
+                          ? "300 photos / mois · Toutes les fonctionnalités incluses"
+                          : "300 photos / mois · Cache plaque, logo, ajustements, enseigne"}
                     </div>
                   </div>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
                 </div>
+
+                {/* Upsell Premium pour les abonnés du palier de base */}
+                {!isPremiumTier && !isLegacyShowroom && (
+                  <div style={{ background: "var(--c-0e0e0e)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: "14px 18px", marginBottom: 20, fontSize: 11, color: "var(--c-bbb)", fontFamily: "var(--font-apple)", lineHeight: 1.6 }}>
+                    ⬡ Le mode <span style={{ color: "#f26522", fontWeight: 700 }}>Showroom</span> (détourage professionnel + ombre IA, {SHOWROOM_MONTHLY_QUOTA} photos/mois) est disponible avec l'abonnement Premium. Pour changer de palier, passez par votre espace de facturation ci-dessous ou contactez-nous.
+                  </div>
+                )}
 
                 <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 16 }}>
                   Pour changer de formule (hebdo / mensuel / annuel) ou mettre à jour votre paiement, ouvrez votre espace de facturation ci-dessous.
@@ -6834,12 +6968,14 @@ export default function AutoCache() {
             style={{ background: "var(--c-141414)", border: "1px solid #f26522", borderRadius: 6, padding: isMobile ? "24px 16px" : "36px 40px", maxWidth: 420, width: "92%", textAlign: "center", fontFamily: "var(--font-apple)" }}>
             <div style={{ fontSize: 33, marginBottom: 12 }}>⬡</div>
             <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: 2, color: "var(--c-e0dbd4)", marginBottom: 4, textTransform: "uppercase" }}>Showroom Virtuel</div>
-            <div style={{ fontSize: 12, color: "#f26522", letterSpacing: 2, fontFamily: "var(--font-apple)", marginBottom: 16, textTransform: "uppercase" }}>Abonnement requis</div>
+            <div style={{ fontSize: 12, color: "#f26522", letterSpacing: 2, fontFamily: "var(--font-apple)", marginBottom: 16, textTransform: "uppercase" }}>Abonnement Premium requis</div>
             <div style={{ fontSize: 14, color: "var(--c-ddd)", lineHeight: 1.7, marginBottom: 28, fontFamily: "var(--font-apple)" }}>
-              Le mode Showroom Virtuel — détourage IA et fonds de showroom — est inclus dans <span style={{ color: "#f26522", fontWeight: 700 }}>l'abonnement</span>.<br /><br />
-              Choisissez la formule qui vous convient.
+              Le mode Showroom — détourage professionnel et <span style={{ color: "#f26522", fontWeight: 700 }}>ombre au sol réaliste</span> — est inclus dans l'abonnement <span style={{ color: "#f26522", fontWeight: 700 }}>Premium</span> ({SHOWROOM_MONTHLY_QUOTA} photos showroom / mois).<br /><br />
+              {userPlan === "trial" && trialShowroomUsed >= TRIAL_SHOWROOM_LIMIT
+                ? `Vos ${TRIAL_SHOWROOM_LIMIT} photos showroom d'essai sont épuisées.`
+                : "Choisissez la formule qui vous convient."}
             </div>
-            <button onClick={() => { setShowUpgradeProModal(false); setShowPlansModal(true); }}
+            <button onClick={() => { setShowUpgradeProModal(false); setPlansTier("premium"); setShowPlansModal(true); }}
               style={{ width: "100%", background: "#f26522", color: "#090909", border: "none", padding: "13px 0", fontFamily: "var(--font-apple)", fontSize: 15, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", marginBottom: 10 }}>
               Voir les formules
             </button>

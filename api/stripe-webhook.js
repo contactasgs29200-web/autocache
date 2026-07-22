@@ -32,7 +32,7 @@ async function activateSubscription(userId, plan, formule, stripeCustomerId) {
   // Active l'abonnement et démarre une fenêtre mensuelle de crédits.
   // Le quota (300 photos/mois) est remis à zéro chaque mois côté application,
   // indépendamment de la cadence de facturation (hebdo / mensuel / annuel).
-  const meta = { plan, photos_used: 0, photos_period_start: new Date().toISOString() };
+  const meta = { plan, photos_used: 0, showroom_used: 0, photos_period_start: new Date().toISOString() };
   if (formule) meta.formule = formule;
   if (stripeCustomerId) meta.stripe_customer_id = stripeCustomerId;
   const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
@@ -116,7 +116,7 @@ export default async function handler(req, res) {
         const plan    = subscription.metadata?.plan || "premium";
         const formule = subscription.metadata?.formule || null;
         if (userId) {
-          const meta = { plan, photos_used: 0, headlight_photos_used: 0 };
+          const meta = { plan, photos_used: 0, headlight_photos_used: 0, showroom_used: 0 };
           if (formule) meta.formule = formule;
           const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
             user_metadata: meta,
