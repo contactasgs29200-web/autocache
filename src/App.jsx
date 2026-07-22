@@ -2562,26 +2562,68 @@ async function cropToROI(dataUrl, roi) {
   return { croppedUrl: c.toDataURL('image/jpeg', 0.96), roi };
 }
 
-async function uncropCutout(croppedCutoutUrl, roi, origW, origH) {
+async function uncropCutout(croppedCutoutUrl, roi, origW, origH, baseDataURL = null) {
   const img = await loadImg(croppedCutoutUrl);
   const fullROI = roi.x1 === 0 && roi.y1 === 0 && roi.x2 === 1 && roi.y2 === 1;
-  // Déjà à la taille pleine et ROI pleine → rien à faire (fast path).
+  // Déjà à la taille pleine et ROI pleine → aucune perte de résolution à
+  // corriger, rien à faire (fast path).
   if (fullROI && img.naturalWidth === origW && img.naturalHeight === origH) {
     return croppedCutoutUrl;
   }
   const c = document.createElement('canvas');
   c.width = origW; c.height = origH;
   const ctx = c.getContext('2d');
-  // removeBackground (@imgly) downscale l'image à 2000 px max via shrinkDataUrl.
-  // Sans étirement, le cutout occuperait une zone plus petite que la ROI d'origine
-  // → décalage / "double véhicule" visible dans le MaskEditor avec la photo source.
-  // On étire ici le cutout (potentiellement réduit) pour qu'il remplisse exactement
-  // la région ROI dans le canvas origW×origH : véhicule aligné au pixel près avec
-  // baseDataURL, et output toujours aux dimensions attendues en aval.
+  // Le détourage travaille sur une image réduite (≤2000 px local, ≤3000 px
+  // API Pro). Sans étirement, le cutout occuperait une zone plus petite que
+  // la ROI d'origine → décalage / "double véhicule" visible dans le
+  // MaskEditor avec la photo source. On étire ici le cutout pour qu'il
+  // remplisse exactement la région ROI dans le canvas origW×origH.
   const cx1 = Math.round(roi.x1 * origW), cy1 = Math.round(roi.y1 * origH);
   const cx2 = Math.round(roi.x2 * origW), cy2 = Math.round(roi.y2 * origH);
   const cw = cx2 - cx1, ch = cy2 - cy1;
   ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, cx1, cy1, cw, ch);
+  if (!baseDataURL) return c.toDataURL('image/png');
+
+  // ── Restauration de la netteté native ──
+  // L'étirement ci-dessus rend la voiture floue : ses pixels sont ceux de
+  // l'image réduite envoyée au détourage, ré-agrandis. Le détourage ne sert
+  // ici que de MASQUE : on redessine par-dessus l'intérieur opaque du
+  // véhicule avec les pixels pleine résolution de la photo d'origine
+  // (baseDataURL). Les zones semi-transparentes — ombre au sol, bords
+  // adoucis, vitres — gardent les pixels du détourage : le rendu de l'ombre
+  // et la qualité du découpage ne changent pas, seul l'intérieur redevient
+  // aussi net que la photo originale.
+  try {
+    const baseImg = await loadImg(baseDataURL);
+    // Masque du cœur opaque : rampe d'alpha 200→248 pour fondre les pixels
+    // natifs dans le liseré anti-aliasé du détourage sans créer de halo.
+    const maskC = document.createElement('canvas');
+    maskC.width = origW; maskC.height = origH;
+    const maskCtx = maskC.getContext('2d');
+    maskCtx.drawImage(c, 0, 0);
+    const mId = maskCtx.getImageData(0, 0, origW, origH);
+    const md = mId.data;
+    const LO = 200, HI = 248;
+    for (let i = 3; i < md.length; i += 4) {
+      const a = md[i];
+      md[i] = a <= LO ? 0 : a >= HI ? 255 : Math.round((a - LO) * 255 / (HI - LO));
+    }
+    maskCtx.putImageData(mId, 0, 0);
+    const topC = document.createElement('canvas');
+    topC.width = origW; topC.height = origH;
+    const topCtx = topC.getContext('2d');
+    topCtx.imageSmoothingEnabled = true;
+    topCtx.imageSmoothingQuality = 'high';
+    topCtx.drawImage(baseImg, 0, 0, origW, origH);
+    topCtx.globalCompositeOperation = 'destination-in';
+    topCtx.drawImage(maskC, 0, 0);
+    ctx.drawImage(topC, 0, 0);
+    freeCanvas(maskC, topC);
+  } catch (e) {
+    // En cas d'échec (mémoire mobile…), on garde le cutout étiré : moins
+    // net mais toujours correct.
+    console.warn('[Uncrop] restauration netteté échouée:', e?.message);
+  }
   return c.toDataURL('image/png');
 }
 
@@ -3510,10 +3552,10 @@ export default function AutoCache() {
             // écarte les voisins) et embarque son ombre IA dans l'alpha : les
             // nettoyages heuristiques (composantes connexes, séparation,
             // gate bbox) rogneraient l'ombre — on les court-circuite.
-            cutout = await uncropCutout(pro.dataUrl, appliedROI, r.imgW, r.imgH);
+            cutout = await uncropCutout(pro.dataUrl, appliedROI, r.imgW, r.imgH, r.baseDataURL);
           } else {
             const croppedCutout = await removeBackground(croppedUrl);
-            const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH);
+            const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH, r.baseDataURL);
             const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
             const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
             cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
