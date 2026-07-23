@@ -1702,15 +1702,21 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
 
     if (bgStats && carStats) try {
       const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-      const expW = 0.85 * t;   // rapprochement d'exposition (luminance)
-      const colW = 0.65 * t;   // rapprochement de teinte (balance des blancs)
-      let gExp = 1 + (bgStats.l / carStats.l - 1) * expW;
-      gExp = clamp(gExp, 0.4, 1.6);
+      // ── Fondu v2 : intégration d'ambiance, jamais de délavage ──
+      // L'ancienne version alignait la luminance MOYENNE de la voiture sur
+      // celle du décor : sur un studio quasi blanc, une voiture sombre était
+      // éclaircie jusqu'au plafond (+60 %) et désaturée → rendu passé/fané.
+      // Une voiture rouge dans un showroom blanc reste rouge et brillante ;
+      // seul l'éclairage ambiant doit se sentir. D'où : rapprochement
+      // d'exposition LOGARITHMIQUE doux plafonné à ±18 %, balance des blancs
+      // légère, saturation et contraste presque intacts.
+      const gExp = clamp(Math.pow(bgStats.l / carStats.l, 0.25 * t), 0.85, 1.18);
+      const colW = 0.35 * t;   // rapprochement de teinte (balance des blancs)
       const carCast = [carStats.r / carStats.l, carStats.g / carStats.l, carStats.b / carStats.l];
       const bgCast  = [bgStats.r  / bgStats.l,  bgStats.g  / bgStats.l,  bgStats.b  / bgStats.l];
-      const gain = carCast.map((c, i) => gExp * clamp(1 + (bgCast[i] / c - 1) * colW, 0.7, 1.4));
-      const sat = 1 - 0.22 * t; // légère désaturation vers l'ambiance
-      const con = 1 - 0.12 * t; // léger adoucissement du contraste
+      const gain = carCast.map((c, i) => gExp * clamp(1 + (bgCast[i] / c - 1) * colW, 0.9, 1.12));
+      const sat = 1 - 0.08 * t; // très légère désaturation vers l'ambiance
+      const con = 1 - 0.05 * t; // très léger adoucissement du contraste
       const cw0 = carImg.naturalWidth || carImg.width;
       const ch0 = carImg.naturalHeight || carImg.height;
       const cc = document.createElement('canvas'); cc.width = cw0; cc.height = ch0;
@@ -1734,10 +1740,10 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
       graded = true;
     } catch (_) { graded = false; }
     if (!graded) {
-      // Repli : filtre léger si l'échantillonnage/grading du décor échoue
-      const bVal = (1 - 0.08 * t).toFixed(3);
-      const cVal = (1 - 0.12 * t).toFixed(3);
-      const sVal = (1 - 0.12 * t).toFixed(3);
+      // Repli : filtre très léger si l'échantillonnage/grading du décor échoue
+      const bVal = (1 - 0.03 * t).toFixed(3);
+      const cVal = (1 - 0.04 * t).toFixed(3);
+      const sVal = (1 - 0.06 * t).toFixed(3);
       ctx.filter = `brightness(${bVal}) contrast(${cVal}) saturate(${sVal})`;
     }
   }
