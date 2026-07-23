@@ -2587,6 +2587,15 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH, baseDataURL = n
   try {
     const SOFT = 230; // en dessous : ombre / liseré doux ; au-dessus : carrosserie
     const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+    // Un bord n'est fondu que si du contenu semi-transparent TOUCHE ce bord :
+    // une ombre qui se termine naturellement dans la ROI n'est jamais
+    // retouchée (vues 3/4 et latérales notamment).
+    const touchesEdge = (x0, y0, w, h) => {
+      if (w <= 0 || h <= 0) return false;
+      const d = ctx.getImageData(x0, y0, w, h).data;
+      for (let k = 3; k < d.length; k += 4) { const a = d[k]; if (a > 8 && a < SOFT) return true; }
+      return false;
+    };
     const featherBand = (x0, y0, w, h, factorFor) => {
       if (w <= 0 || h <= 0) return;
       const id = ctx.getImageData(x0, y0, w, h);
@@ -2596,16 +2605,24 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH, baseDataURL = n
           const k = (yy * w + xx) * 4 + 3;
           const a = d[k];
           if (a === 0 || a >= SOFT) continue;
-          d[k] = Math.round(a * clamp01(factorFor(x0 + xx, y0 + yy)));
+          d[k] = Math.round(a * factorFor(x0 + xx, y0 + yy));
         }
       }
       ctx.putImageData(id, x0, y0);
     };
-    const Fb = Math.max(24, Math.round(ch * 0.08)); // bande basse
-    const Fs = Math.max(24, Math.round(cw * 0.05)); // bandes latérales
-    featherBand(cx1, Math.max(cy1, cy2 - Fb), cw, Math.min(Fb, ch), (x, y) => (cy2 - 1 - y) / Fb);
-    featherBand(cx1, cy1, Math.min(Fs, cw), ch, (x, y) => (x - cx1) / Fs);
-    featherBand(Math.max(cx1, cx2 - Fs), cy1, Math.min(Fs, cw), ch, (x, y) => (cx2 - 1 - x) / Fs);
+    // Bandes courtes + courbe douce (t^0.6) : on casse la ligne de coupe sans
+    // estomper une ombre peu étendue — sur une vue de face, l'ombre est une
+    // fine bande sous le pare-chocs, presque entièrement dans la marge basse
+    // de la ROI ; la première version du fondu (bande 8 %, linéaire) l'y
+    // effaçait quasi intégralement.
+    const Fb = Math.max(16, Math.round(ch * 0.035)); // bande basse
+    const Fs = Math.max(16, Math.round(cw * 0.03));  // bandes latérales
+    if (touchesEdge(cx1, cy2 - 3, cw, 3))
+      featherBand(cx1, Math.max(cy1, cy2 - Fb), cw, Math.min(Fb, ch), (x, y) => Math.pow(clamp01((cy2 - 1 - y) / Fb), 0.6));
+    if (touchesEdge(cx1, cy1, 3, ch))
+      featherBand(cx1, cy1, Math.min(Fs, cw), ch, (x, y) => Math.pow(clamp01((x - cx1) / Fs), 0.6));
+    if (touchesEdge(cx2 - 3, cy1, 3, ch))
+      featherBand(Math.max(cx1, cx2 - Fs), cy1, Math.min(Fs, cw), ch, (x, y) => Math.pow(clamp01((cx2 - 1 - x) / Fs), 0.6));
   } catch (_) { /* fondu cosmétique — jamais bloquant */ }
 
   if (!baseDataURL) return c.toDataURL('image/png');
