@@ -2576,6 +2576,38 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH, baseDataURL = n
   const cx2 = Math.round(roi.x2 * origW), cy2 = Math.round(roi.y2 * origH);
   const cw = cx2 - cx1, ch = cy2 - cy1;
   ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, cx1, cy1, cw, ch);
+
+  // ── Fondu des bords de découpe ──
+  // La ROI est un rectangle : l'ombre au sol semi-transparente qui la
+  // traverse était tranchée en ligne droite (visible sous la voiture).
+  // On fond l'alpha des pixels SEMI-TRANSPARENTS (ombre, bords doux) sur une
+  // bande le long des bords bas / gauche / droite de la ROI — les pixels
+  // opaques (carrosserie) ne sont jamais touchés : le détourage et le rendu
+  // de l'ombre ne changent pas, seule sa terminaison devient un dégradé.
+  try {
+    const SOFT = 230; // en dessous : ombre / liseré doux ; au-dessus : carrosserie
+    const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+    const featherBand = (x0, y0, w, h, factorFor) => {
+      if (w <= 0 || h <= 0) return;
+      const id = ctx.getImageData(x0, y0, w, h);
+      const d = id.data;
+      for (let yy = 0; yy < h; yy++) {
+        for (let xx = 0; xx < w; xx++) {
+          const k = (yy * w + xx) * 4 + 3;
+          const a = d[k];
+          if (a === 0 || a >= SOFT) continue;
+          d[k] = Math.round(a * clamp01(factorFor(x0 + xx, y0 + yy)));
+        }
+      }
+      ctx.putImageData(id, x0, y0);
+    };
+    const Fb = Math.max(24, Math.round(ch * 0.08)); // bande basse
+    const Fs = Math.max(24, Math.round(cw * 0.05)); // bandes latérales
+    featherBand(cx1, Math.max(cy1, cy2 - Fb), cw, Math.min(Fb, ch), (x, y) => (cy2 - 1 - y) / Fb);
+    featherBand(cx1, cy1, Math.min(Fs, cw), ch, (x, y) => (x - cx1) / Fs);
+    featherBand(Math.max(cx1, cx2 - Fs), cy1, Math.min(Fs, cw), ch, (x, y) => (cx2 - 1 - x) / Fs);
+  } catch (_) { /* fondu cosmétique — jamais bloquant */ }
+
   if (!baseDataURL) return c.toDataURL('image/png');
 
   // ── Restauration de la netteté native ──
