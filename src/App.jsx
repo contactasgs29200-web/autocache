@@ -6535,7 +6535,7 @@ export default function AutoCache() {
               style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 52, width: "min(500px, 90vw)" }}
             >
               <span style={{ fontSize: 17, userSelect: "none" }}>🔍</span>
-              <span style={{ fontSize: 11, color: "var(--c-ddd)", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "var(--font-apple)", userSelect: "none", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 11, color: "#fff", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "var(--font-apple)", userSelect: "none", whiteSpace: "nowrap" }}>
                 Agrandir la taille
               </span>
               <input
@@ -6560,7 +6560,7 @@ export default function AutoCache() {
               title="Fond la voiture dans le décor en abaissant luminosité, contraste et saturation"
             >
               <span style={{ fontSize: 17, userSelect: "none" }}>🎨</span>
-              <span style={{ fontSize: 11, color: "var(--c-ddd)", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "var(--font-apple)", userSelect: "none", whiteSpace: "nowrap" }}>
+              <span style={{ fontSize: 11, color: "#fff", letterSpacing: 1.5, textTransform: "uppercase", fontFamily: "var(--font-apple)", userSelect: "none", whiteSpace: "nowrap" }}>
                 Fondre le véhicule au décor
               </span>
               <input
