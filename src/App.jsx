@@ -4,6 +4,7 @@ import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
+import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -2223,6 +2224,14 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
 //     n'affine que les 4 coins sur le crop (1 appel Sonnet).
 //  3. Claude seul (locate + refine) si Plate Recognizer est indisponible.
 async function detectPlate(imageFile, regions = 'fr') {
+  // ── Source principale : modèle maison keypoints (navigateur, 0 € / photo) ──
+  // Entraîné sur les photos réelles de la concession, il pose les 4 coins en
+  // perspective à tous les angles (y compris 3/4). S'il trouve une plaque, on
+  // le croit ; sinon (modèle absent, erreur, ou rien détecté) on retombe sur
+  // Plate Recognizer puis Claude, comme avant.
+  const kp = await detectPlateKeypoints(imageFile);
+  if (kp?.found) return kp;
+
   const pr = await detectPlatePlateRecognizer(imageFile, regions);
   // Verdict « aucune plaque » du détecteur spécialisé : on le CROIT.
   // Repartir sur Claude ici produirait des caches fantômes (le locate
@@ -3375,7 +3384,7 @@ export default function AutoCache() {
   useEffect(() => {
     if (!user || authLoading) return;
     const idleCb = window.requestIdleCallback ?? ((cb) => setTimeout(cb, 1500));
-    const handle = idleCb(() => preloadBackgroundRemoval());
+    const handle = idleCb(() => { preloadBackgroundRemoval(); preloadPlateKeypoints(); });
     return () => {
       if (window.cancelIdleCallback && typeof handle === 'number') window.cancelIdleCallback(handle);
     };
