@@ -4,7 +4,7 @@ import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
 import AuthTransition, { AUTH_MOTION_CSS, AUTH_EXIT_MS, prefersReducedMotion } from "./components/AuthTransition.jsx";
-import ProcessingIndicator, { PROCESSING_MOTION_CSS, PROCESSING_EXIT_MS } from "./components/ProcessingMotion.jsx";
+import ProcessingIndicator, { ProcessingLabel, PROCESSING_MOTION_CSS, PROCESSING_EXIT_MS } from "./components/ProcessingMotion.jsx";
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 // @imgly background removal — chargé dynamiquement
@@ -7062,9 +7062,12 @@ export default function AutoCache() {
       {procVisible && (
         <div className={processing ? "ac-proc-veil" : "ac-proc-veil-out"}
           style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.92)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, overflowY: "auto", padding: "32px 16px" }}>
+          {/* Le libellé dit ce qui se passe, le compteur sous l'anneau donne le
+              chiffre : répéter « Traitement » aux deux endroits bégayait. */}
+          <div className="ac-proc-rise-1"><ProcessingLabel running={processing} /></div>
           <ProcessingIndicator pct={pct} />
           <div className="ac-proc-rise-1" style={{ fontFamily: "var(--font-apple)", fontSize: 12, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
-            Traitement {progress.n} / {progress.total}
+            {progress.n} / {progress.total} photo{progress.total > 1 ? "s" : ""}
           </div>
           {/* Mini-jeu d'esquive pour patienter pendant le traitement.
               `gated` : le jeu ne s'affiche pas d'office — une phrase invite

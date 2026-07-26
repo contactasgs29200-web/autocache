@@ -62,7 +62,8 @@ export const PROCESSING_MOTION_CSS = `
 .ac-proc-pop{ animation:ac-proc-pop 380ms cubic-bezier(.34,1.4,.5,1) 80ms both; }
 .ac-proc-breathe{ animation:ac-proc-breathe 2400ms ease-in-out 620ms infinite; }
 
-/* Le compteur puis le mini-jeu montent après l'anneau. */
+/* Les deux lignes de texte encadrent l'anneau et montent ensemble, puis le
+   mini-jeu suit. */
 @keyframes ac-proc-rise{
   from{ opacity:0; transform:translateY(8px); }
   to  { opacity:1; transform:none; }
@@ -70,16 +71,47 @@ export const PROCESSING_MOTION_CSS = `
 .ac-proc-rise-1{ animation:ac-proc-rise 320ms cubic-bezier(.2,.7,.3,1) 300ms both; }
 .ac-proc-rise-2{ animation:ac-proc-rise 320ms cubic-bezier(.2,.7,.3,1) 430ms both; }
 
+/* « Traitement en cours » : couleurs fixes, le voile est toujours sombre. */
+.ac-proc-label{
+  display:flex; align-items:center;
+  font-family:var(--font-apple); font-size:11px; font-weight:700;
+  letter-spacing:3px; text-transform:uppercase;
+  color:rgba(255,255,255,.62);
+}
+/* Trois points qui s'allument en vague pour signaler l'attente. */
+@keyframes ac-proc-dot{
+  0%,60%,100%{ opacity:.2; }
+  30%        { opacity:1; }
+}
+.ac-proc-dots{ display:inline-flex; align-items:center; gap:3px; margin-left:2px; }
+.ac-proc-dots i{
+  width:3px; height:3px; border-radius:50%; background:currentColor; display:block;
+  animation:ac-proc-dot 1200ms ease-in-out infinite;
+}
+.ac-proc-dots i:nth-child(2){ animation-delay:160ms; }
+.ac-proc-dots i:nth-child(3){ animation-delay:320ms; }
+
 @media (prefers-reduced-motion: reduce){
   .ac-proc-veil{ animation-duration:120ms; }
   .ac-proc-pulse,
   .ac-proc-breathe{ animation:none; }
+  .ac-proc-dots i{ animation:none; opacity:.7; }
   .ac-proc-track{ animation:ac-proc-fade 160ms linear both; stroke-dashoffset:0; }
   .ac-proc-pop,
   .ac-proc-rise-1,
   .ac-proc-rise-2{ animation:ac-proc-fade 160ms linear both; }
 }
 `;
+
+/** Ligne « Traitement en cours… » ; les points s'arrêtent une fois le lot fini. */
+export function ProcessingLabel({ running }) {
+  return (
+    <div className="ac-proc-label">
+      {running ? "Traitement en cours" : "Traitement terminé"}
+      {running && <span className="ac-proc-dots"><i /><i /><i /></span>}
+    </div>
+  );
+}
 
 /** Hexagone AutoCache + anneau de progression. `pct` : 0 → 100. */
 export default function ProcessingIndicator({ pct = 0 }) {
