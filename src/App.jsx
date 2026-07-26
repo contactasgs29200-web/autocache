@@ -2947,12 +2947,12 @@ function AuthScreen({ onAuth, exiting }) {
                     style={{
                       position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
                       background: "transparent", border: "none", padding: "6px 8px",
-                      cursor: "pointer", color: showPassword ? "#f26522" : "var(--c-ddd)",
-                      fontSize: 17, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: "pointer", color: "var(--c-ddd)",
+                      lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
                       minHeight: "unset",
                     }}
                   >
-                    {showPassword ? "🙈" : "👁"}
+                    <SettingsIcon name={showPassword ? "eye-off" : "eye"} size={17} />
                   </button>
                 )}
               </div>
@@ -3042,6 +3042,10 @@ function SettingsIcon({ name, size = 16 }) {
       return (<svg {...common}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16,17 21,12 16,7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>);
     case "install": // Installer l'application
       return (<svg {...common}><rect x="5" y="2" width="14" height="20" rx="2" /><line x1="12" y1="6" x2="12" y2="14" /><polyline points="9,11 12,14 15,11" /><line x1="10" y1="18" x2="14" y2="18" /></svg>);
+    case "eye": // Afficher le mot de passe
+      return (<svg {...common}><path d="M1.5 12S5.7 5.5 12 5.5 22.5 12 22.5 12 18.3 18.5 12 18.5 1.5 12 1.5 12z" /><circle cx="12" cy="12" r="3.2" /></svg>);
+    case "eye-off": // Masquer le mot de passe
+      return (<svg {...common}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" /><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" /><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" /><line x1="2" y1="2" x2="22" y2="22" /></svg>);
     default:
       return null;
   }
@@ -4769,12 +4773,12 @@ export default function AutoCache() {
                   style={{
                     position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
                     background: "transparent", border: "none", padding: "6px 8px",
-                    cursor: "pointer", color: showRecoveryPassword ? "#f26522" : "var(--c-ddd)",
-                    fontSize: 17, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", color: "var(--c-ddd)",
+                    lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
                     minHeight: "unset",
                   }}
                 >
-                  {showRecoveryPassword ? "🙈" : "👁"}
+                  <SettingsIcon name={showRecoveryPassword ? "eye-off" : "eye"} size={17} />
                 </button>
               </div>
             </div>
