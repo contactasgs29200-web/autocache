@@ -326,6 +326,28 @@ function loadImg(src) {
   });
 }
 
+// Tailles d'essai successives (côté le plus long) pour ranger le logo dans le
+// quota du navigateur. Un cache plaque est composité sur quelques centaines de
+// pixels : même le dernier palier reste net à l'usage.
+const LOGO_STORE_SIDES = [1600, 900, 500, 280];
+
+// Réduit un data URL s'il dépasse `maxSide`, sinon le renvoie tel quel.
+// Renvoie null si l'image est illisible — l'appelant renonce alors sans casser.
+async function shrinkDataURL(dataURL, maxSide) {
+  try {
+    const img = await loadImg(dataURL);
+    const longest = Math.max(img.naturalWidth, img.naturalHeight);
+    if (!longest) return null;
+    const scale = Math.min(1, maxSide / longest);
+    if (scale === 1) return dataURL;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  } catch (e) { return null; }
+}
+
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 // ── Formats d'export des photos ─────────────────────────────────────────────
@@ -3279,14 +3301,33 @@ export default function AutoCache() {
     } catch(e) {}
   }, []);
 
-  // Sauvegarder logo cache plaque → localStorage
+  // Sauvegarder logo cache plaque → localStorage.
+  // Un logo importé depuis un téléphone peut peser plusieurs Mo une fois en
+  // base64 et dépasser le quota du navigateur. Sans repli, l'écriture échouait
+  // en silence et le logo était perdu au démarrage suivant : on libère donc
+  // l'original de recadrage, puis on se rabat sur une version réduite —
+  // largement suffisante pour un cache plaque — plutôt que de ne rien garder.
   useEffect(() => {
     if (!logo?.preview || !logo.preview.startsWith('data:')) return;
-    try {
-      localStorage.setItem('ac_logo_preview', logo.preview);
+    let cancelled = false;
+    const write = (preview) => {
+      localStorage.setItem('ac_logo_preview', preview);
       localStorage.setItem('ac_logo_generated', logo.generated ? '1' : '0');
       if (logo.bgColor) localStorage.setItem('ac_logo_bgcolor', logo.bgColor);
-    } catch(e) {}
+    };
+    (async () => {
+      try { write(logo.preview); return; } catch (e) {}
+      try { localStorage.removeItem('ac_logo_original'); } catch (e) {}
+      try { write(logo.preview); return; } catch (e) {}
+      for (const side of LOGO_STORE_SIDES) {
+        const reduced = await shrinkDataURL(logo.preview, side);
+        if (cancelled) return;
+        if (!reduced) break;
+        try { write(reduced); return; } catch (e) {}
+      }
+      console.warn('[Logo] quota localStorage insuffisant : logo non conservé');
+    })();
+    return () => { cancelled = true; };
   }, [logo]);
 
   useEffect(() => {
@@ -4067,7 +4108,11 @@ export default function AutoCache() {
 
   const logout = async () => {
     await supabase.auth.signOut();
-    setLogo(null); setPhotos([]); setResults([]); setTab("setup");
+    // Le logo cache plaque n'est pas remis à zéro : il est conservé d'une
+    // session à l'autre (cf. restauration depuis localStorage). L'effacer ici
+    // le faisait disparaître de l'écran à la reconnexion, alors qu'il était
+    // toujours enregistré — il ne revenait qu'après un rechargement de page.
+    setPhotos([]); setResults([]); setTab("setup");
   };
 
   const submitPromo = async () => {
