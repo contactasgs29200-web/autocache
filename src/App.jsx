@@ -4,6 +4,7 @@ import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
 import AuthTransition, { AUTH_MOTION_CSS, AUTH_EXIT_MS, prefersReducedMotion } from "./components/AuthTransition.jsx";
+import ProcessingIndicator, { PROCESSING_MOTION_CSS, PROCESSING_EXIT_MS } from "./components/ProcessingMotion.jsx";
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 // @imgly background removal — chargé dynamiquement
@@ -3923,6 +3924,15 @@ export default function AutoCache() {
     }
   };
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
+
+  // Le voile de traitement reste monté le temps de son fondu de sortie, pour
+  // que la fin du lot ne se termine pas par une disparition sèche.
+  const [procVisible, setProcVisible] = useState(false);
+  useEffect(() => {
+    if (processing) { setProcVisible(true); return; }
+    const t = setTimeout(() => setProcVisible(false), PROCESSING_EXIT_MS);
+    return () => clearTimeout(t);
+  }, [processing]);
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "premium" (ancien : "essential" | "pro")
   const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
   const PLAN_LIMIT = isPaid ? 300 : TRIAL_LIMIT;
@@ -4817,10 +4827,8 @@ export default function AutoCache() {
           input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#f26522;border:none;}
           button,select{min-height:40px;}
         }
-        @keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-        @-webkit-keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-        .ac-spinner{animation:ac-spin 0.7s linear infinite;-webkit-animation:ac-spin 0.7s linear infinite;}
         ${AUTH_MOTION_CSS}
+        ${PROCESSING_MOTION_CSS}
       `}</style>
       {/* L'application n'apparaît qu'en fondu à la première connexion : le
           voile de AuthTransition la découvre pendant que le logo se pose. */}
@@ -7047,20 +7055,23 @@ export default function AutoCache() {
         </div>
       )}
 
-      {/* ── Overlay chargement ── */}
-      {processing && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.92)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, overflowY: "auto", padding: "32px 16px" }}>
-          <span className="ac-spinner" style={{ width: 52, height: 52, borderTop: "5px solid #f26522", borderRight: "5px solid #f26522", borderBottom: "5px solid #f26522", borderLeft: "5px solid transparent", borderRadius: "50%", display: "inline-block" }} />
-          <div style={{ fontFamily: "var(--font-apple)", fontSize: 12, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
+      {/* ── Overlay chargement ──
+          L'anneau se trace autour du logo au lancement puis se remplit au fil
+          des photos : il remplace à la fois l'ancien rouet et la barre de
+          progression, qui donnaient deux fois la même information. */}
+      {procVisible && (
+        <div className={processing ? "ac-proc-veil" : "ac-proc-veil-out"}
+          style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.92)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, overflowY: "auto", padding: "32px 16px" }}>
+          <ProcessingIndicator pct={pct} />
+          <div className="ac-proc-rise-1" style={{ fontFamily: "var(--font-apple)", fontSize: 12, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
             Traitement {progress.n} / {progress.total}
-          </div>
-          <div style={{ width: 200, height: 2, background: "var(--c-1e1e1e)", borderRadius: 1, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
           </div>
           {/* Mini-jeu d'esquive pour patienter pendant le traitement.
               `gated` : le jeu ne s'affiche pas d'office — une phrase invite
               à appuyer sur Espace pour le lancer. */}
-          <LoadingGame gated />
+          <div className="ac-proc-rise-2">
+            <LoadingGame gated />
+          </div>
         </div>
       )}
 
