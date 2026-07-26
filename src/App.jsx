@@ -3,6 +3,7 @@ import MaskEditor from "./components/MaskEditor.jsx";
 import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
+import AuthTransition, { AUTH_MOTION_CSS, AUTH_EXIT_MS, prefersReducedMotion } from "./components/AuthTransition.jsx";
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 // @imgly background removal — chargé dynamiquement
@@ -2878,7 +2879,7 @@ const Slider = ({ label, value, min, max, step, onChange }) => (
   </div>
 );
 
-function AuthScreen({ onAuth }) {
+function AuthScreen({ onAuth, exiting }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -2904,7 +2905,10 @@ function AuthScreen({ onAuth }) {
       } else if (mode === "login") {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        // On garde l'état « chargement » : la carte s'efface aussitôt, le
+        // bouton ne doit pas reprendre son libellé au milieu de la transition.
         onAuth(data.user);
+        return;
       } else {
         if (!fullName.trim()) throw new Error("Veuillez entrer votre nom ou nom d'entreprise.");
         if (!phone.trim()) throw new Error("Veuillez entrer votre numéro de téléphone.");
@@ -2931,7 +2935,9 @@ function AuthScreen({ onAuth }) {
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--c-1c1c1c)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-apple)" }}>
-      <div style={{ width: 380, padding: 40, background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 4 }}>
+      <style>{AUTH_MOTION_CSS}</style>
+      <div className={exiting ? "ac-auth-out" : undefined}
+        style={{ width: 380, padding: 40, background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 4 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 36 }}>
           <svg width="22" height="22" viewBox="0 0 22 22">
             <polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" />
@@ -3111,6 +3117,11 @@ const SUBSCRIPTION_FEATURES = [
 export default function AutoCache() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  // ── Transition « connexion → application » ──
+  // `authExit` efface la carte de connexion, puis `entering` fait apparaître
+  // l'application pendant que le logo rejoint l'en-tête.
+  const [authExit, setAuthExit] = useState(false);
+  const [entering, setEntering] = useState(false);
   const [logo, setLogo] = useState(null);
   const [importedLogo, setImportedLogo] = useState(null); // mémorise le dernier logo importé pour le restaurer après un aller-retour vers "Générer"
   const [photos, setPhotos] = useState([]);
@@ -3359,6 +3370,43 @@ export default function AutoCache() {
     } catch(e) {}
   }, [wallLogo, wallLogoMode]);
 
+  // Miroir de l'état d'authentification, lisible depuis les abonnements
+  // Supabase qui capturent des valeurs figées.
+  const authStateRef = useRef({ user: null, loading: true });
+  useEffect(() => { authStateRef.current = { user, loading: authLoading }; }, [user, authLoading]);
+
+  // Pose l'utilisateur renvoyé par Supabase. Quand il arrive alors que l'écran
+  // de connexion est affiché, la transition animée s'intercale : la carte
+  // s'efface (AUTH_EXIT_MS), puis l'application apparaît pendant que le logo
+  // rejoint l'en-tête. La restauration de session au chargement et les simples
+  // rafraîchissements de jeton passent directement, sans animation.
+  const enterTimerRef = useRef(null);
+  const pendingUserRef = useRef(null);
+  const applyUser = useCallback((nextUser) => {
+    const { user: current, loading } = authStateRef.current;
+    if (nextUser && !current && !loading && !prefersReducedMotion()) {
+      pendingUserRef.current = nextUser;
+      if (enterTimerRef.current) return; // transition déjà lancée
+      setAuthExit(true);
+      enterTimerRef.current = setTimeout(() => {
+        enterTimerRef.current = null;
+        setAuthExit(false);
+        setEntering(true);
+        setUser(pendingUserRef.current);
+      }, AUTH_EXIT_MS);
+      return;
+    }
+    if (!nextUser) { // déconnexion : on annule une transition éventuellement en cours
+      clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
+      setAuthExit(false);
+      setEntering(false);
+    }
+    setUser(nextUser);
+  }, []);
+  const finishEntering = useCallback(() => setEntering(false), []);
+  useEffect(() => () => clearTimeout(enterTimerRef.current), []);
+
   useEffect(() => {
     // Retour depuis Stripe Checkout
     const params = new URLSearchParams(window.location.search);
@@ -3372,10 +3420,14 @@ export default function AutoCache() {
       setAuthLoading(false);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user || null);
       if (event === "PASSWORD_RECOVERY") {
+        // L'écran affiché est celui du nouveau mot de passe, pas l'application :
+        // aucune transition à jouer.
         setPasswordRecovery(true);
+        setUser(session?.user || null);
+        return;
       }
+      applyUser(session?.user || null);
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -3383,13 +3435,14 @@ export default function AutoCache() {
   // ── Didacticiel automatique à la première connexion ──
   useEffect(() => {
     if (!user || authLoading) return;
+    if (entering) return; // on laisse la transition d'entrée se terminer
     if (!user.user_metadata?.tutorial_seen) {
       // Basculer sur l'onglet Configuration pour que les éléments cibles existent
       setTab("setup");
       const t = setTimeout(() => setShowTutorial(true), 600);
       return () => clearTimeout(t);
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, entering]);
 
   // ── Préchauffe le module @imgly/background-removal dès que l'utilisateur
   // est authentifié, pour ne plus payer le coût d'init au premier traitement.
@@ -4793,7 +4846,7 @@ export default function AutoCache() {
     );
   }
 
-  if (!user) return <AuthScreen onAuth={setUser} />;
+  if (!user) return <AuthScreen onAuth={applyUser} exiting={authExit} />;
 
   return (
     <div>
@@ -4814,12 +4867,18 @@ export default function AutoCache() {
         @keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         @-webkit-keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         .ac-spinner{animation:ac-spin 0.7s linear infinite;-webkit-animation:ac-spin 0.7s linear infinite;}
+        ${AUTH_MOTION_CSS}
       `}</style>
-      <div style={{ fontFamily: "var(--font-apple)", background: "var(--c-1c1c1c)", minHeight: "100vh", color: "var(--c-e0dbd4)", overflowX: "hidden", maxWidth: "100vw" }}>
+      {/* L'application n'apparaît qu'en fondu à la première connexion : le
+          voile de AuthTransition la découvre pendant que le logo se pose. */}
+      {entering && <AuthTransition onDone={finishEntering} />}
+      <div className={entering ? "ac-app-enter" : undefined}
+        style={{ fontFamily: "var(--font-apple)", background: "var(--c-1c1c1c)", minHeight: "100vh", color: "var(--c-e0dbd4)", overflowX: "hidden", maxWidth: "100vw" }}>
         <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: isMobile ? 6 : 12, padding: isMobile ? "0 10px" : "0 28px", height: 56, borderBottom: "1px solid var(--c-1e1e1e)", position: "sticky", top: 0, background: "var(--c-1c1c1c)", zIndex: 10 }}>
           {/* minWidth:0 + ellipsis : le titre se tronque au besoin, le menu à droite reste toujours accessible */}
           <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 7 : 10, minWidth: 0, flexShrink: 1 }}>
-            <svg width="22" height="22" viewBox="0 0 22 22" style={{ flexShrink: 0 }}><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
+            {/* data-ac-logo : cible du vol du logo pendant la transition de connexion */}
+            <svg data-ac-logo width="22" height="22" viewBox="0 0 22 22" style={{ flexShrink: 0 }}><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#090909" /></svg>
             <span style={{ fontSize: isMobile ? 14 : 20, fontWeight: 700, letterSpacing: isMobile ? 1 : 4, textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>AutoCache</span>
             {!isMobile && <span style={{ fontSize: 10, color: "#f26522", letterSpacing: 2, fontFamily: "var(--font-apple)" }}>PRO</span>}
           </div>
