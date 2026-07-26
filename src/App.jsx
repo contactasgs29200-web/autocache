@@ -6,6 +6,7 @@ import LoadingGame from "./components/LoadingGame.jsx";
 import AuthTransition, { AUTH_MOTION_CSS, AUTH_EXIT_MS, prefersReducedMotion } from "./components/AuthTransition.jsx";
 import ProcessingIndicator, { PROCESSING_MOTION_CSS, PROCESSING_EXIT_MS } from "./components/ProcessingMotion.jsx";
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
+import { vehicleROI, clippedEdges, widenROI, isFullFrameROI } from "./showroomGeometry.js";
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
@@ -2362,72 +2363,126 @@ function getSecondaryVehicles(allVehicles, mainVehicle) {
   });
 }
 
-function estimateMainVehicleROI(mainVehicle, plateBox, imgW, imgH, secondaryVehicles = []) {
-  // If we have a detected vehicle bbox, use it with safe margins
-  // Shrink margins on sides where secondary vehicles exist to exclude them
-  if (mainVehicle) {
-    const b = mainVehicle.bbox;
-    const bw = b.x2 - b.x1, bh = b.y2 - b.y1;
-    let marginL = bw * 0.18, marginR = bw * 0.18;
-    let marginT = bh * 0.15, marginB = bh * 0.12;
+// Compte les pixels de CARROSSERIE (opaques) le long des quatre bords d'un
+// cutout recadré. Un bord chargé = le cadre tranche dans la tôle.
+// On ne lit que quatre bandes fines : négligeable face à un getImageData plein.
+async function measureEdgeOpacity(cutoutDataURL, band = 3, opaque = 230) {
+  const img = await loadImg(cutoutDataURL);
+  const W = img.naturalWidth || img.width;
+  const H = img.naturalHeight || img.height;
+  const b = Math.max(1, Math.min(band, Math.floor(Math.min(W, H) / 2)));
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const countIn = (x, y, w, h) => {
+    if (w <= 0 || h <= 0) return 0;
+    const d = ctx.getImageData(x, y, w, h).data;
+    let n = 0;
+    for (let k = 3; k < d.length; k += 4) if (d[k] >= opaque) n++;
+    return n;
+  };
+  const counts = {
+    left:   countIn(0, 0, b, H),
+    right:  countIn(W - b, 0, b, H),
+    top:    countIn(0, 0, W, b),
+    bottom: countIn(0, H - b, W, b),
+    W, H,
+  };
+  freeCanvas(c);
+  return counts;
+}
 
-    for (const sv of secondaryVehicles) {
-      const sb = sv.bbox;
-      // Secondary is to the RIGHT of main vehicle
-      if (sb.x1 > b.x2 - bw * 0.10) {
-        const gap = sb.x1 - b.x2;
-        marginR = Math.min(marginR, Math.max(bw * 0.05, gap * 0.5));
-        console.log('[ROI] shrink right margin: secondary ' + sv.class + ' at x1=' +
-          sb.x1.toFixed(3) + ' → marginR=' + marginR.toFixed(3));
-      }
-      // Secondary is to the LEFT of main vehicle
-      if (sb.x2 < b.x1 + bw * 0.10) {
-        const gap = b.x1 - sb.x2;
-        marginL = Math.min(marginL, Math.max(bw * 0.05, gap * 0.5));
-        console.log('[ROI] shrink left margin: secondary ' + sv.class + ' at x2=' +
-          sb.x2.toFixed(3) + ' → marginL=' + marginL.toFixed(3));
-      }
-      // Secondary is ABOVE main vehicle
-      if (sb.y2 < b.y1 + bh * 0.10) {
-        const gap = b.y1 - sb.y2;
-        marginT = Math.min(marginT, Math.max(bh * 0.05, gap * 0.5));
-      }
-      // Secondary is BELOW main vehicle
-      if (sb.y1 > b.y2 - bh * 0.10) {
-        const gap = sb.y1 - b.y2;
-        marginB = Math.min(marginB, Math.max(bh * 0.05, gap * 0.5));
-      }
+// Réduit `mask` À LA SEULE composante connexe du SUJET : celle qui contient le
+// centre de la plaque, à défaut celle qui recouvre le mieux la bbox du
+// véhicule principal, à défaut la plus grosse.
+//
+// ⚠ Modifie `mask` sur place et le renvoie : à pleine résolution sur mobile,
+// chaque tableau supplémentaire coûte 3 à 12 Mo et la page se fait recharger
+// sous la pression mémoire. Le masque d'entrée ne sert plus après l'appel.
+//
+// Aucun rectangle (gate, zone d'exclusion) ne doit jamais toucher à cette
+// composante : c'est exactement ce qui amputait l'arrière des voitures garées
+// à côté d'un voisin. La bbox du voisin recouvre l'arrière du sujet, et
+// l'ancienne mise à zéro tranchait la tôle à la verticale.
+function keepSubjectComponent(mask, W, H, plateBox, mainVehicle) {
+  const N = W * H;
+  const labels = new Int32Array(N);
+  const comps = [];
+  // Pile typée (et non un Array JS) : ce flood fill tourne en pleine
+  // résolution sur mobile, où une composante peut valoir plusieurs millions de
+  // pixels — 4 octets/px bornés valent mieux qu'un Array qui gonfle. Chaque
+  // pixel est étiqueté AVANT d'être empilé, donc empilé au plus une fois : N
+  // entrées suffisent toujours.
+  let stack = new Int32Array(N);
+  let next = 1;
+
+  for (let s = 0; s < N; s++) {
+    if (!mask[s] || labels[s]) continue;
+    const id = next++;
+    let size = 0, minX = W, maxX = 0, minY = H, maxY = 0;
+    let sp = 0;
+    stack[sp++] = s;
+    labels[s] = id;
+    while (sp > 0) {
+      const i = stack[--sp];
+      const x = i % W, y = (i - x) / W;
+      size++;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (x > 0     && mask[i - 1] && !labels[i - 1]) { labels[i - 1] = id; stack[sp++] = i - 1; }
+      if (x < W - 1 && mask[i + 1] && !labels[i + 1]) { labels[i + 1] = id; stack[sp++] = i + 1; }
+      if (y > 0     && mask[i - W] && !labels[i - W]) { labels[i - W] = id; stack[sp++] = i - W; }
+      if (y < H - 1 && mask[i + W] && !labels[i + W]) { labels[i + W] = id; stack[sp++] = i + W; }
     }
+    comps.push({ id, size, minX, maxX, minY, maxY });
+  }
+  stack = null; // 4 Mo/Mpx rendus avant la suite
+  if (comps.length === 0) return null;
 
-    const roi = {
-      x1: Math.max(0, b.x1 - marginL),
-      y1: Math.max(0, b.y1 - marginT),
-      x2: Math.min(1, b.x2 + marginR),
-      y2: Math.min(1, b.y2 + marginB),
-    };
-    console.log('[ROI] mainVehicle bbox=(' + b.x1.toFixed(3) + ',' + b.y1.toFixed(3) + ')-(' +
-      b.x2.toFixed(3) + ',' + b.y2.toFixed(3) + ') → ROI=(' + roi.x1.toFixed(3) + ',' +
-      roi.y1.toFixed(3) + ')-(' + roi.x2.toFixed(3) + ',' + roi.y2.toFixed(3) + ')' +
-      ' secondary=' + secondaryVehicles.length);
-    return roi;
-  }
-  // Fallback: estimate from plate position — generous to avoid cutting the car
+  let chosen = null, why = '';
+
+  // 1. La plaque est l'ancre la plus fiable : c'est LE véhicule qu'on traite.
   if (plateBox) {
-    const pcx = ((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2;
-    const pcy = ((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2;
-    return {
-      x1: Math.max(0, pcx - 0.42),
-      y1: Math.max(0, pcy - 0.55),
-      x2: Math.min(1, pcx + 0.42),
-      y2: Math.min(1, pcy + 0.15),
-    };
+    const px = Math.round(((plateBox.x1 ?? 0) + (plateBox.x2 ?? 0)) / 2 * W);
+    const py = Math.round(((plateBox.y1 ?? 0) + (plateBox.y2 ?? 0)) / 2 * H);
+    if (px >= 0 && px < W && py >= 0 && py < H) {
+      const id = labels[py * W + px];
+      if (id) { chosen = comps.find(c => c.id === id); why = 'plaque'; }
+    }
   }
-  // No anchor: use full image
-  return null;
+  // 2. Sinon, la composante qui recouvre le mieux la bbox du véhicule.
+  if (!chosen && mainVehicle?.bbox) {
+    const b = mainVehicle.bbox;
+    const bx1 = b.x1 * W, by1 = b.y1 * H, bx2 = b.x2 * W, by2 = b.y2 * H;
+    let best = -1;
+    for (const c of comps) {
+      const ox1 = Math.max(c.minX, bx1), oy1 = Math.max(c.minY, by1);
+      const ox2 = Math.min(c.maxX, bx2), oy2 = Math.min(c.maxY, by2);
+      const inter = ox2 > ox1 && oy2 > oy1 ? (ox2 - ox1) * (oy2 - oy1) : 0;
+      if (inter > best) { best = inter; chosen = c; }
+    }
+    if (chosen) why = 'bbox véhicule';
+  }
+  // 3. En dernier recours, la plus grosse tache.
+  if (!chosen) {
+    chosen = comps.reduce((a, c) => (c.size > a.size ? c : a), comps[0]);
+    why = 'plus grande composante';
+  }
+
+  // Réécriture en place : `mask` devient le masque du seul sujet.
+  for (let i = 0; i < N; i++) mask[i] = labels[i] === chosen.id ? 1 : 0;
+  console.log('[HardGate] sujet protégé : composante #' + chosen.id + ' (' + why + '), ' +
+    chosen.size + ' px, sur ' + comps.length + ' composante(s)');
+  return mask;
 }
 
 // Hard gate: zero alpha outside mainVehicle bbox AND inside secondary vehicle zones
 // Uses mainVehicle bbox when available, falls back to plate estimate only as last resort
+//
+// Invariant : la composante connexe du sujet est intouchable. Le gate ne sert
+// plus qu'à retirer les résidus DÉTACHÉS (bouts de voisins, ombres parasites),
+// jamais à découper le véhicule lui-même.
 async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, imgH, secondaryVehicles = []) {
   console.time('[HardGate]');
 
@@ -2498,13 +2553,24 @@ async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, 
     };
   });
 
+  // Composante connexe du sujet : protégée en bloc contre les deux rectangles
+  // ci-dessous. On la calcule sur le masque opaque (alpha > 128), réduit sur
+  // place à la seule composante du véhicule traité.
+  const Npx = W * H;
+  const subject = new Uint8Array(Npx);
+  for (let i = 0; i < Npx; i++) if (data[i * 4 + 3] > 128) subject[i] = 1;
+  keepSubjectComponent(subject, W, H, plateBox, mainVehicle);
+
   const feather = Math.round(Math.min(W, H) * 0.012);
-  let removedGate = 0, removedExcl = 0;
+  let removedGate = 0, removedExcl = 0, protectedPx = 0;
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const idx = (y * W + x) * 4;
       if (data[idx + 3] === 0) continue;
+
+      // 0. Le sujet ne se découpe jamais au rectangle.
+      if (subject[y * W + x]) { protectedPx++; continue; }
 
       // 1. Outside main gate → zero
       let dx = 0, dy = 0;
@@ -2543,6 +2609,7 @@ async function hardGateByVehicleBox(cutoutDataURL, mainVehicle, plateBox, imgW, 
   console.log('[HardGate] source=' + gateSource +
     ' gate=[' + px1 + ',' + py1 + ']->[' + px2 + ',' + py2 + '] (img ' + W + 'x' + H + ')' +
     ' removedGate=' + removedGate + ' removedExcl=' + removedExcl +
+    ' protégés=' + protectedPx +
     ' exclusionZones=' + exclusionZones.length);
   console.timeEnd('[HardGate]');
 
@@ -3613,19 +3680,51 @@ export default function AutoCache() {
 
           // Détourage : API Pro serveur (Photoroom / remove.bg) en priorité,
           // repli local @imgly + heuristiques sinon.
-          const roi = estimateMainVehicleROI(mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
-          const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
-          const pro = await proShowroomCutout(croppedUrl);
+          //
+          // La ROI n'est qu'une optimisation de résolution : si de la
+          // carrosserie opaque touche un de ses bords (et que ce bord n'est
+          // pas celui de la photo), c'est que le cadre tranche dans la tôle →
+          // on réélargit ce bord et on redétoure une fois. Sans ce garde-fou,
+          // une bbox véhicule trop courte amputait l'arrière du véhicule en
+          // ligne droite, et le fondu de bord de `uncropCutout` ne pouvait
+          // rien rattraper (il épargne volontairement les pixels opaques).
+          const attemptCutout = async (roi) => {
+            const { croppedUrl, roi: appliedROI } = await cropToROI(r.baseDataURL, roi);
+            const pro = await proShowroomCutout(croppedUrl);
+            const croppedCutout = pro ? pro.dataUrl : await removeBackground(croppedUrl);
+            let clipped = [];
+            try {
+              clipped = clippedEdges(await measureEdgeOpacity(croppedCutout), appliedROI);
+            } catch (e) {
+              // Garde-fou cosmétique : jamais bloquant pour la photo.
+              console.warn('[ROI] mesure des bords impossible:', e?.message);
+            }
+            return { croppedCutout, appliedROI, pro: !!pro, clipped };
+          };
+
+          let att = await attemptCutout(vehicleROI(mainVehicle, r.yoloBbox ?? null));
+          if (att.clipped.length > 0 && !isFullFrameROI(att.appliedROI)) {
+            console.warn('[ROI] carrosserie tranchée sur [' + att.clipped.join(', ') +
+              '] — réélargissement et second détourage');
+            const retry = await attemptCutout(widenROI(att.appliedROI, att.clipped));
+            if (retry.clipped.length <= att.clipped.length) att = retry;
+          }
+          // Amputation résiduelle : la photo reste exploitable (« Corriger le
+          // detourage » existe), mais on la trace et on la signale à l'entrée.
+          entry.cutoutClipped = att.clipped.length > 0;
+          if (entry.cutoutClipped) {
+            console.warn('[ROI] détourage encore tranché sur [' + att.clipped.join(', ') + ']');
+          }
+
+          const fullCutout = await uncropCutout(att.croppedCutout, att.appliedROI, r.imgW, r.imgH, r.baseDataURL);
           let cutout;
-          if (pro) {
-            // Le cutout Pro isole déjà le sujet principal (dans la ROI qui
-            // écarte les voisins) et embarque son ombre IA dans l'alpha : les
-            // nettoyages heuristiques (composantes connexes, séparation,
-            // gate bbox) rogneraient l'ombre — on les court-circuite.
-            cutout = await uncropCutout(pro.dataUrl, appliedROI, r.imgW, r.imgH, r.baseDataURL);
+          if (att.pro) {
+            // Le cutout Pro isole déjà le sujet principal et embarque son ombre
+            // IA dans l'alpha : les nettoyages heuristiques (composantes
+            // connexes, séparation, gate bbox) rogneraient l'ombre — on les
+            // court-circuite.
+            cutout = fullCutout;
           } else {
-            const croppedCutout = await removeBackground(croppedUrl);
-            const fullCutout = await uncropCutout(croppedCutout, appliedROI, r.imgW, r.imgH, r.baseDataURL);
             const isolatedCutout = await isolateMainVehicle(fullCutout, r.yoloBbox ?? null, mainVehicle, secondaryVehicles);
             const separatedCutout = await separateAttachedSecondary(isolatedCutout, mainVehicle, r.yoloBbox ?? null, secondaryVehicles);
             cutout = await hardGateByVehicleBox(separatedCutout, mainVehicle, r.yoloBbox ?? null, r.imgW, r.imgH, secondaryVehicles);
@@ -3709,7 +3808,9 @@ export default function AutoCache() {
               dctx.font = '18px monospace';
               dctx.fillText('mainVehicleBoxes — green=MAIN, red=EXCL, orange=DUP, yellow=plate', 10, 22);
             } else if (showroomDebug === 'mainROI') {
-              // Draw ROI rectangle
+              // ROI réellement appliquée au détourage (après réélargissement
+              // éventuel) — c'est elle qui compte pour diagnostiquer une coupe.
+              const roi = att.appliedROI;
               if (roi) {
                 dctx.fillStyle = 'rgba(0,0,0,0.45)';
                 // Darken areas OUTSIDE the ROI
@@ -3717,8 +3818,8 @@ export default function AutoCache() {
                 dctx.fillRect(0, roi.y2 * dH, dW, dH - roi.y2 * dH); // bottom
                 dctx.fillRect(0, roi.y1 * dH, roi.x1 * dW, (roi.y2 - roi.y1) * dH); // left
                 dctx.fillRect(roi.x2 * dW, roi.y1 * dH, dW - roi.x2 * dW, (roi.y2 - roi.y1) * dH); // right
-                // Draw ROI border
-                dctx.strokeStyle = '#00ccff';
+                // Draw ROI border — rouge si le détourage y est encore tranché.
+                dctx.strokeStyle = att.clipped.length > 0 ? '#ff3333' : '#00ccff';
                 dctx.lineWidth = 3;
                 dctx.strokeRect(roi.x1 * dW, roi.y1 * dH, (roi.x2 - roi.x1) * dW, (roi.y2 - roi.y1) * dH);
               }

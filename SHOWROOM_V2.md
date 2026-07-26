@@ -37,9 +37,64 @@ Photo originale
 
 | Problème constaté | Cause racine |
 |---|---|
+| ~~Véhicule amputé en ligne droite (arrière tranché net)~~ **corrigé** | Ce n'était pas le détourage : un **rectangle** du code coupait la voiture. Voir « Amputation au rectangle » ci-dessous. |
 | Découpage imparfait (jantes, vitres, antennes, dessous de caisse) | Modèle de segmentation généraliste, résolution d'entrée plafonnée, pas de *matting* (transparence progressive des contours) |
 | Ombre « ridicule » → supprimée | 4 approches procédurales tentées (silhouette, flaque en perspective, hybride, transcription de la vraie ombre). Aucune ne peut être réaliste sans comprendre la géométrie 3D et l'éclairage de la scène |
 | Voiture « collée » sur le décor | Perspective de la photo (hauteur/angle caméra) ≠ perspective du décor statique ; aucun reflet au sol, aucun ré-éclairage |
+
+### Amputation au rectangle (corrigé)
+
+Sur les photos de parking, l'arrière des véhicules ressortait **tranché net
+à la verticale**. Le diagnostic par mesure de pixels est sans ambiguïté : sur
+un cas réel, la carrosserie s'arrêtait sur une verticale parfaite de 220 px de
+haut, sans un seul pixel au-delà. Aucun modèle de segmentation ne produit ça —
+un échec de segmentation donne un bord organique. C'était un masque
+rectangulaire.
+
+La chaîne de causes :
+
+1. `/api/detect-vehicles` fait produire des bbox numériques à un LLM (Claude
+   Haiku). C'est imprécis par nature, et deux véhicules de même couleur qui se
+   chevauchent rendent la frontière ambiguë : la bbox s'arrêtait trop tôt.
+2. `estimateMainVehicleROI` **rétrécissait en plus la marge à 5 %** du côté où
+   un véhicule voisin était détecté — précisément le côté déjà trop court.
+3. `cropToROI` recadre physiquement la photo : l'arrière du véhicule
+   n'existait plus dans l'image envoyée au détourage.
+4. Le fondu de bord de `uncropCutout` ne pouvait rien rattraper : il épargne
+   volontairement les pixels opaques (`SOFT = 230`) pour ne pas manger l'ombre.
+5. Sur le chemin local, `hardGateByVehicleBox` faisait pire : ses zones
+   d'exclusion (bbox des voisins) mettaient l'alpha à zéro **sans fondu**, et
+   la bbox d'un voisin recouvre toujours l'arrière du sujet en vue 3/4.
+
+Le fond du problème : **un rectangle aligné sur les axes ne peut pas séparer
+deux voitures qui se chevauchent.** Sur un parking, la bbox du voisin recouvre
+toujours une partie du sujet. C'est structurel.
+
+Correctif appliqué (`src/showroomGeometry.js`, testé dans
+`tests/showroomGeometry.test.js`) :
+
+- La ROI n'est plus qu'une **optimisation de résolution**, jamais un
+  séparateur sémantique : marges généreuses et fixes (30/30/25/20 %), plus
+  aucun rétrécissement dû aux voisins.
+- **Garde-fou d'amputation** : après détourage, on compte les pixels opaques
+  le long des quatre bords du cadre. Si de la tôle touche un bord qui n'est
+  pas celui de la photo, la ROI coupe le véhicule → on repousse ce bord et on
+  redétoure une fois. Un bord confondu avec le bord de la photo est ignoré (la
+  voiture y est réellement coupée par le cadrage, il n'y a rien à récupérer).
+- **La composante connexe du sujet est intouchable** : `hardGateByVehicleBox`
+  identifie la tache qui contient la plaque (l'ancre la plus fiable, on a un
+  modèle keypoints dédié) et aucun rectangle ne peut plus y toucher. Le gate ne
+  retire plus que les résidus *détachés*.
+- Les photos encore tronquées sont tracées et marquées (`entry.cutoutClipped`)
+  pour pouvoir proposer « Corriger le detourage ».
+
+Contrepartie assumée : si un voisin est **collé** au sujet et que
+`separateAttachedSecondary` échoue à l'en détacher, le gate ne le rogne plus.
+On préfère un bout de voisin résiduel — rattrapable à la main — à un véhicule
+amputé, qui rend la photo inutilisable.
+
+Ce correctif supprime une classe de bug ; il n'améliore pas la finesse du
+détourage lui-même, qui reste le sujet des étages A et B.
 
 Conclusion : **ce n'est pas un problème de réglage, c'est un plafond
 architectural**. Un canvas 2D côté client ne produira jamais un rendu
@@ -138,6 +193,7 @@ Proposition :
 
 | Phase | Contenu | Durée estimée |
 |---|---|---|
+| **0 — Amputation** | ✅ Fait : la ROI et le gate ne peuvent plus couper le véhicule (garde-fou de bord + composante du sujet protégée). Gratuit, sans fournisseur, indépendant des étages A et B. | fait |
 | **0 — Bench** | Prendre 10 vraies photos à problème (découpage raté, ombres dures, voisins collés) et les passer dans Photoroom, remove.bg, Gemini image, Flux Kontext. Comparer rendu/coût/latence sur un tableau. **Décision fournisseur sur preuves, pas sur plaquette.** | 1–2 jours |
 | **1 — Étage A en prod** | ✅ Implémenté : `/api/showroom-cutout` (Photoroom ou remove.bg, ombre IA dans l'alpha du cutout) ; @imgly en repli automatique. Activation par variable d'environnement Vercel : `PHOTOROOM_API_KEY` **ou** `REMOVEBG_API_KEY` (+ options `SHOWROOM_CUTOUT_PROVIDER`, `SHOWROOM_CUTOUT_SHADOW=off`). Débrayable côté client avec `?proCutout=off`. ⚠️ Smoke-test à faire avec une vraie clé : les paramètres exacts des APIs n'ont pas pu être vérifiés en ligne depuis l'environnement de dev. | ~1 semaine |
 | **2 — Palier Stripe** | Price « Showroom Pro », webhook, gating UI, compteur de rendus. | 2–3 jours |
