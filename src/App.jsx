@@ -2212,57 +2212,6 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
 //  2. Plate Recognizer Snapshot : boîte serrée → localisation garantie, Claude
 //     n'affine que les 4 coins sur le crop (1 appel Sonnet).
 //  3. Claude seul (locate + refine) si Plate Recognizer est indisponible.
-// Affine les 4 coins issus du modèle keypoints : aimantation sur le vrai
-// contour de la plaque (gradient de luminance, déjà utilisé pour Plate
-// Recognizer) + marge de sécurité.
-//
-// Pourquoi : un cache qui déborde légèrement sur le pare-chocs ne se voit
-// pas, alors qu'un cache trop court laisse un bout de plaque LISIBLE (le
-// cas observé : bande bleue du département encore visible à droite).
-// Sur une fonction d'anonymisation, l'erreur doit toujours pencher du côté
-// du « trop couvert ».
-async function refineKeypointsCorners(kp, imageFile) {
-  const areaOf = c => Math.abs(
-    (c[0].x * c[1].y - c[1].x * c[0].y) + (c[1].x * c[2].y - c[2].x * c[1].y) +
-    (c[2].x * c[3].y - c[3].x * c[2].y) + (c[3].x * c[0].y - c[0].x * c[3].y)
-  ) / 2;
-  let corners = kp.corners;
-  try {
-    const isBlob = typeof imageFile !== 'string';
-    const src = isBlob ? URL.createObjectURL(imageFile) : imageFile;
-    const img = await loadImg(src);
-    if (isBlob) URL.revokeObjectURL(src);
-    const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
-
-    // 1. Aimantation sur le contour réel. Garde-fou : si le quad s'emballe
-    //    (aimantation partie sur le pare-chocs), on garde les coins du modèle.
-    const snapped = snapCornersOnImage(img, W, H, corners);
-    const ratio = areaOf(corners) > 0 ? areaOf(snapped) / areaOf(corners) : 0;
-    if (ratio >= 0.9 && ratio <= 1.8) {
-      corners = snapped;
-    } else {
-      console.log(`[Keypoints] aimantation ignorée (aire ×${ratio.toFixed(2)})`);
-    }
-
-    // 2. Marge de sécurité, plus généreuse horizontalement (les bords
-    //    gauche/droite de la plaque sont ceux qui manquaient).
-    const q = expandQuad(
-      { tl: corners[0], tr: corners[1], br: corners[2], bl: corners[3] },
-      1.06, 1.10
-    );
-    const clamp01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
-    corners = [q.tl, q.tr, q.br, q.bl].map(p => ({ x: clamp01(p.x), y: clamp01(p.y) }));
-  } catch (e) {
-    console.warn('[Keypoints] affinage local ignoré:', e?.message);
-  }
-  const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
-  return {
-    ...kp,
-    corners,
-    bbox: { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) },
-  };
-}
-
 async function detectPlate(imageFile, regions = 'fr') {
   // ── Source principale : modèle maison keypoints (navigateur, 0 € / photo) ──
   // Entraîné sur les photos réelles de la concession, il pose les 4 coins en
@@ -2270,7 +2219,7 @@ async function detectPlate(imageFile, regions = 'fr') {
   // le croit ; sinon (modèle absent, erreur, ou rien détecté) on retombe sur
   // Plate Recognizer puis Claude, comme avant.
   const kp = await detectPlateKeypoints(imageFile);
-  if (kp?.found) return refineKeypointsCorners(kp, imageFile);
+  if (kp?.found) return kp;
 
   const pr = await detectPlatePlateRecognizer(imageFile, regions);
   // Verdict « aucune plaque » du détecteur spécialisé : on le CROIT.
