@@ -19,7 +19,7 @@ const LOGO_SIZE = 64;
 const FALLBACK_TARGET = { x: 39, y: 28, size: 22 };
 
 export const AUTH_EXIT_MS = 260;   // effacement de la carte de connexion
-const OVERLAY_MS = 980;            // voile + vol du logo
+const OVERLAY_MS = 1980;           // voile + pause sur le logo + vol
 const REDUCED_MS = 200;            // variante « animations réduites »
 // Filet de sécurité : si l'événement de fin d'animation n'arrive pas (onglet en
 // arrière-plan, animations désactivées…), le voile se retire quand même.
@@ -43,48 +43,53 @@ export const AUTH_MOTION_CSS = `
 @keyframes ac-tr-veil{ from{ opacity:1; } to{ opacity:0; } }
 .ac-tr-veil{
   position:absolute; inset:0; background:var(--c-1c1c1c);
-  animation:ac-tr-veil 400ms cubic-bezier(.4,0,.2,1) 420ms both;
+  animation:ac-tr-veil 400ms cubic-bezier(.4,0,.2,1) 1420ms both;
 }
 
 /* Halo diffus derrière le logo — éteint avant que l'application se découvre. */
 @keyframes ac-tr-glow{
   0%  { opacity:0; transform:translate(-50%,-50%) scale(.6); }
-  35% { opacity:1; }
-  100%{ opacity:0; transform:translate(-50%,-50%) scale(1.3); }
+  25% { opacity:1; }
+  80% { opacity:1; transform:translate(-50%,-50%) scale(1.05); }
+  100%{ opacity:0; transform:translate(-50%,-50%) scale(1.25); }
 }
 .ac-tr-glow{
   position:absolute; left:50%; top:50%; width:320px; height:320px;
   background:radial-gradient(circle, rgba(242,101,34,.2) 0%, rgba(242,101,34,0) 68%);
-  animation:ac-tr-glow 540ms ease-out both;
+  animation:ac-tr-glow 1400ms ease-out both;
 }
 
-/* Anneau qui se trace autour du logo, refermé avant le décollage. */
+/* Anneau qui se trace autour du logo, reste refermé pendant la pause, puis
+   s'efface juste avant le décollage. */
 @keyframes ac-tr-ring{
   0%  { stroke-dashoffset:283; opacity:0; }
-  18% { opacity:.85; }
-  78% { stroke-dashoffset:0; opacity:.8; }
+  6%  { opacity:.85; }
+  32% { stroke-dashoffset:0; opacity:.85; }
+  89% { stroke-dashoffset:0; opacity:.85; }
   100%{ stroke-dashoffset:0; opacity:0; }
 }
 @keyframes ac-tr-ring-scale{
   0%  { transform:translate(-50%,-50%) scale(.86) rotate(-90deg); }
-  78% { transform:translate(-50%,-50%) scale(1) rotate(-90deg); }
-  100%{ transform:translate(-50%,-50%) scale(1.12) rotate(-90deg); }
+  32% { transform:translate(-50%,-50%) scale(1) rotate(-90deg); }
+  89% { transform:translate(-50%,-50%) scale(1) rotate(-90deg); }
+  100%{ transform:translate(-50%,-50%) scale(1.1) rotate(-90deg); }
 }
 .ac-tr-ring{
   position:absolute; left:50%; top:50%;
-  animation:ac-tr-ring-scale 440ms cubic-bezier(.5,0,.2,1) 40ms both;
+  animation:ac-tr-ring-scale 1360ms cubic-bezier(.5,0,.2,1) 40ms both;
 }
 .ac-tr-ring circle{
   fill:none; stroke:#f26522; stroke-width:1; stroke-linecap:round;
   stroke-dasharray:283;
-  animation:ac-tr-ring 440ms cubic-bezier(.5,0,.2,1) 40ms both;
+  animation:ac-tr-ring 1360ms cubic-bezier(.5,0,.2,1) 40ms both;
 }
 
-/* Nom de la marque : les lettres se resserrent en apparaissant. */
+/* Nom de la marque : les lettres se resserrent en apparaissant, puis le nom
+   reste lisible le temps de la pause. */
 @keyframes ac-tr-word{
   0%  { opacity:0; letter-spacing:16px; transform:translate(-50%,6px); }
-  34% { opacity:1; letter-spacing:6px; transform:translate(-50%,0); }
-  62% { opacity:1; }
+  12% { opacity:1; letter-spacing:6px; transform:translate(-50%,0); }
+  88% { opacity:1; letter-spacing:6px; transform:translate(-50%,0); }
   100%{ opacity:0; letter-spacing:6px; transform:translate(-50%,0); }
 }
 .ac-tr-word{
@@ -92,7 +97,7 @@ export const AUTH_MOTION_CSS = `
   display:flex; align-items:baseline; gap:8px; white-space:nowrap;
   font-size:15px; font-weight:700; text-transform:uppercase;
   color:var(--c-ddd5c8); font-family:var(--font-apple);
-  animation:ac-tr-word 440ms cubic-bezier(.2,.7,.3,1) 120ms both;
+  animation:ac-tr-word 1280ms cubic-bezier(.2,.7,.3,1) 120ms both;
 }
 .ac-tr-word i{ font-style:normal; font-size:9px; letter-spacing:2px; color:#f26522; }
 
@@ -107,6 +112,13 @@ export const AUTH_MOTION_CSS = `
 }
 .ac-tr-pop{ animation:ac-tr-pop 380ms cubic-bezier(.34,1.4,.5,1) both; }
 
+/* Respiration lente pendant la pause : le logo reste vivant sans bouger. */
+@keyframes ac-tr-breathe{
+  0%,100%{ transform:scale(1); }
+  50%    { transform:scale(1.045); }
+}
+.ac-tr-breathe{ animation:ac-tr-breathe 1000ms ease-in-out 400ms both; }
+
 @keyframes ac-tr-fly{
   0%  { transform:translate(-50%,-50%) scale(1); opacity:1; }
   90% { opacity:1; }
@@ -116,12 +128,12 @@ export const AUTH_MOTION_CSS = `
 }
 .ac-tr-fly{
   position:absolute; left:50%; top:50%; line-height:0;
-  animation:ac-tr-fly 540ms cubic-bezier(.55,0,.25,1) 400ms both;
+  animation:ac-tr-fly 540ms cubic-bezier(.55,0,.25,1) 1400ms both;
 }
 
 /* Apparition de l'application derrière le voile. */
 @keyframes ac-app-enter{ from{ opacity:0; } to{ opacity:1; } }
-.ac-app-enter{ animation:ac-app-enter 360ms cubic-bezier(.4,0,.2,1) 400ms both; }
+.ac-app-enter{ animation:ac-app-enter 360ms cubic-bezier(.4,0,.2,1) 1400ms both; }
 
 @media (prefers-reduced-motion: reduce){
   .ac-auth-out{ animation-duration:120ms; }
@@ -177,7 +189,9 @@ export default function AuthTransition({ onDone }) {
       <div className="ac-tr-word">AutoCache<i>Pro</i></div>
       <div className="ac-tr-fly" ref={flyRef}
         onAnimationEnd={e => { if (e.animationName === "ac-tr-fly") onDone(); }}>
-        <div className="ac-tr-pop"><Hexagon size={LOGO_SIZE} /></div>
+        <div className="ac-tr-pop">
+          <div className="ac-tr-breathe"><Hexagon size={LOGO_SIZE} /></div>
+        </div>
       </div>
     </div>
   );
