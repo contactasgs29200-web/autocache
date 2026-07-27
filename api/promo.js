@@ -19,7 +19,7 @@ export default function handler(req, res) {
   if (!code) return res.status(400).json({ valid: false, message: "Code manquant." });
 
   const promo = PROMO_CODES[code.trim().toUpperCase()];
-  if (!promo) return res.status(200).json({ valid: false, message: "Code promo invalide." });
+  if (!promo) return res.status(200).json({ valid: false, message: "Code administrateur invalide." });
 
   if (promo.plan) return res.status(200).json({ valid: true, plan: promo.plan });
   return res.status(200).json({ valid: true, photos: promo.photos, reset: promo.reset });

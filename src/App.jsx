@@ -3040,7 +3040,7 @@ function SettingsIcon({ name, size = 16 }) {
       return (<svg {...common}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>);
     case "subscription": // Abonnement
       return (<svg {...common}><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></svg>);
-    case "promo": // Code promo
+    case "promo": // Code administrateur
       return (<svg {...common}><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>);
     case "contact": // Nous contacter
       return (<svg {...common}><rect x="2" y="4" width="20" height="16" rx="2" /><polyline points="2,6 12,13 22,6" /></svg>);
@@ -4958,7 +4958,7 @@ export default function AutoCache() {
                               </div>
                             </div>
                           ) : subInfo?.hasSubscription === false ? (
-                            <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Credits via code promo.</div>
+                            <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Credits via code administrateur.</div>
                           ) : (
                             <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Informations indisponibles.</div>
                           )}
@@ -5024,7 +5024,7 @@ export default function AutoCache() {
                   {[
                     { icon: "profile", label: "Mes informations", action: () => { setSettingsOpen(false); setShowProfileModal(true); } },
                     { icon: "subscription", label: "Abonnement", action: () => { setSettingsOpen(false); setShowPlansModal(true); } },
-                    { icon: "promo", label: "Code Promo", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
+                    { icon: "promo", label: "Code Administrateur", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
                     { icon: "contact", label: "Nous contacter", action: () => { setSettingsOpen(false); setShowContactModal(true); } },
                     { icon: "tutorial", label: "Revoir le didacticiel", action: () => { setSettingsOpen(false); setShowTutorial(true); } },
                     { icon: "game", label: "Mini-jeu", action: () => { setSettingsOpen(false); setShowMiniGame(true); } },
@@ -6824,18 +6824,18 @@ export default function AutoCache() {
         );
       })()}
 
-      {/* ── Modal Code Promo ── */}
+      {/* ── Modal Code Administrateur ── */}
       {showPromoModal && (
         <div onClick={() => setShowPromoModal(false)}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div onClick={e => e.stopPropagation()}
             style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: isMobile ? "24px 20px" : "36px 40px", maxWidth: 400, width: "92%", fontFamily: "var(--font-apple)" }}>
-            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: 2, color: "var(--c-e0dbd4)", marginBottom: 6, textTransform: "uppercase" }}>Code Promo</div>
+            <div style={{ fontSize: 21, fontWeight: 700, letterSpacing: 2, color: "var(--c-e0dbd4)", marginBottom: 6, textTransform: "uppercase" }}>Code Administrateur</div>
             <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginBottom: 20 }}>Entrez votre code pour débloquer des photos supplémentaires.</div>
             <input
               value={promoCode} onChange={e => { setPromoCode(e.target.value); setPromoStatus(null); setPromoMsg(""); }}
               onKeyDown={e => e.key === "Enter" && promoCode.trim() && promoStatus !== "loading" && submitPromo()}
-              placeholder="Votre code promo"
+              placeholder="Votre code administrateur"
               style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px", background: "var(--c-1a1a1a)", border: `1px solid ${promoStatus === "error" ? "#c0392b" : promoStatus === "success" ? "#27ae60" : "var(--c-2a2a2a)"}`, borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "var(--font-apple)", fontSize: 16, letterSpacing: 3, textTransform: "uppercase", outline: "none", marginBottom: 10 }}
             />
             {promoMsg && (
