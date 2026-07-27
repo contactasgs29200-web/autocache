@@ -581,6 +581,13 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   }
 }
 
+// ?plateDebug=raw : laisse la plaque VISIBLE et n'affiche que l'overlay des
+// coins détectés. Permet de voir où le modèle place réellement ses 4 points
+// au lieu de le déduire d'un cache qui les recouvre.
+function plateDebugRaw() {
+  return typeof window !== 'undefined' && window.location.search.includes('plateDebug=raw');
+}
+
 // Unified plate overlay renderer — fill bg, perspective draw, feather + boost.
 function drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, renderSource) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
@@ -2834,11 +2841,19 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
         let pts = yolo.corners.map(p => ({ x: p.x * c.width, y: p.y * c.height }));
         const cgx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
         const cgy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
-        pts = pts.map(p => ({ x: cgx + (p.x - cgx) * 1.06, y: cgy + (p.y - cgy) * 1.06 }));
+        // Élargissement du quad avant pose. Le modèle keypoints maison donne
+        // les 4 coins exacts de la plaque : on les pose TELS QUELS, sinon le
+        // cache déborde visiblement sur le pare-chocs. Les détecteurs de repli
+        // (Plate Recognizer, Claude) rendent un quad plus lâche → 6 % de marge
+        // pour ne pas laisser dépasser un bout de plaque lisible.
+        const grow = yolo.source === 'keypoints' ? 1.0 : 1.06;
+        pts = pts.map(p => ({ x: cgx + (p.x - cgx) * grow, y: cgy + (p.y - cgy) * grow }));
         const [ptl, ptr, pbr, pbl] = pts;
         const toNorm = p => ({ x: p.x / c.width, y: p.y / c.height });
         savedCorners = { tl: toNorm(ptl), tr: toNorm(ptr), br: toNorm(pbr), bl: toNorm(pbl) };
-        drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'plate');
+        // ?plateDebug=raw : on ne pose PAS le cache, pour voir les coins du
+        // modèle (overlay SVG) par-dessus la vraie plaque et juger sur pièces.
+        if (!plateDebugRaw()) drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'plate');
       } catch (e) { console.warn('[plate] pose ignorée:', e.message); }
     }
   }
