@@ -2841,12 +2841,15 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
         let pts = yolo.corners.map(p => ({ x: p.x * c.width, y: p.y * c.height }));
         const cgx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
         const cgy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
-        // Élargissement du quad avant pose. Le modèle keypoints maison donne
-        // les 4 coins exacts de la plaque : on les pose TELS QUELS, sinon le
-        // cache déborde visiblement sur le pare-chocs. Les détecteurs de repli
-        // (Plate Recognizer, Claude) rendent un quad plus lâche → 6 % de marge
-        // pour ne pas laisser dépasser un bout de plaque lisible.
-        const grow = yolo.source === 'keypoints' ? 1.0 : 1.06;
+        // Élargissement du quad avant pose : 6 % pour toutes les sources.
+        //
+        // Tenté sans marge pour le modèle maison, puis rétabli : l'overlay
+        // ?plateDebug=raw montre que ses 4 coins portent encore une erreur
+        // de quelques pixels (quad penché sur une plaque horizontale). Les
+        // 6 % absorbent cette erreur et évitent qu'un bord de plaque reste
+        // lisible. À ramener à 1.0 quand le modèle posera les coins juste —
+        // c'est le vrai objectif, la marge n'est qu'un pansement.
+        const grow = 1.06;
         pts = pts.map(p => ({ x: cgx + (p.x - cgx) * grow, y: cgy + (p.y - cgy) * grow }));
         const [ptl, ptr, pbr, pbl] = pts;
         const toNorm = p => ({ x: p.x / c.width, y: p.y / c.height });
