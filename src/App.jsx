@@ -2831,13 +2831,15 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
         const cgy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
         // Élargissement du quad avant pose : 6 % pour toutes les sources.
         //
-        // Tenté sans marge pour le modèle maison, puis rétabli : l'overlay
-        // ?plateDebug=raw montre que ses 4 coins portent encore une erreur
-        // de quelques pixels (quad penché sur une plaque horizontale). Les
-        // 6 % absorbent cette erreur et évitent qu'un bord de plaque reste
-        // lisible. À ramener à 1.0 quand le modèle posera les coins juste —
-        // c'est le vrai objectif, la marge n'est qu'un pansement.
-        const grow = 1.06;
+        // Cette marge absorbe l'imprécision résiduelle des coins et évite
+        // qu'un bord de plaque reste lisible. Elle a été mise en place quand
+        // le modèle recevait une entrée letterboxée qu'il ne comprenait pas ;
+        // depuis que l'entrée est étirée, les coins tombent nettement mieux
+        // et elle est peut-être devenue du débord inutile sur le pare-chocs.
+        // `?marge=off` la retire, pour trancher sur des photos réelles.
+        const sansMarge = typeof window !== 'undefined'
+          && window.location.search.includes('marge=off');
+        const grow = sansMarge ? 1.0 : 1.06;
         pts = pts.map(p => ({ x: cgx + (p.x - cgx) * grow, y: cgy + (p.y - cgy) * grow }));
         const [ptl, ptr, pbr, pbl] = pts;
         const toNorm = p => ({ x: p.x / c.width, y: p.y / c.height });
