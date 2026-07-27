@@ -18,21 +18,20 @@ test('plaque de 18 % : recadrage centré, ratio de la photo conservé', () => {
   const c = quad(2000, 2200, 720, 155);
   const r = zoomRect(c, W, H);
   assert.ok(r, 'un recadrage doit être proposé');
-  assert.equal(Math.round(r.sw), 1800);              // 720 / 0.40
   assert.ok(Math.abs(r.sw / r.sh - W / H) < 1e-9);   // même ratio → même letterbox
-  assert.ok(Math.abs(r.zoom - 2.222) < 0.01);
+  assert.ok(r.zoom > 1.4 && r.zoom <= 2.2, `zoom ${r.zoom} hors plage`);
   assert.ok(contains(r, c), 'la plaque doit rester dans le recadrage');
 });
 
 test('plaque déjà grande dans le cadre : pas de 2e passe', () => {
-  assert.equal(zoomRect(quad(2000, 2200, 1200, 260), W, H), null);
+  assert.equal(zoomRect(quad(2000, 2200, 1000, 215), W, H), null);
 });
 
-test('plaque minuscule : zoom plafonné à ZOOM_MAX', () => {
+test('plaque minuscule : zoom plafonné (le modèle décroche au delà)', () => {
   const c = quad(2000, 2200, 200, 43);
   const r = zoomRect(c, W, H);
   assert.ok(r);
-  assert.ok(r.zoom <= 4.0 + 1e-9, `zoom ${r.zoom} doit rester ≤ 4`);
+  assert.ok(r.zoom <= 2.2 + 1e-9, `zoom ${r.zoom} doit rester dans le domaine du modèle`);
   assert.ok(contains(r, c));
 });
 
@@ -71,24 +70,42 @@ const pass = (conf, cx, cy, w, h) => ({ conf, corners: quad(cx, cy, w, h) });
 
 test('passe 2 cohérente et sûre → adoptée', () => {
   assert.equal(acceptZoom(pass(0.85, 2000, 2200, 720, 155),
-                          pass(0.88, 2004, 2198, 726, 158)), true);
+                          pass(0.88, 2004, 2198, 726, 158)).ok, true);
 });
 
 test('passe 2 absente (rien détecté sur le recadrage) → passe 1', () => {
-  assert.equal(acceptZoom(pass(0.85, 2000, 2200, 720, 155), null), false);
+  assert.equal(acceptZoom(pass(0.85, 2000, 2200, 720, 155), null).ok, false);
 });
 
 test('effondrement de confiance (hors domaine) → passe 1', () => {
   assert.equal(acceptZoom(pass(0.90, 2000, 2200, 720, 155),
-                          pass(0.40, 2000, 2200, 720, 155)), false);
+                          pass(0.40, 2000, 2200, 720, 155)).ok, false);
 });
 
 test('passe 2 partie sur un autre objet → passe 1', () => {
   assert.equal(acceptZoom(pass(0.85, 2000, 2200, 720, 155),
-                          pass(0.85, 2600, 2200, 720, 155)), false);
+                          pass(0.85, 2600, 2200, 720, 155)).ok, false);
 });
 
 test('passe 2 au quadrilatère aberrant → passe 1', () => {
   assert.equal(acceptZoom(pass(0.85, 2000, 2200, 720, 155),
-                          pass(0.85, 2000, 2200, 1500, 320)), false);
+                          pass(0.85, 2000, 2200, 1500, 320)).ok, false);
+});
+
+// Cas réel relevé en production : la passe 2 avait été retenue alors que la
+// confiance CHUTAIT (0,56 → 0,40). Le seuil resserré doit la refuser.
+test('confiance en baisse nette (cas 0,56 → 0,40) → passe 1', () => {
+  const v = acceptZoom(pass(0.56, 2000, 2200, 720, 155),
+                       pass(0.40, 2000, 2200, 720, 155));
+  assert.equal(v.ok, false);
+  assert.match(v.why, /confiance 0\.56→0\.40/);
+});
+
+test('le motif du rejet est toujours renseigné', () => {
+  for (const v of [
+    acceptZoom(pass(0.85, 2000, 2200, 720, 155), null),
+    acceptZoom(pass(0.90, 2000, 2200, 720, 155), pass(0.40, 2000, 2200, 720, 155)),
+    acceptZoom(pass(0.85, 2000, 2200, 720, 155), pass(0.85, 2600, 2200, 720, 155)),
+    acceptZoom(pass(0.85, 2000, 2200, 720, 155), pass(0.85, 2000, 2200, 1500, 320)),
+  ]) assert.ok(v.why && v.why.length > 3, 'un motif lisible doit accompagner le rejet');
 });

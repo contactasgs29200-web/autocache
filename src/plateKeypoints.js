@@ -35,10 +35,16 @@ const CONF_THRESHOLD = 0.30;
 // au lieu de ~18 % → 2 à 3 fois plus de pixels pour poser les mêmes points.
 // Les coordonnées renvoyées ne sont jamais retouchées : on change ce qu'on
 // DONNE au modèle, pas ce qu'il RÉPOND.
-const ZOOM_TARGET_FRAC = 0.40; // largeur de plaque visée dans le recadrage
-const ZOOM_MIN = 1.5;          // en dessous, le gain ne vaut pas l'inférence
-const ZOOM_MAX = 4.0;          // au delà, on sort du domaine d'entraînement
-const ZOOM_CONF_RATIO = 0.70;  // passe 2 nettement moins sûre → on garde la 1
+//
+// Réglage : le modèle n'ayant été entraîné QUE sur des voitures entières, un
+// recadrage trop serré le sort de son domaine et sa confiance s'effondre
+// (constaté : ×2,4 à ×3,8 rejetés, 0,56 → 0,40 sur la seule retenue). On vise
+// donc un zoom modéré — moins de pixels gagnés, mais une passe 2 exploitable.
+// Un réentraînement avec augmentation « Crop/Zoom » lèvera cette limite.
+const ZOOM_TARGET_FRAC = 0.28; // largeur de plaque visée dans le recadrage
+const ZOOM_MIN = 1.4;          // en dessous, le gain ne vaut pas l'inférence
+const ZOOM_MAX = 2.2;          // au delà, le modèle décroche (hors domaine)
+const ZOOM_CONF_RATIO = 0.85;  // passe 2 moins sûre que la 1 → on garde la 1
 
 // Version d'onnxruntime-web alignée sur celle du lockfile (embarquée via @imgly).
 const ORT_VERSION = '1.21.0';
@@ -199,12 +205,18 @@ export function zoomRect(corners, W, H) {
 // sorti de son domaine s'effondre en confiance ou part ailleurs — dans ces
 // deux cas on garde la passe 1, donc jamais de régression.
 export function acceptZoom(p1, p2) {
-  if (!p2) return false;
-  if (p2.conf < p1.conf * ZOOM_CONF_RATIO) return false;
+  if (!p2) return { ok: false, why: 'rien détecté sur le recadrage' };
+  if (p2.conf < p1.conf * ZOOM_CONF_RATIO) {
+    return { ok: false, why: `confiance ${p1.conf.toFixed(2)}→${p2.conf.toFixed(2)}` };
+  }
   const a = spanOf(p1.corners), b = spanOf(p2.corners);
-  if (Math.hypot(b.cx - a.cx, b.cy - a.cy) > a.w * 0.5) return false; // autre objet
+  const drift = Math.hypot(b.cx - a.cx, b.cy - a.cy);
+  if (drift > a.w * 0.5) { // parti sur un autre objet
+    return { ok: false, why: `centre décalé de ${Math.round((drift / a.w) * 100)} % de la plaque` };
+  }
   const ratio = (b.w * b.h) / (a.w * a.h || 1);
-  return ratio > 0.5 && ratio < 2;
+  if (ratio <= 0.5 || ratio >= 2) return { ok: false, why: `aire ×${ratio.toFixed(2)}` };
+  return { ok: true };
 }
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -252,11 +264,12 @@ export async function detectPlateKeypoints(imageInput) {
     const rect = zoomRect(p1.corners, W, H);
     if (rect) {
       const p2 = await runPass(ort, session, img, rect);
-      if (acceptZoom(p1, p2)) {
+      const verdict = acceptZoom(p1, p2);
+      if (verdict.ok) {
         final = p2;
-        note = `zoom ×${rect.zoom.toFixed(1)} conf ${p1.conf.toFixed(2)}→${p2.conf.toFixed(2)}`;
+        note = `zoom ×${rect.zoom.toFixed(1)} retenu, conf ${p1.conf.toFixed(2)}→${p2.conf.toFixed(2)}`;
       } else {
-        note = `zoom ×${rect.zoom.toFixed(1)} écarté (passe 1 conservée)`;
+        note = `zoom ×${rect.zoom.toFixed(1)} écarté — ${verdict.why} (passe 1 conservée)`;
       }
     } else {
       note = 'zoom inutile (plaque déjà grande)';
