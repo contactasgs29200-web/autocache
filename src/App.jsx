@@ -350,39 +350,6 @@ async function shrinkDataURL(dataURL, maxSide) {
 
 function lerp(a, b, t) { return a + (b - a) * t; }
 
-// ── Formats d'export des photos ─────────────────────────────────────────────
-// Le format choisi recadre la photo finale (recadrage centré « cover », sans
-// déformation ni marges) au moment de l'aperçu (CSS) et du téléchargement
-// (ré-encodage canvas). « original » conserve le ratio source : aucun recadrage.
-const OUTPUT_FORMATS = {
-  original: { label: "Original",    sub: "Ratio d'origine",     ratio: null,   css: "4 / 3" },
-  "1:1":    { label: "Carré 1:1",   sub: "Réseaux sociaux",     ratio: 1,      css: "1 / 1" },
-  "4:3":    { label: "Annonce 4:3", sub: "Sites d'annonces",    ratio: 4 / 3,  css: "4 / 3" },
-  "16:9":   { label: "Pano 16:9",   sub: "Bannière / showroom", ratio: 16 / 9, css: "16 / 9" },
-  "4:5":    { label: "Portrait 4:5", sub: "Mobile / story",     ratio: 4 / 5,  css: "4 / 5" },
-};
-const OUTPUT_FORMAT_KEYS = ["original", "1:1", "4:3", "16:9", "4:5"];
-
-// Recadre une dataURL au ratio cible (largeur/hauteur), recadrage centré sans
-// déformation. Retourne la source inchangée si ratio nul (format « original »).
-async function reframeDataURL(src, ratio) {
-  if (!src || !ratio) return src;
-  const img = await loadImg(src);
-  const sw = img.naturalWidth || img.width;
-  const sh = img.naturalHeight || img.height;
-  if (!sw || !sh) return src;
-  const srcRatio = sw / sh;
-  let tw, th;
-  if (srcRatio > ratio) { th = sh; tw = Math.round(sh * ratio); }
-  else                  { tw = sw; th = Math.round(sw / ratio); }
-  const sx = Math.round((sw - tw) / 2);
-  const sy = Math.round((sh - th) / 2);
-  const c = document.createElement("canvas");
-  c.width = tw; c.height = th;
-  c.getContext("2d").drawImage(img, sx, sy, tw, th, 0, 0, tw, th);
-  return c.toDataURL("image/jpeg", 0.97);
-}
-
 function extractJSON(txt) {
   let depth = 0, start = -1;
   for (let i = 0; i < txt.length; i++) {
@@ -3169,7 +3136,6 @@ export default function AutoCache() {
   const [autoPlate, setAutoPlate] = useState(() => (typeof localStorage === "undefined") || localStorage.getItem("ac_auto_plate") !== "0");
   useEffect(() => { try { localStorage.setItem("ac_auto_plate", autoPlate ? "1" : "0"); } catch {} }, [autoPlate]);
   const [enhanceProIntensity, setEnhanceProIntensity] = useState(2); // 0–5 : force du dé-jaunissement (2 par défaut, modifiable)
-  const [outputFormat, setOutputFormat] = useState("original"); // format d'export : clé de OUTPUT_FORMATS
   const [tab, setTab] = useState("setup");
   const [dragOver, setDragOver] = useState(null);
   // ── Mode logo : import fichier OU génération texte+couleur ──
@@ -3199,10 +3165,6 @@ export default function AutoCache() {
   const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
   const [manualPlateMode, setManualPlateMode] = useState(false); // true = pose manuelle (plaque non détectée)
-  // Dimensions réelles de l'image affichée dans la lightbox (mesurées au
-  // chargement) : sert à dessiner l'aperçu du format d'export (zones rognées
-  // assombries), y compris pendant l'ajustement du cache plaque.
-  const [lbMediaDims, setLbMediaDims] = useState(null); // { w, h }
   const [lbZoom, setLbZoom] = useState(1);            // zoom de la lightbox (1 = normal, max 8)
   const [lbPan,  setLbPan]  = useState({ x: 0, y: 0 }); // décalage (px) du calque zoomé
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
@@ -3890,8 +3852,7 @@ export default function AutoCache() {
   const start = () => startAfterInfo();
 
   const downloadOne = async r => {
-    const ratio = OUTPUT_FORMATS[outputFormat]?.ratio ?? null;
-    const href = await reframeDataURL(r.showroomDataURL || r.processed, ratio);
+    const href = r.showroomDataURL || r.processed;
     const a = document.createElement("a"); a.href = href; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click();
   };
   const downloadAll = async () => { for (const r of results) await downloadOne(r); };
@@ -3907,8 +3868,8 @@ export default function AutoCache() {
   };
 
   // Envoie toutes les photos traitées en pièces jointes par email (via Brevo,
-  // /api/send-photos). Les photos sont recadrées au format d'export choisi puis
-  // découpées en lots pour rester sous la limite de requête de Vercel (~4,5 Mo).
+  // /api/send-photos). Les photos sont découpées en lots pour rester sous la
+  // limite de requête de Vercel (~4,5 Mo).
   const sendPhotosByEmail = async () => {
     const to = emailTo.trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
@@ -3922,17 +3883,15 @@ export default function AutoCache() {
     setEmailSending(true);
     setEmailStatus({ type: "progress", msg: "Préparation des photos…" });
     try {
-      const ratio = OUTPUT_FORMATS[outputFormat]?.ratio ?? null;
-      // Construit les pièces jointes au format choisi, allégées pour l'email
-      // (redimensionnées + légèrement compressées) : indispensable pour
-      // regrouper plusieurs photos par mail et éviter d'envoyer 1 photo/mail.
+      // Construit les pièces jointes allégées pour l'email (redimensionnées +
+      // légèrement compressées) : indispensable pour regrouper plusieurs
+      // photos par mail et éviter d'envoyer 1 photo/mail.
       const EMAIL_MAX_PX = 2000;   // grand côté max des pièces jointes
       const EMAIL_QUALITY = 0.85;  // compression JPEG légère (qualité conservée)
       const items = [];
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
-        const framed = await reframeDataURL(r.showroomDataURL || r.processed, ratio);
-        const dataURL = await shrinkDataUrl(framed, EMAIL_MAX_PX, EMAIL_QUALITY);
+        const dataURL = await shrinkDataUrl(r.showroomDataURL || r.processed, EMAIL_MAX_PX, EMAIL_QUALITY);
         const content = dataURL.includes(",") ? dataURL.split(",").pop() : dataURL;
         const base = (r.name || `photo_${i + 1}`).replace(/\.[^.]+$/, "");
         const prefix = r.showroomDataURL ? "showroom_" : "autocache_";
@@ -4167,7 +4126,6 @@ export default function AutoCache() {
 
   const openLightbox  = (r) => {
     setLightbox(r);
-    setLbMediaDims(null); // re-mesurée au chargement de l'image
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
     setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
     setShowMaskEditor(false);
@@ -5368,26 +5326,7 @@ export default function AutoCache() {
                   </Fragment>
                 ))}
 
-                {/* ── Format d'export des photos ── */}
-                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", fontFamily: "var(--font-apple)", marginTop: 4, marginBottom: 10 }}>Format d'export</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                  {OUTPUT_FORMAT_KEYS.map(key => {
-                    const f = OUTPUT_FORMATS[key];
-                    const active = outputFormat === key;
-                    return (
-                      <button key={key} onClick={() => setOutputFormat(key)}
-                        style={{ flex: "1 1 0", minWidth: 72, background: active ? "#f26522" : "var(--c-0a0a0a)", border: `1px solid ${active ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: 3, padding: "9px 6px", cursor: "pointer", textAlign: "center" }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, color: active ? "#090909" : "var(--c-aaa)", fontFamily: "var(--font-apple)", textTransform: "uppercase" }}>{f.label}</div>
-                        <div style={{ fontSize: 9, marginTop: 2, color: active ? "var(--c-3a1400)" : "var(--c-666)", fontFamily: "var(--font-apple)" }}>{f.sub}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "var(--font-apple)", marginBottom: 22, lineHeight: 1.5 }}>
-                  {outputFormat === "original" ? "Conserve le ratio d'origine de chaque photo." : "Recadrage centré au format choisi · appliqué à l'aperçu et au téléchargement."}
-                </div>
-
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 22, marginBottom: 14 }}>
                   <div style={{ fontSize: 13, letterSpacing: 3, color: adjEnabled ? "#f26522" : "var(--c-444)", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>03 — Ajustements photo</div>
                   <button onClick={() => setAdjEnabled(p => !p)} style={{ background: adjEnabled ? "#f26522" : "var(--c-1a1a1a)", border: `1px solid ${adjEnabled ? "#f26522" : "var(--c-2a2a2a)"}`, color: adjEnabled ? "#090909" : "var(--c-444)", padding: "4px 13px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 10, letterSpacing: 2, textTransform: "uppercase", borderRadius: 2 }}>
                     {adjEnabled ? "ON" : "OFF"}
@@ -5630,7 +5569,7 @@ export default function AutoCache() {
                   {results.map((r, i) => (
                     <div key={i} style={{ background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
-                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: OUTPUT_FORMATS[outputFormat]?.css || "4 / 3", objectFit: outputFormat === "original" ? "contain" : "cover", background: "var(--c-1e1e1e)", display: "block" }} />
+                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4 / 3", objectFit: "contain", background: "var(--c-1e1e1e)", display: "block" }} />
                         {!r.showroomDataURL && window.location.search.includes('plateDebug') && r.yoloBbox && r.imgW && (
                           <svg
                             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
@@ -6009,45 +5948,9 @@ export default function AutoCache() {
               <img
                 ref={cropImgRef}
                 src={(lightbox.signImageUrl && lightbox.signBaseUrl) ? lightbox.signBaseUrl : (lightbox.showroomDataURL || lightbox.processed)}
-                onLoad={e => setLbMediaDims({ w: e.target.naturalWidth, h: e.target.naturalHeight })}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
               />
             )}
-
-            {/* ── Aperçu du format d'export : les zones qui seront recadrées au
-                téléchargement sont assombries — visible aussi pendant
-                l'ajustement du cache, pour travailler sur le rendu final. ── */}
-            {!cropMode && (() => {
-              const fr = OUTPUT_FORMATS[outputFormat]?.ratio;
-              if (!fr) return null;
-              const iw = lbMediaDims?.w ?? (lightbox.showroomDataURL ? lightbox.showroomTransform?.W : lightbox.imgW);
-              const ih = lbMediaDims?.h ?? (lightbox.showroomDataURL ? lightbox.showroomTransform?.H : lightbox.imgH);
-              if (!iw || !ih) return null;
-              const rImg = iw / ih;
-              const shade = "rgba(4,4,4,0.78)";
-              const line = "1px dashed rgba(242,101,34,0.9)";
-              let bands = null;
-              if (rImg > fr * 1.002) {
-                const b = (1 - fr / rImg) / 2 * 100;
-                bands = (<>
-                  <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: `${b}%`, background: shade, borderRight: line, pointerEvents: "none", zIndex: 5 }} />
-                  <div style={{ position: "absolute", top: 0, bottom: 0, right: 0, width: `${b}%`, background: shade, borderLeft: line, pointerEvents: "none", zIndex: 5 }} />
-                </>);
-              } else if (rImg < fr * 0.998) {
-                const b = (1 - rImg / fr) / 2 * 100;
-                bands = (<>
-                  <div style={{ position: "absolute", left: 0, right: 0, top: 0, height: `${b}%`, background: shade, borderBottom: line, pointerEvents: "none", zIndex: 5 }} />
-                  <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: `${b}%`, background: shade, borderTop: line, pointerEvents: "none", zIndex: 5 }} />
-                </>);
-              }
-              if (!bands) return null;
-              return (<>
-                {bands}
-                <div style={{ position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.82)", color: "#f26522", fontSize: 10, fontFamily: "var(--font-apple)", letterSpacing: 1, textTransform: "uppercase", padding: "3px 9px", borderRadius: 2, pointerEvents: "none", zIndex: 6, whiteSpace: "nowrap" }}>
-                  Format {OUTPUT_FORMATS[outputFormat].label} · zone claire conservée
-                </div>
-              </>);
-            })()}
 
             {/* ── Enseigne déplaçable (calque par-dessus l'image) ── */}
             {!cropMode && !adjustMode && lightbox.signImageUrl && (() => {
@@ -6821,7 +6724,7 @@ export default function AutoCache() {
             </div>
             <div style={{ padding: "20px 24px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
               <div style={{ fontSize: 12, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", lineHeight: 1.6 }}>
-                Les {results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""} seront envoyées en pièces jointes à l'adresse ci-dessous{outputFormat !== "original" ? ` (format ${OUTPUT_FORMATS[outputFormat].label})` : ""}.
+                Les {results.length} photo{results.length > 1 ? "s" : ""} traitée{results.length > 1 ? "s" : ""} seront envoyées en pièces jointes à l'adresse ci-dessous.
               </div>
               <div style={{ fontSize: 11, color: "#8a8a8a", fontFamily: "var(--font-apple)", lineHeight: 1.6, background: "var(--c-0a0a0a)", border: "1px solid var(--c-1c1c1c)", borderRadius: 4, padding: "10px 12px" }}>
                 ⓘ Les photos peuvent être légèrement compressées pour l'envoi par mail.<br />
