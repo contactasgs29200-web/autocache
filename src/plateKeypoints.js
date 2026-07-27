@@ -221,11 +221,16 @@ export function acceptZoom(p1, p2) {
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-// `?zoom=off` dans l'URL : revient à l'ancien comportement (une seule passe),
-// pour comparer les deux rendus sur les mêmes photos.
+// La 2e passe est DÉSACTIVÉE par défaut. Mesuré en production sur 4 photos :
+// le modèle actuel décroche sur tout recadrage, même modéré —
+//   ×1,8 : 0,56 → 0,35   ×1,7 : 0,68 → 0,58
+//   ×2,2 : 0,83 → 0,62   ×2,2 : 0,92 → 0,54
+// La passe 2 est donc systématiquement écartée : elle coûterait une inférence
+// par photo pour rien. `?zoom=on` la réactive — à repasser par défaut une fois
+// le modèle réentraîné avec une augmentation d'échelle (scale=0.9).
 function zoomEnabled() {
-  if (typeof window === 'undefined') return true;
-  return !window.location.search.includes('zoom=off');
+  if (typeof window === 'undefined') return false;
+  return window.location.search.includes('zoom=on');
 }
 
 // Détection principale. imageInput : File/Blob (photo d'origine) ou dataURL.
