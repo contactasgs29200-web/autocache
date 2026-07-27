@@ -4,6 +4,7 @@ import Tutorial from "./components/Tutorial.jsx";
 import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
 import AuthTransition, { AUTH_MOTION_CSS, AUTH_EXIT_MS, prefersReducedMotion } from "./components/AuthTransition.jsx";
+import ProcessingIndicator, { ProcessingLabel, PROCESSING_MOTION_CSS, PROCESSING_EXIT_MS } from "./components/ProcessingMotion.jsx";
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 // @imgly background removal — chargé dynamiquement
@@ -323,6 +324,28 @@ function loadImg(src) {
     i.onerror = rej;
     i.src = src;
   });
+}
+
+// Tailles d'essai successives (côté le plus long) pour ranger le logo dans le
+// quota du navigateur. Un cache plaque est composité sur quelques centaines de
+// pixels : même le dernier palier reste net à l'usage.
+const LOGO_STORE_SIDES = [1600, 900, 500, 280];
+
+// Réduit un data URL s'il dépasse `maxSide`, sinon le renvoie tel quel.
+// Renvoie null si l'image est illisible — l'appelant renonce alors sans casser.
+async function shrinkDataURL(dataURL, maxSide) {
+  try {
+    const img = await loadImg(dataURL);
+    const longest = Math.max(img.naturalWidth, img.naturalHeight);
+    if (!longest) return null;
+    const scale = Math.min(1, maxSide / longest);
+    if (scale === 1) return dataURL;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  } catch (e) { return null; }
 }
 
 function lerp(a, b, t) { return a + (b - a) * t; }
@@ -3010,12 +3033,12 @@ function AuthScreen({ onAuth, exiting }) {
                     style={{
                       position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
                       background: "transparent", border: "none", padding: "6px 8px",
-                      cursor: "pointer", color: showPassword ? "#f26522" : "var(--c-ddd)",
-                      fontSize: 17, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: "pointer", color: "var(--c-ddd)",
+                      lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
                       minHeight: "unset",
                     }}
                   >
-                    {showPassword ? "🙈" : "👁"}
+                    <SettingsIcon name={showPassword ? "eye-off" : "eye"} size={17} />
                   </button>
                 )}
               </div>
@@ -3105,6 +3128,10 @@ function SettingsIcon({ name, size = 16 }) {
       return (<svg {...common}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16,17 21,12 16,7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>);
     case "install": // Installer l'application
       return (<svg {...common}><rect x="5" y="2" width="14" height="20" rx="2" /><line x1="12" y1="6" x2="12" y2="14" /><polyline points="9,11 12,14 15,11" /><line x1="10" y1="18" x2="14" y2="18" /></svg>);
+    case "eye": // Afficher le mot de passe
+      return (<svg {...common}><path d="M1.5 12S5.7 5.5 12 5.5 22.5 12 22.5 12 18.3 18.5 12 18.5 1.5 12 1.5 12z" /><circle cx="12" cy="12" r="3.2" /></svg>);
+    case "eye-off": // Masquer le mot de passe
+      return (<svg {...common}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" /><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" /><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" /><line x1="2" y1="2" x2="22" y2="22" /></svg>);
     default:
       return null;
   }
@@ -3364,14 +3391,33 @@ export default function AutoCache() {
     } catch(e) {}
   }, []);
 
-  // Sauvegarder logo cache plaque → localStorage
+  // Sauvegarder logo cache plaque → localStorage.
+  // Un logo importé depuis un téléphone peut peser plusieurs Mo une fois en
+  // base64 et dépasser le quota du navigateur. Sans repli, l'écriture échouait
+  // en silence et le logo était perdu au démarrage suivant : on libère donc
+  // l'original de recadrage, puis on se rabat sur une version réduite —
+  // largement suffisante pour un cache plaque — plutôt que de ne rien garder.
   useEffect(() => {
     if (!logo?.preview || !logo.preview.startsWith('data:')) return;
-    try {
-      localStorage.setItem('ac_logo_preview', logo.preview);
+    let cancelled = false;
+    const write = (preview) => {
+      localStorage.setItem('ac_logo_preview', preview);
       localStorage.setItem('ac_logo_generated', logo.generated ? '1' : '0');
       if (logo.bgColor) localStorage.setItem('ac_logo_bgcolor', logo.bgColor);
-    } catch(e) {}
+    };
+    (async () => {
+      try { write(logo.preview); return; } catch (e) {}
+      try { localStorage.removeItem('ac_logo_original'); } catch (e) {}
+      try { write(logo.preview); return; } catch (e) {}
+      for (const side of LOGO_STORE_SIDES) {
+        const reduced = await shrinkDataURL(logo.preview, side);
+        if (cancelled) return;
+        if (!reduced) break;
+        try { write(reduced); return; } catch (e) {}
+      }
+      console.warn('[Logo] quota localStorage insuffisant : logo non conservé');
+    })();
+    return () => { cancelled = true; };
   }, [logo]);
 
   useEffect(() => {
@@ -4037,6 +4083,16 @@ export default function AutoCache() {
     }
   };
   const pct = progress.total ? Math.round((progress.n / progress.total) * 100) : 0;
+
+  // Le voile de traitement reste monté le temps de son fondu de sortie, pour
+  // que la fin du lot ne se termine pas par une disparition sèche.
+  const [procVisible, setProcVisible] = useState(false);
+  useEffect(() => {
+    if (processing) { setProcVisible(true); return; }
+    const t = setTimeout(() => setProcVisible(false), PROCESSING_EXIT_MS);
+    return () => clearTimeout(t);
+  }, [processing]);
+
   // Plans : "trial" | "pro" (base) | "premium_showroom" (Pro + Showroom)
   // | "premium" (anciens abonnés du plan unique — conservent le showroom
   // LOCAL @imgly qu'ils avaient, sans détourage Photoroom ni coût API)
@@ -4204,7 +4260,11 @@ export default function AutoCache() {
 
   const logout = async () => {
     await supabase.auth.signOut();
-    setLogo(null); setPhotos([]); setResults([]); setTab("setup");
+    // Le logo cache plaque n'est pas remis à zéro : il est conservé d'une
+    // session à l'autre (cf. restauration depuis localStorage). L'effacer ici
+    // le faisait disparaître de l'écran à la reconnexion, alors qu'il était
+    // toujours enregistré — il ne revenait qu'après un rechargement de page.
+    setPhotos([]); setResults([]); setTab("setup");
   };
 
   const submitPromo = async () => {
@@ -4920,12 +4980,12 @@ export default function AutoCache() {
                   style={{
                     position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
                     background: "transparent", border: "none", padding: "6px 8px",
-                    cursor: "pointer", color: showRecoveryPassword ? "#f26522" : "var(--c-ddd)",
-                    fontSize: 17, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", color: "var(--c-ddd)",
+                    lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
                     minHeight: "unset",
                   }}
                 >
-                  {showRecoveryPassword ? "🙈" : "👁"}
+                  <SettingsIcon name={showRecoveryPassword ? "eye-off" : "eye"} size={17} />
                 </button>
               </div>
             </div>
@@ -4964,10 +5024,8 @@ export default function AutoCache() {
           input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#f26522;border:none;}
           button,select{min-height:40px;}
         }
-        @keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-        @-webkit-keyframes ac-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-        .ac-spinner{animation:ac-spin 0.7s linear infinite;-webkit-animation:ac-spin 0.7s linear infinite;}
         ${AUTH_MOTION_CSS}
+        ${PROCESSING_MOTION_CSS}
       `}</style>
       {/* L'application n'apparaît qu'en fondu à la première connexion : le
           voile de AuthTransition la découvre pendant que le logo se pose. */}
@@ -7230,20 +7288,26 @@ export default function AutoCache() {
         </div>
       )}
 
-      {/* ── Overlay chargement ── */}
-      {processing && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.92)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, overflowY: "auto", padding: "32px 16px" }}>
-          <span className="ac-spinner" style={{ width: 52, height: 52, borderTop: "5px solid #f26522", borderRight: "5px solid #f26522", borderBottom: "5px solid #f26522", borderLeft: "5px solid transparent", borderRadius: "50%", display: "inline-block" }} />
-          <div style={{ fontFamily: "var(--font-apple)", fontSize: 12, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
-            Traitement {progress.n} / {progress.total}
-          </div>
-          <div style={{ width: 200, height: 2, background: "var(--c-1e1e1e)", borderRadius: 1, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${pct}%`, background: "#f26522", transition: "width 0.4s ease" }} />
+      {/* ── Overlay chargement ──
+          L'anneau se trace autour du logo au lancement puis se remplit au fil
+          des photos : il remplace à la fois l'ancien rouet et la barre de
+          progression, qui donnaient deux fois la même information. */}
+      {procVisible && (
+        <div className={processing ? "ac-proc-veil" : "ac-proc-veil-out"}
+          style={{ position: "fixed", inset: 0, background: "rgba(10,10,10,0.92)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 20, overflowY: "auto", padding: "32px 16px" }}>
+          {/* Le libellé dit ce qui se passe, le compteur sous l'anneau donne le
+              chiffre : répéter « Traitement » aux deux endroits bégayait. */}
+          <div className="ac-proc-rise-1"><ProcessingLabel running={processing} /></div>
+          <ProcessingIndicator pct={pct} />
+          <div className="ac-proc-rise-1" style={{ fontFamily: "var(--font-apple)", fontSize: 12, color: "#f26522", letterSpacing: 3, textTransform: "uppercase" }}>
+            {progress.n} / {progress.total} photo{progress.total > 1 ? "s" : ""}
           </div>
           {/* Mini-jeu d'esquive pour patienter pendant le traitement.
               `gated` : le jeu ne s'affiche pas d'office — une phrase invite
               à appuyer sur Espace pour le lancer. */}
-          <LoadingGame gated />
+          <div className="ac-proc-rise-2">
+            <LoadingGame gated />
+          </div>
         </div>
       )}
 
