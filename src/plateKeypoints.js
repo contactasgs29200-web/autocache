@@ -15,17 +15,17 @@
 //   ou null (modèle indisponible, erreur, ou aucune plaque fiable → la chaîne
 //   de secours Plate Recognizer/Claude prend le relais).
 //
-// L'inférence se fait en DEUX passes du même modèle (voir plus bas) :
-// localiser la plaque sur la photo entière, puis la repasser sur un
-// recadrage plein format pour poser les 4 coins avec plus de pixels.
-// `?zoom=off` dans l'URL revient à la passe unique.
+// Drapeaux d'URL, pour comparer deux rendus sur les mêmes photos :
+//   ?keypoints=off  désactive ce détecteur (chaîne de secours seule)
+//   ?letterbox=on   ancien prétraitement letterbox au lieu de l'étirement
+//   ?zoom=on        active la 2e passe sur recadrage (désactivée par défaut)
 
 const MODEL_URL = '/models/plate-keypoints.onnx';
 const IMGSZ = 640;
 const CONF_THRESHOLD = 0.30;
 
 // ── Double passe (zoom) ──────────────────────────────────────────────────
-// Sur une photo de 4000 px letterboxée vers 640, la plaque ne fait plus que
+// Sur une photo de 4000 px ramenée à 640, la plaque ne fait plus que
 // ~110 px de large et ~25 px de haut : le modèle place ses 4 coins sur cette
 // vignette, et chaque pixel d'imprécision est RE-MULTIPLIÉ par ~6 au retour
 // dans la photo d'origine. D'où un cache légèrement décalé ou penché.
@@ -103,24 +103,43 @@ function loadImageFromInput(input) {
   });
 }
 
-// Letterbox (mise à l'échelle en conservant le ratio + padding gris) vers
-// IMGSZ×IMGSZ, puis conversion en tenseur CHW normalisé [0,1].
+// Mise au format d'entrée du modèle : IMGSZ×IMGSZ, tenseur CHW normalisé [0,1].
 // `rect` = zone SOURCE de l'image à donner au modèle, en pixels d'origine
 // (l'image entière en passe 1, le recadrage autour de la plaque en passe 2).
+//
+// ÉTIREMENT, pas letterbox. Roboflow exporte les images du dataset étirées en
+// 640×640 (« Resize: Stretch », son réglage par défaut) — vérifié sur l'export
+// : les 640×640 ne portent aucune bande de padding, et le rapport mesuré des
+// plaques (médiane 2,44 au lieu de 4,7) correspond bien à des photos 4:3 et 3:4
+// écrasées vers le carré. Le modèle n'a donc JAMAIS vu de letterbox.
+//
+// Lui en envoyer un revenait à l'interroger sur une géométrie inconnue : les
+// proportions ne correspondaient pas et des bandes grises occupaient un quart
+// de l'image. D'où des coins posés de travers en production alors que la
+// validation — qui tourne, elle, sur les images étirées — affichait 0,943 de
+// mAP50-95. Un décalage de prétraitement ne se voit jamais dans les métriques.
+//
+// `?letterbox=on` rétablit l'ancien comportement pour comparer.
 function preprocess(img, rect) {
   const { sx, sy, sw, sh } = rect;
-  const scale = Math.min(IMGSZ / sw, IMGSZ / sh);
-  const newW = Math.round(sw * scale), newH = Math.round(sh * scale);
-  const padX = Math.floor((IMGSZ - newW) / 2), padY = Math.floor((IMGSZ - newH) / 2);
+  const letterbox = typeof window !== 'undefined'
+    && window.location.search.includes('letterbox=on');
+
+  const scaleX = letterbox ? Math.min(IMGSZ / sw, IMGSZ / sh) : IMGSZ / sw;
+  const scaleY = letterbox ? scaleX : IMGSZ / sh;
+  const drawW = sw * scaleX, drawH = sh * scaleY;
+  const padX = Math.floor((IMGSZ - drawW) / 2), padY = Math.floor((IMGSZ - drawH) / 2);
 
   const c = document.createElement('canvas');
   c.width = IMGSZ; c.height = IMGSZ;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = 'rgb(114,114,114)'; // couleur de padding YOLO
-  ctx.fillRect(0, 0, IMGSZ, IMGSZ);
+  if (letterbox) {
+    ctx.fillStyle = 'rgb(114,114,114)'; // couleur de padding YOLO
+    ctx.fillRect(0, 0, IMGSZ, IMGSZ);
+  }
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, sx, sy, sw, sh, padX, padY, newW, newH);
+  ctx.drawImage(img, sx, sy, sw, sh, padX, padY, drawW, drawH);
 
   const { data } = ctx.getImageData(0, 0, IMGSZ, IMGSZ);
   const area = IMGSZ * IMGSZ;
@@ -130,13 +149,13 @@ function preprocess(img, rect) {
     chw[i + area]    = data[i * 4 + 1] / 255; // G
     chw[i + 2 * area] = data[i * 4 + 2] / 255; // B
   }
-  return { chw, scale, padX, padY, sx, sy };
+  return { chw, scaleX, scaleY, padX, padY, sx, sy };
 }
 
 // Une inférence sur la zone `rect`. Renvoie les 4 coins en PIXELS de la photo
 // d'origine (repère commun aux deux passes) ou null si rien de fiable.
 async function runPass(ort, session, img, rect) {
-  const { chw, scale, padX, padY, sx, sy } = preprocess(img, rect);
+  const { chw, scaleX, scaleY, padX, padY, sx, sy } = preprocess(img, rect);
 
   let out;
   try {
@@ -160,12 +179,13 @@ async function runPass(ort, session, img, rect) {
   }
   if (best < 0 || bestConf < CONF_THRESHOLD) return null;
 
-  // Espace 640 (letterbox de `rect`) → pixels de la photo d'origine.
+  // Espace 640 du modèle → pixels de la photo d'origine (l'étirement se
+  // défait avec un facteur par axe ; padX/padY ne servent qu'en ?letterbox=on).
   const corners = [];
   for (let i = 0; i < 4; i++) {
     const kx = data[(5 + i * 3) * nA + best];
     const ky = data[(6 + i * 3) * nA + best];
-    corners.push({ x: (kx - padX) / scale + sx, y: (ky - padY) / scale + sy });
+    corners.push({ x: (kx - padX) / scaleX + sx, y: (ky - padY) / scaleY + sy });
   }
   return { conf: bestConf, corners }; // ordre d'annotation tl, tr, br, bl
 }
@@ -178,8 +198,9 @@ const spanOf = (corners) => {
 };
 
 // Zone à donner au modèle en passe 2 : centrée sur la plaque de la passe 1,
-// au ratio de la photo d'origine (pour retrouver exactement le même schéma de
-// letterbox qu'à l'entraînement). null = zoom inutile ou impossible.
+// au ratio de la photo d'origine — l'entrée subit le même écrasement que la
+// passe 1, donc le modèle retrouve les proportions qu'il connaît.
+// null = zoom inutile ou impossible.
 export function zoomRect(corners, W, H) {
   const s = spanOf(corners);
   if (s.w < 8 || s.h < 4) return null; // plaque trop petite : mesure peu sûre

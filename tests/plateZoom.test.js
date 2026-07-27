@@ -18,7 +18,7 @@ test('plaque de 18 % : recadrage centré, ratio de la photo conservé', () => {
   const c = quad(2000, 2200, 720, 155);
   const r = zoomRect(c, W, H);
   assert.ok(r, 'un recadrage doit être proposé');
-  assert.ok(Math.abs(r.sw / r.sh - W / H) < 1e-9);   // même ratio → même letterbox
+  assert.ok(Math.abs(r.sw / r.sh - W / H) < 1e-9);   // même ratio → même écrasement
   assert.ok(r.zoom > 1.4 && r.zoom <= 2.2, `zoom ${r.zoom} hors plage`);
   assert.ok(contains(r, c), 'la plaque doit rester dans le recadrage');
 });
