@@ -3068,12 +3068,20 @@ const SUBSCRIPTION_FORMULES = [
   { key: "annual",  name: "Annuel",       tag: "Économies",  price: "129,90 €", period: "/an",       note: "au lieu de 178,80 € en mensuel", badge: "Économies" },
 ];
 const FORMULE_LABELS = { weekly: "Hebdomadaire", monthly: "Mensuelle", annual: "Annuelle" };
+// ── Showroom Virtuel : fonctionnalité encore en développement ───────────────
+// Tant que ce drapeau est vrai, l'option est affichée en « prochainement
+// disponible » : elle ne peut pas être cochée, n'est jamais appliquée au
+// traitement et n'est pas présentée comme incluse dans l'abonnement.
+// Repasser à false pour la remettre en service — penser aussi à remettre au
+// présent le texte de l'étape « showroom » dans components/Tutorial.jsx.
+const SHOWROOM_COMING_SOON = true;
+
 const SUBSCRIPTION_FEATURES = [
   "300 photos / mois",
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
-  "Showroom Virtuel (fonds IA)",
+  SHOWROOM_COMING_SOON ? "Showroom Virtuel (prochainement disponible)" : "Showroom Virtuel (fonds IA)",
   "Enseigne murale",
 ];
 
@@ -3598,7 +3606,7 @@ export default function AutoCache() {
       signImageUrl = sm.url; signRatio = sm.ratio;
     }
     const all = [];
-    const showroomBgDataUrl = showroomEnabled
+    const showroomBgDataUrl = showroomActive
       ? (showroomSetupBg === 'custom' && showroomSetupCustomBg
           ? showroomSetupCustomBg
           : (SHOWROOM_IMAGES[showroomSetupBg] ?? makeShowroomBackground(showroomSetupBg, 2400, 1350)))
@@ -3621,9 +3629,9 @@ export default function AutoCache() {
     for (let i = 0; i < photosToProcess.length; i++) {
       startPlateJob(i + 1); startPlateJob(i + 2);
       const plateResult = await plateJobs[i];
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomEnabled, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate, plateResult);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomActive, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate, plateResult);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
-      if (showroomEnabled && showroomBgDataUrl) {
+      if (showroomActive && showroomBgDataUrl) {
         try {
           // Vehicle detection + instance segmentation (backend) or fallback (@imgly + heuristics)
           const vehicleResult = await detectVehicles(photosToProcess[i].file);
@@ -3958,7 +3966,10 @@ export default function AutoCache() {
   const PLAN_LIMIT = isPaid ? 300 : TRIAL_LIMIT;
   const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
   // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
-  const canUseShowroom  = isPaid || userPlan === "trial";
+  // Le Showroom reste verrouillé pour tout le monde tant qu'il est en développement.
+  const canUseShowroom  = !SHOWROOM_COMING_SOON && (isPaid || userPlan === "trial");
+  // Seule condition qui déclenche réellement le rendu showroom du pipeline.
+  const showroomActive  = showroomEnabled && canUseShowroom;
   const canUseBodyPolish  = isPaid;
   const canStart = logo && photos.length > 0 && !processing;
 
@@ -5454,21 +5465,23 @@ export default function AutoCache() {
               {/* ── 04 — Showroom Virtuel ── */}
               <section data-tutorial="showroom">
                 <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "var(--font-apple)" }}>04 — Showroom Virtuel</div>
-                <div onClick={() => { if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); }}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomEnabled && canUseShowroom ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: showroomEnabled && canUseShowroom ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
-                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-444)"}`, background: showroomEnabled && canUseShowroom ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "var(--c-ddd)", fontSize: 11 }}>🔒</span>}
+                <div onClick={() => { if (SHOWROOM_COMING_SOON) return; if (!canUseShowroom) { setShowUpgradeProModal(true); return; } const next = !showroomEnabled; setShowroomEnabled(next); }}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: showroomActive ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${showroomActive ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: showroomActive ? "3px 3px 0 0" : 3, cursor: SHOWROOM_COMING_SOON ? "not-allowed" : "pointer", userSelect: "none", opacity: canUseShowroom ? 1 : 0.5 }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${showroomActive ? "#f26522" : "var(--c-444)"}`, background: showroomActive ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {canUseShowroom ? (showroomEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>) : <span style={{ color: "var(--c-ddd)", fontSize: 11 }}>{SHOWROOM_COMING_SOON ? "⏳" : "🔒"}</span>}
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomEnabled && canUseShowroom ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>
-                      ⬡ Showroom Virtuel {!canUseShowroom && <span style={{ fontSize: 9, color: "#f26522", fontFamily: "var(--font-apple)", letterSpacing: 1, marginLeft: 6 }}>ABONNEMENT PRO</span>}
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: showroomActive ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>
+                      ⬡ Showroom Virtuel {!canUseShowroom && <span style={{ fontSize: 9, color: "#f26522", fontFamily: "var(--font-apple)", letterSpacing: 1, marginLeft: 6 }}>{SHOWROOM_COMING_SOON ? "PROCHAINEMENT DISPONIBLE" : "ABONNEMENT PRO"}</span>}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 2 }}>
-                      {canUseShowroom ? "Détourage IA · Fond de showroom · Inclus au traitement" : "Disponible avec l'abonnement Pro — cliquez pour en savoir plus"}
+                      {SHOWROOM_COMING_SOON
+                        ? "Fonctionnalité en cours de développement — bientôt disponible."
+                        : canUseShowroom ? "Détourage IA · Fond de showroom · Inclus au traitement" : "Disponible avec l'abonnement Pro — cliquez pour en savoir plus"}
                     </div>
                   </div>
                 </div>
-                {showroomEnabled && (
+                {showroomActive && (
                   <div style={{ padding: "12px 14px", background: "var(--c-121212)", border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px" }}>
                     <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "rgba(242,101,34,0.06)", border: "1px solid rgba(242,101,34,0.2)", borderRadius: 3, padding: "9px 11px", marginBottom: 14 }}>
                       <span style={{ color: "#f26522", fontSize: 14, flexShrink: 0, lineHeight: 1.4 }}>⚠</span>
@@ -5518,7 +5531,7 @@ export default function AutoCache() {
 
               <section data-tutorial="process">
                 <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "var(--c-1a1a1a)", color: canStart ? "#090909" : "var(--c-444)", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "var(--font-apple)", fontSize: 16, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
-                  {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}${showroomEnabled ? " + Showroom" : ""}`}
+                  {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}${showroomActive ? " + Showroom" : ""}`}
                 </button>
                 {processing && (
                   <div style={{ marginTop: 12 }}>

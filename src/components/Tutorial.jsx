@@ -49,7 +49,9 @@ const STEPS = [
     mode: "spotlight",
     target: "showroom",
     title: "03 — Showroom Virtuel",
-    body: "Activez le mode Showroom pour détourer automatiquement le véhicule et le placer sur un fond de scène professionnel. Choisissez parmi les fonds proposés ou importez le vôtre.",
+    // Texte à remettre au présent quand SHOWROOM_COMING_SOON repasse à false
+    // dans App.jsx (« Activez le mode Showroom pour détourer… »).
+    body: "Le mode Showroom détourera automatiquement le véhicule pour le placer sur un fond de scène professionnel. Cette fonctionnalité est en cours de développement et sera bientôt disponible.",
     icon: "⬡",
   },
   {
