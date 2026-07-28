@@ -3072,18 +3072,24 @@ const FORMULE_LABELS = { weekly: "Hebdomadaire", monthly: "Mensuelle", annual: "
 // Tant que ce drapeau est vrai, l'option est affichée en « prochainement
 // disponible » : elle ne peut pas être cochée, n'est jamais appliquée au
 // traitement et n'est pas présentée comme incluse dans l'abonnement.
-// Repasser à false pour la remettre en service — penser aussi à remettre au
-// présent le texte de l'étape « showroom » dans components/Tutorial.jsx.
+// Repasser à false pour la remettre en service — penser aussi à la réintégrer
+// dans SUBSCRIPTION_FEATURES et à remettre au présent le texte de l'étape
+// « showroom » dans components/Tutorial.jsx.
 const SHOWROOM_COMING_SOON = true;
 
+// Options incluses dans l'abonnement, affichées cochées sur chaque formule.
+// Le Showroom Virtuel n'y figure pas tant qu'il est en développement : on ne
+// vend que ce qui est réellement disponible.
 const SUBSCRIPTION_FEATURES = [
   "300 photos / mois",
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
-  SHOWROOM_COMING_SOON ? "Showroom Virtuel (prochainement disponible)" : "Showroom Virtuel (fonds IA)",
   "Enseigne murale",
 ];
+// Ligne de clôture de la liste : annonce les évolutions à venir sans promettre
+// une fonctionnalité précise ni date.
+const SUBSCRIPTION_FEATURES_TEASER = "Et bientôt de nouvelles fonctionnalités";
 
 export default function AutoCache() {
   const [user, setUser] = useState(null);
@@ -4073,6 +4079,12 @@ export default function AutoCache() {
                   <span style={{ fontSize: 11, color: "var(--c-bbb)", fontFamily: "var(--font-apple)", letterSpacing: 0.5 }}>{label}</span>
                 </div>
               ))}
+              {/* Évolutions à venir — style distinct du reste de la liste pour
+                  ne pas se lire comme une option déjà incluse. */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                <span style={{ fontSize: 12, color: "#f26522", flexShrink: 0 }}>＋</span>
+                <span style={{ fontSize: 11, color: "var(--c-888)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, fontStyle: "italic" }}>{SUBSCRIPTION_FEATURES_TEASER}</span>
+              </div>
             </div>
             <button
               disabled={checkoutLoading === f.key}
