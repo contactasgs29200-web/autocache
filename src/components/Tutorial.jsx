@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import SlideFrame from "./SlideFrame.jsx";
 
 const TUTORIAL_BASE = "/tutorial";
@@ -19,7 +19,7 @@ const STEPS = [
   {
     mode: "card",
     title: "Bienvenue sur AutoCache",
-    body: "Ce didacticiel vous guide à travers les principales fonctions de l'application. En quelques clics, vous pourrez apposer votre cache plaque, améliorer vos photos et générer des visuels showroom professionnels.",
+    body: "Ce didacticiel vous guide à travers les principales fonctions de l'application. En quelques clics, vous pourrez apposer votre cache plaque et améliorer vos photos pour vos annonces.",
     icon: "⬡",
   },
 
@@ -45,15 +45,9 @@ const STEPS = [
     body: "Activez les options d'amélioration : correction des couleurs, lustrage carrosserie... Chaque option est indépendante et s'applique lors du traitement.",
     icon: "✨",
   },
-  {
-    mode: "spotlight",
-    target: "showroom",
-    title: "03 — Showroom Virtuel",
-    // Texte à remettre au présent quand SHOWROOM_COMING_SOON repasse à false
-    // dans App.jsx (« Activez le mode Showroom pour détourer… »).
-    body: "Le mode Showroom détourera automatiquement le véhicule pour le placer sur un fond de scène professionnel. Cette fonctionnalité est en cours de développement et sera bientôt disponible.",
-    icon: "⬡",
-  },
+  // Le Showroom Virtuel n'a pas d'étape ici tant qu'il est en développement
+  // (voir SHOWROOM_COMING_SOON dans App.jsx) : le didacticiel ne présente que
+  // des fonctions réellement utilisables.
   {
     mode: "spotlight",
     target: "process",
@@ -108,7 +102,7 @@ const STEPS = [
     mode: "slide",
     image: `${TUTORIAL_BASE}/4-cache-ok.jpg`,
     title: "Étape 4 — Cache plaque validé",
-    body: "Voilà le rendu après ajustement, propre et précis. À ce stade, vous pouvez télécharger la photo telle quelle si vous n'aviez pas sélectionné le mode showroom.",
+    body: "Voilà le rendu après ajustement, propre et précis. Il ne vous reste plus qu'à télécharger la photo, prête pour votre annonce.",
     icon: "✓",
     frame: {
       filename: "renault-scenic.jpg",
@@ -118,93 +112,6 @@ const STEPS = [
         { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
       ],
       closeButton: true,
-    },
-  },
-  {
-    mode: "slide",
-    image: `${TUTORIAL_BASE}/5-showroom-base.jpg`,
-    title: "Étape 5 — Décor Showroom",
-    body: "Si vous avez sélectionné l'option showroom, le véhicule apparaîtra comme ceci. Quatre flèches oranges apparaîtront autour de la photo pour déplacer la voiture afin de donner à la photo un aspect naturel.",
-    icon: "◇",
-    frame: {
-      filename: "renault-scenic.jpg",
-      buttons: [
-        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
-        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
-        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
-      ],
-      closeButton: true,
-      nudgeArrows: true,
-      sliders: [
-        { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
-        { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 3,  value: "3%"   },
-      ],
-      footer: "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto",
-    },
-  },
-  {
-    mode: "slide",
-    image: `${TUTORIAL_BASE}/5-showroom-base.jpg`,
-    title: "Étape 6 — Deux options d'ajustement",
-    body: "Une fois la photo importée sur le showroom, deux options s'offrent à vous :",
-    icon: "◇",
-    frame: {
-      filename: "renault-scenic.jpg",
-      buttons: [
-        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
-        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
-        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
-      ],
-      closeButton: true,
-      sliders: [
-        { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
-        { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 3,  value: "3%"   },
-      ],
-      footer: "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto",
-    },
-  },
-  {
-    mode: "slide",
-    image: `${TUTORIAL_BASE}/5-showroom-base.jpg`,
-    title: "Étape 7 — Agrandir la taille",
-    body: "Cette jauge vous permettra d'ajuster la taille de votre véhicule pour qu'il colle au décor.",
-    icon: "⊕",
-    frame: {
-      filename: "renault-scenic.jpg",
-      buttons: [
-        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
-        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
-        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
-      ],
-      closeButton: true,
-      sliders: [
-        { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
-        { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 3,  value: "3%"   },
-      ],
-      footer: "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto",
-      highlight: "zoom",
-    },
-  },
-  {
-    mode: "slide",
-    image: `${TUTORIAL_BASE}/6-showroom-ajust-ok.jpg`,
-    title: "Étape 8 — Fondre dans le décor",
-    body: "Et voici l'option qui vous permettra de fondre automatiquement votre véhicule dans le décor en adaptant couleurs, brillance et contrastes.",
-    icon: "✦",
-    frame: {
-      filename: "renault-scenic.jpg",
-      buttons: [
-        { id: "rogner",      label: "✂ Rogner",      variant: "inactive" },
-        { id: "ajuster",     label: "⊹ Ajuster",     variant: "yellow-idle" },
-        { id: "telecharger", label: "↓ Télécharger", variant: "orange" },
-      ],
-      closeButton: true,
-      sliders: [
-        { id: "zoom",  icon: "🔍", label: "Agrandir la taille",          percent: 65, value: "×1.80" },
-        { id: "fondu", icon: "🎨", label: "Fondre le véhicule au décor", percent: 75, value: "75%"  },
-      ],
-      footer: "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto",
-      highlight: "fondu",
     },
   },
 
@@ -224,35 +131,52 @@ const STEPS = [
   },
 ];
 
-/* ── Best tooltip placement around a spotlight rect ── */
-function computeTooltipPlacement(sr, tooltipW, isMobile) {
+/* ── Hauteur de l'en-tête collant de l'application ── */
+const APP_HEADER_H = 56;
+
+/* ── Best tooltip placement around a spotlight rect ──────────────────────────
+ * `tooltipH` est la hauteur réelle mesurée de la bulle : sans elle (ancienne
+ * estimation fixe à 200 px) la bulle débordait sous l'écran ou se posait
+ * par-dessus la zone qu'elle est censée désigner, ce qui est surtout visible
+ * sur smartphone. La bulle est bornée par `maxHeight` au lieu de déborder :
+ * son texte défile à l'intérieur, la cible reste toujours dégagée.
+ */
+function computeTooltipPlacement(sr, tooltipW, isMobile, tooltipH) {
   const vw = window.innerWidth, vh = window.innerHeight;
-  const GAP = 14;
-  const TOOLTIP_H_EST = 200;
+  const GAP = 14, MARGIN = 12, MIN_H = 150;
+  const h = tooltipH || 220;
+  const clampTop = () => Math.max(MARGIN, Math.min(sr.y, vh - h - MARGIN));
 
-  const spaceRight = vw - (sr.x + sr.w + GAP);
-  const spaceLeft  = sr.x - GAP;
-  const spaceBelow = vh - (sr.y + sr.h + GAP);
-  const spaceAbove = sr.y - GAP;
-
-  let top, left;
+  // Placement latéral : réservé aux grands écrans, où la largeur le permet.
+  const spaceRight = vw - (sr.x + sr.w + GAP) - MARGIN;
+  const spaceLeft  = sr.x - GAP - MARGIN;
   if (!isMobile && spaceRight >= tooltipW) {
-    left = sr.x + sr.w + GAP;
-    top  = Math.max(GAP, Math.min(sr.y, vh - TOOLTIP_H_EST - GAP));
-  } else if (!isMobile && spaceLeft >= tooltipW) {
-    left = sr.x - tooltipW - GAP;
-    top  = Math.max(GAP, Math.min(sr.y, vh - TOOLTIP_H_EST - GAP));
-  } else if (spaceBelow >= TOOLTIP_H_EST) {
-    left = Math.max(GAP, Math.min(sr.x + sr.w / 2 - tooltipW / 2, vw - tooltipW - GAP));
-    top  = sr.y + sr.h + GAP;
-  } else if (spaceAbove >= TOOLTIP_H_EST) {
-    left = Math.max(GAP, Math.min(sr.x + sr.w / 2 - tooltipW / 2, vw - tooltipW - GAP));
-    top  = sr.y - TOOLTIP_H_EST - GAP;
-  } else {
-    left = Math.max(GAP, (vw - tooltipW) / 2);
-    top  = vh - TOOLTIP_H_EST - 30;
+    return { position: "fixed", top: clampTop(), left: sr.x + sr.w + GAP, width: tooltipW, maxHeight: vh - MARGIN * 2 };
   }
-  return { position: "fixed", top, left, width: tooltipW };
+  if (!isMobile && spaceLeft >= tooltipW) {
+    return { position: "fixed", top: clampTop(), left: sr.x - tooltipW - GAP, width: tooltipW, maxHeight: vh - MARGIN * 2 };
+  }
+
+  // Sinon au-dessus ou en dessous : on garde le côté le plus dégagé.
+  const spaceBelow = vh - (sr.y + sr.h) - GAP - MARGIN;
+  const spaceAbove = sr.y - GAP - MARGIN;
+  const left = Math.max(MARGIN, Math.min(sr.x + sr.w / 2 - tooltipW / 2, vw - tooltipW - MARGIN));
+  const below = spaceBelow >= spaceAbove;
+  const space = below ? spaceBelow : spaceAbove;
+
+  if (space >= MIN_H) {
+    const height = Math.min(h, space);
+    return {
+      position: "fixed", left, width: tooltipW, maxHeight: height,
+      top: below ? sr.y + sr.h + GAP : Math.max(MARGIN, sr.y - GAP - height),
+    };
+  }
+
+  // Cible presque aussi haute que l'écran : aucun côté ne peut accueillir la
+  // bulle. On l'ancre en bas, aussi compacte que possible, pour laisser visible
+  // la plus grande partie possible de la zone mise en avant.
+  const height = Math.max(MIN_H, Math.min(h, Math.round(vh * 0.3)));
+  return { position: "fixed", left, width: tooltipW, top: vh - height - MARGIN, maxHeight: height };
 }
 
 export default function Tutorial({ onClose, isMobile }) {
@@ -265,6 +189,14 @@ export default function Tutorial({ onClose, isMobile }) {
     typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "light"
   );
   const tooltipRef = useRef(null);
+  // Hauteur naturelle de la bulle, mesurée en additionnant ses trois blocs.
+  // On mesure le corps via scrollHeight : la valeur reste la hauteur du texte
+  // complet même quand `maxHeight` fait défiler le contenu, ce qui évite que
+  // la mesure et le placement se rétrécissent mutuellement à chaque rendu.
+  const headerRef = useRef(null);
+  const bodyRef   = useRef(null);
+  const footerRef = useRef(null);
+  const [tooltipH, setTooltipH] = useState(0);
 
   /* ── Suit le thème jour/nuit pour adapter le didacticiel ── */
   useEffect(() => {
@@ -317,9 +249,19 @@ export default function Tutorial({ onClose, isMobile }) {
     };
     setSpotlightRect(sr);
 
-    const tooltipW = isMobile ? Math.min(320, window.innerWidth - 24) : 360;
-    setTooltipStyle(computeTooltipPlacement(sr, tooltipW, isMobile));
-  }, [current.target, hasTarget, isMobile]);
+    // Sur smartphone on prend toute la largeur utile : une bulle plus large
+    // est aussi plus courte, donc plus facile à caser sans gêner la cible.
+    const tooltipW = isMobile ? window.innerWidth - 24 : 360;
+    setTooltipStyle(computeTooltipPlacement(sr, tooltipW, isMobile, tooltipH));
+  }, [current.target, hasTarget, isMobile, tooltipH]);
+
+  /* ── Mesure la hauteur réelle de la bulle après chaque rendu ── */
+  useLayoutEffect(() => {
+    const total = (headerRef.current?.offsetHeight ?? 0)
+                + (bodyRef.current?.scrollHeight ?? 0)
+                + (footerRef.current?.offsetHeight ?? 0);
+    if (total > 0) setTooltipH(prev => (Math.abs(prev - total) > 2 ? total : prev));
+  });
 
   /* ── Scroll target into view + measure (spotlight) ─────────────────── */
   useEffect(() => {
@@ -330,14 +272,27 @@ export default function Tutorial({ onClose, isMobile }) {
     }
     const el = document.querySelector(`[data-tutorial="${current.target}"]`);
     if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      const t1 = setTimeout(measureTarget, 100);
-      const t2 = setTimeout(measureTarget, 450);
-      return () => { clearTimeout(t1); clearTimeout(t2); };
+      // Centrer la cible coupe l'espace libre en deux moitiés dont aucune ne
+      // peut accueillir la bulle : c'est ce qui la faisait retomber par-dessus
+      // la fonction désignée sur smartphone. On aligne donc la cible juste sous
+      // l'en-tête collant, ce qui regroupe tout l'espace restant sous elle.
+      // Sur grand écran on ne le fait que pour les cibles hautes : les petites
+      // gardent le centrage habituel, la bulle se plaçant alors sur le côté.
+      const rect = el.getBoundingClientRect();
+      const tall = rect.height > window.innerHeight * 0.45;
+      if (isMobile || tall) {
+        window.scrollBy({ top: rect.top - (APP_HEADER_H + 20), behavior: "smooth" });
+      } else {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      // Le défilement est animé : on re-mesure jusqu'à ce qu'il soit terminé,
+      // sinon la bulle se place d'après une position de cible périmée.
+      const timers = [100, 450, 850].map(d => setTimeout(measureTarget, d));
+      return () => timers.forEach(clearTimeout);
     } else {
       measureTarget();
     }
-  }, [step, current.target, hasTarget, isSlide, measureTarget]);
+  }, [step, current.target, hasTarget, isSlide, isMobile, measureTarget]);
 
   /* ── Resize / scroll listeners ── */
   useEffect(() => {
@@ -383,11 +338,14 @@ export default function Tutorial({ onClose, isMobile }) {
   const slideTooltipAtTop = isSlide && ["fondu", "zoom"].includes(current.frame?.highlight);
   const slideTooltipStyle = isSlide
     ? (() => {
-        const w = isMobile ? Math.min(380, window.innerWidth - 24) : 440;
+        const w = isMobile ? vpSize.w - 24 : 440;
         return {
           position: "fixed",
           left: Math.max(12, (vpSize.w - w) / 2),
           width: w,
+          // Sur smartphone la bulle ne doit pas manger l'illustration qu'elle
+          // commente : on la borne à un peu plus d'un tiers de l'écran.
+          maxHeight: isMobile ? Math.round(vpSize.h * 0.42) : vpSize.h - 56,
           ...(slideTooltipAtTop ? { top: 28 } : { bottom: 28 }),
         };
       })()
@@ -480,7 +438,8 @@ export default function Tutorial({ onClose, isMobile }) {
                 position: "fixed",
                 top: "50%", left: "50%",
                 transform: "translate(-50%, -50%)",
-                width: isMobile ? Math.min(360, window.innerWidth - 32) : 420,
+                width: isMobile ? window.innerWidth - 32 : 420,
+                maxHeight: vpSize.h - 32,
               }),
           background: isLight ? "rgba(255,255,255,0.97)" : "rgba(20,20,20,0.96)",
           backdropFilter: "blur(8px)",
@@ -490,16 +449,21 @@ export default function Tutorial({ onClose, isMobile }) {
           boxShadow: isLight ? "0 16px 60px rgba(0,0,0,0.22)" : "0 16px 60px rgba(0,0,0,0.8)",
           fontFamily: "var(--font-apple)",
           overflow: "hidden",
+          // Colonne : en-tête et pied restent visibles, seul le texte défile
+          // quand `maxHeight` borne la bulle.
+          display: "flex",
+          flexDirection: "column",
           opacity: animating ? 0 : 1,
           transition: "opacity 0.25s ease, top 0.35s cubic-bezier(0.4,0,0.2,1), left 0.35s cubic-bezier(0.4,0,0.2,1), bottom 0.35s cubic-bezier(0.4,0,0.2,1)",
           zIndex: 10001,
         }}
       >
         {/* Header */}
-        <div style={{
+        <div ref={headerRef} style={{
           padding: "16px 20px 12px",
           borderBottom: "1px solid var(--c-1c1c1c)",
           display: "flex", alignItems: "center", justifyContent: "space-between",
+          flexShrink: 0,
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{
@@ -523,7 +487,7 @@ export default function Tutorial({ onClose, isMobile }) {
         </div>
 
         {/* Body */}
-        <div style={{ padding: "14px 20px 16px" }}>
+        <div ref={bodyRef} style={{ padding: "14px 20px 16px", overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
           <p style={{
             fontSize: 14, color: "var(--c-ddd)", lineHeight: 1.7,
             margin: 0, fontFamily: "var(--font-apple)",
@@ -533,10 +497,11 @@ export default function Tutorial({ onClose, isMobile }) {
         </div>
 
         {/* Footer: dots + buttons */}
-        <div style={{
+        <div ref={footerRef} style={{
           padding: "10px 20px 14px",
           borderTop: "1px solid var(--c-1c1c1c)",
           display: "flex", alignItems: "center", justifyContent: "space-between",
+          flexShrink: 0, flexWrap: "wrap", gap: 8,
         }}>
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
             {STEPS.map((_, i) => (
