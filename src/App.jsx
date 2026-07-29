@@ -9,7 +9,7 @@ import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quad
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 import ShowroomCapture from "./components/ShowroomCapture.jsx";
 import Spin360 from "./components/Spin360.jsx";
-import { DEFAULT_VIEWS as SPIN_VIEWS, isSpinUsable } from "./showroomInteractif.js";
+import { isSpinUsable } from "./showroomInteractif.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -3129,6 +3129,11 @@ export default function AutoCache() {
   // alors ordonnés autour du véhicule et présentables en tour 360°.
   const [spin360Mode, setSpin360Mode] = useState(false);
   const [showSpinViewer, setShowSpinViewer] = useState(false);
+  // Nombre de vues de la ligne médiane, placées en tête du lot : seules
+  // celles-là forment le carrousel. Les vues basses et hautes sont traitées
+  // comme des photos normales mais sortiraient de l'orbite si on les
+  // incluait dans la rotation.
+  const [spinRingCount, setSpinRingCount] = useState(0);
   const [showCreditPopup, setShowCreditPopup] = useState(false);
   const [subInfo, setSubInfo] = useState(null); // { periodStart, periodEnd, plan, daysLeft }
   const [subInfoLoading, setSubInfoLoading] = useState(false);
@@ -3582,11 +3587,12 @@ export default function AutoCache() {
   // Vues issues de la capture guidée. Un tour 360° décrit UN véhicule dans un
   // ordre circulaire : la capture remplace donc le lot au lieu de s'y ajouter,
   // sinon l'ordre des vues (et le tour) n'aurait plus de sens.
-  const handleCapturedViews = files => {
+  const handleCapturedViews = (files, meta = {}) => {
     const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
     if (!imgs.length) return;
     photos.forEach(p => URL.revokeObjectURL(p.preview));
     setPhotos(imgs.map((f, i) => ({ file: f, preview: URL.createObjectURL(f), id: `spin-${i}-${Math.random()}` })));
+    setSpinRingCount(meta.ringCount ?? imgs.length);
     setSpin360Mode(true);
   };
 
@@ -5424,10 +5430,10 @@ export default function AutoCache() {
                         setShowCapture360(true);
                       }}
                       style={{ width: "100%", background: "transparent", border: "1px solid #f26522", color: "#f26522", padding: "11px 0", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
-                      ⟳ Showroom interactif — faire le tour du véhicule
+                      ⟳ Showroom interactif — scanner le véhicule
                     </button>
                     <div style={{ fontSize: 10, color: "var(--c-aaa)", marginTop: 5, textAlign: "center", fontFamily: "var(--font-apple)" }}>
-                      {SPIN_VIEWS} vues guidées · traitées comme des photos normales · tour 360° à l’arrivée
+                      Scan guidé en 36 zones (tour + hauteurs) · traité comme des photos normales · tour 360° à l’arrivée
                     </div>
                   </div>
                 )}
@@ -6914,13 +6920,12 @@ export default function AutoCache() {
       {/* ── Showroom interactif : capture guidée ── */}
       {showCapture360 && canUseShowroomInteractif && (
         <ShowroomCapture
-          views={SPIN_VIEWS}
           onClose={() => setShowCapture360(false)}
-          onDone={(files) => {
+          onDone={(files, meta) => {
             // Les vues deviennent le lot courant : elles passeront par le
-            // pipeline normal (cache plaque, fond, colorimétrie), puis leur
-            // ordre circulaire permettra d'afficher le tour 360°.
-            handleCapturedViews(files);
+            // pipeline normal (cache plaque, fond, colorimétrie), puis les
+            // vues de la ligne médiane formeront le tour 360°.
+            handleCapturedViews(files, meta);
             setShowCapture360(false);
           }}
         />
@@ -6933,7 +6938,7 @@ export default function AutoCache() {
           <div onClick={e => e.stopPropagation()}
             style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: isMobile ? "18px 14px" : "28px 30px", maxWidth: 760, width: "94%" }}>
             <Spin360
-              frames={results.map(r => r.showroomDataURL || r.processed)}
+              frames={results.slice(0, spinRingCount || results.length).map(r => r.showroomDataURL || r.processed)}
               height={isMobile ? 240 : 380}
               onClose={() => setShowSpinViewer(false)}
             />

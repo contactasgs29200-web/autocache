@@ -1,4 +1,4 @@
-# Showroom interactif — capture guidée + tour 360°
+# Showroom interactif — scan guidé + tour 360°
 
 Accès restreint : la fonctionnalité n'apparaît qu'après saisie du code
 administrateur **`AURELE3D`** (menu *Code Administrateur*).
@@ -7,15 +7,23 @@ administrateur **`AURELE3D`** (menu *Code Administrateur*).
 
 ## 1. Ce que ça fait
 
-L'utilisateur fait le tour du véhicule avec son téléphone. L'app le guide
-(anneau de progression), contrôle chaque prise et déclenche automatiquement
-aux bons angles. Les vues obtenues **repartent dans le pipeline habituel**
-(cache plaque, fond, colorimétrie), puis leur ordre circulaire permet
-d'afficher un **tour 360°** que l'acheteur fait pivoter au doigt.
+L'utilisateur fait le tour du véhicule **et** balaie de haut en bas. L'app
+découpe la surface à couvrir en une grille **azimut × hauteur** — 12 secteurs
+de 30° × 3 bandes (bas de caisse, ligne médiane, toit et vitrage), soit
+**36 zones** — et guide le remplissage case par case : « levez l'appareil »,
+« continuez d'avancer », « revenez en arrière, une zone a été sautée ».
 
-Ce n'est **pas** de la 3D : l'orbite est figée sur le trajet de capture, on ne
-déplace pas librement le véhicule dans une scène. C'est le compromis qui
-permet un **coût marginal nul** — voir §5.
+C'est le même schéma qu'un enrôlement d'empreinte digitale : couvrir une
+surface, zone par zone, avec un retour visuel de progression.
+
+Les vues obtenues **repartent dans le pipeline habituel** (cache plaque, fond,
+colorimétrie). Les vues de la ligne médiane, remises en ordre de secteur,
+forment ensuite un **tour 360°** que l'acheteur fait pivoter au doigt ; les
+vues basses et hautes sont livrées comme photos normales, hors carrousel.
+
+Ce n'est **pas** un modèle 3D : l'orbite reste figée sur le trajet de capture,
+on ne déplace pas librement le véhicule dans une scène. C'est le compromis qui
+permet un **coût marginal nul** — voir §5 et `BENCH_3D.md`.
 
 ---
 
@@ -34,13 +42,26 @@ importées à la main — ni plus ni moins.
 
 ```
 src/showroomInteractif.js        logique pure, testable en Node (0 dépendance
-                                 navigateur) : angles, suivi d'orbite,
-                                 analyse d'image, seuils qualité, indexation
-                                 du visualiseur
-src/components/ShowroomCapture.jsx   UI de capture (caméra, anneau, auto-shutter)
+                                 navigateur) : angles, suivi d'orbite, grille
+                                 de couverture, consignes, analyse d'image,
+                                 seuils qualité, indexation du visualiseur
+src/components/ShowroomCapture.jsx   UI de scan (caméra, grille, guidage, revue)
 src/components/Spin360.jsx           visualiseur rotatif (glisser / flèches)
-tests/showroomInteractif.test.js     30 tests sur la logique pure
+tests/showroomInteractif.test.js     47 tests sur la logique pure
 ```
+
+### Grille de couverture
+
+`createCoverageMap()` tient une grille de 12 secteurs × 3 bandes. Chaque case
+retient l'index de la prise qui l'a remplie, ce qui rend le bouton *Reprendre*
+exact : annuler une prise libère sa case.
+
+`guidanceFor()` produit la consigne. Elle privilégie un **changement de
+hauteur** (geste immédiat, sans se déplacer) sur un changement de secteur —
+d'où le poids 3 sur la distance azimutale : on finit les trois hauteurs d'un
+secteur avant d'avancer. Le renvoi en arrière n'est déclenché que si la zone
+manquante est réellement plus proche par l'arrière ; sur un cercle, un trou
+« devant » se rattrape en continuant.
 
 ### Suivi de l'orbite
 
@@ -61,11 +82,11 @@ peut donc tourner dans le sens qu'il veut.
 
 | Mode | Condition | Comportement |
 |---|---|---|
-| **Auto** | Boussole disponible et autorisée | Déclenchement automatique à chaque angle cible, si la qualité passe |
-| **Manuel** | Pas de boussole, permission refusée, ou aucun événement en 1,5 s | L'utilisateur déclenche lui-même, guidé par le compteur de vues |
+| **Auto** | Capteurs disponibles et autorisés | Secteur déduit de la boussole, hauteur du tangage (`beta`). Déclenchement automatique dès qu'on vise une zone vide avec une image correcte. |
+| **Manuel** | Pas de capteurs, permission refusée, ou aucun événement en 1,5 s | L'utilisateur choisit la hauteur avec trois boutons et déclenche lui-même ; le secteur avance d'un cran à chaque prise. |
 
 iOS exige `DeviceOrientationEvent.requestPermission()` depuis un geste
-utilisateur : c'est le bouton **Démarrer le tour** qui la demande.
+utilisateur : c'est le bouton **Démarrer le scan** qui la demande.
 
 ### Contrôles qualité
 
@@ -94,12 +115,23 @@ que bloquer l'utilisateur en plein tour.
   ordre circulaire ; y ajouter des photos à la main casserait cet ordre.
   `handleCapturedViews` remplace donc le lot et lève `spin360Mode` ;
   `handlePhotoFiles` le baisse.
-- **Le tour peut être clos avant 360°.** Un mur ou un véhicule voisin empêche
-  parfois de boucler : dès 8 vues, le bouton *Terminer* apparaît. Rester
-  coincé sans pouvoir valider serait pire qu'un tour de 20 vues.
-- **Nommage ordonné.** `frameFileName` produit `showroom360_01.jpg` …
-  `showroom360_24.jpg` : l'ordre du tour survit au tri alphabétique, donc à
-  l'export et à l'envoi par mail.
+- **Le scan peut être clos incomplet.** Un mur ou un véhicule voisin empêche
+  parfois de couvrir certaines zones. `isScanUsable()` exige seulement que la
+  **ligne médiane soit complète** — c'est elle qui porte le tour 360° — et une
+  couverture globale d'au moins deux tiers. Rester coincé sans pouvoir valider
+  serait pire qu'un scan à 80 %.
+- **Écran de revue avant le traitement.** Le scan ne déverse plus ses photos
+  dans la page principale : un écran intermédiaire montre la couverture
+  obtenue, les vignettes, et dit explicitement ce qui va se passer ensuite
+  (masquage de la plaque, fond, colorimétrie). C'est là que se joue la
+  différence entre « l'app m'a demandé des photos » et « l'app a scanné la
+  voiture ».
+- **Séparation carrousel / détails.** Seules les vues de la ligne médiane
+  entrent dans le tour 360° (`ringCount` remonté au parent) : inclure les vues
+  basses et hautes ferait sauter la rotation hors de l'orbite.
+- **Nommage ordonné.** `frameFileName` produit `showroom360_01.jpg` … pour le
+  carrousel et `showroom_detail_01.jpg` … pour le reste : l'ordre du tour
+  survit au tri alphabétique, donc à l'export et à l'envoi par mail.
 
 ---
 
@@ -113,14 +145,19 @@ librement le véhicule dans un showroom virtuel. Il a été écarté en premièr
    multi-vues (vernis spéculaire, chrome, vitrages).
 2. **Le scan embarque l'éclairage du lieu de capture** — reflets du parking
    compris. Le ré-éclairage d'un splat est un problème de recherche ouvert.
-3. **Une PWA n'a pas accès au tracking AR** (ARKit/ARCore), donc pas de
-   guidage de capture fiable sans app native.
+3. **Une PWA n'a pas accès au tracking AR** (ARKit/ARCore) : la position est
+   déduite des capteurs d'orientation, ce qui suffit à guider une couverture
+   mais pas à reconstruire une pose caméra précise.
 4. **Le coût casse le modèle** : ~0,30 à 1,50 € de GPU par scan, contre ~1 ct
    par photo aujourd'hui. Un scan ≈ un mois de consommation d'un abonné.
+5. **Ce ne serait jamais instantané** : capture, envoi de 100 à 200 photos,
+   puis plusieurs minutes de calcul. Rien à voir avec le retour immédiat d'un
+   enrôlement d'empreinte, qui se calcule sur le capteur.
 
-La couche de capture guidée construite ici est **exactement celle qu'exigerait
-un vrai scan 3D** : si le bench GPU est un jour concluant, elle est réutilisée
-telle quelle et seul le traitement aval change.
+La couche de scan guidé construite ici est **exactement celle qu'exigerait un
+vrai scan 3D** — seule la densité de vues changerait. Le protocole pour
+trancher est dans **`BENCH_3D.md`** : deux véhicules, ~150 photos, un service
+de calcul hébergé, décision sur pièces avant tout développement.
 
 ---
 
@@ -128,6 +165,7 @@ telle quelle et seul le traitement aval change.
 
 - Export du tour en fichier autonome (HTML embarquable) pour le site de la
   concession.
-- Réglage du nombre de vues (8 à 48) exposé dans l'UI ; aujourd'hui figé à 24.
-- Détection de trou d'angle : signaler les secteurs sous-échantillonnés en fin
-  de tour plutôt que de les découvrir à la lecture.
+- Densité de la grille réglable (aujourd'hui figée à 12 secteurs × 3 bandes).
+- Repérage automatique du véhicule dans le cadre pour affiner le contrôle de
+  cadrage — le modèle ONNX local (`plate-keypoints.onnx`) donne déjà un
+  indice de présence gratuit et inexploité ici.
