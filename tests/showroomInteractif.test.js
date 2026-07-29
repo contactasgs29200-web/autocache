@@ -243,3 +243,152 @@ test('frameFileName préserve l’ordre du tour au tri alphabétique', () => {
   assert.equal(names[0], 'showroom360_01.jpg');
   assert.equal(names[23], 'showroom360_24.jpg');
 });
+
+// ── Couverture 2D (scan) ─────────────────────────────────────────────────────
+
+import {
+  pitchFromBeta, bandFromPitch, sectorFromAngle, sectorDistance,
+  createCoverageMap, guidanceFor, isScanUsable,
+  AZIMUTH_SECTORS, BANDS, BAND_LABELS,
+} from '../src/showroomInteractif.js';
+
+test('pitchFromBeta ramène la visée horizontale à zéro', () => {
+  assert.equal(pitchFromBeta(90), 0);
+  assert.equal(pitchFromBeta(60), -30);
+  assert.equal(pitchFromBeta(120), 30);
+  assert.equal(pitchFromBeta(undefined), 0);
+});
+
+test('bandFromPitch classe les trois hauteurs de visée', () => {
+  assert.equal(bandFromPitch(-40), 'low');
+  assert.equal(bandFromPitch(0), 'mid');
+  assert.equal(bandFromPitch(40), 'high');
+  // Aux bornes exactes, on bascule dans la bande extrême.
+  assert.equal(bandFromPitch(-12), 'low');
+  assert.equal(bandFromPitch(12), 'high');
+});
+
+test('sectorFromAngle découpe le tour en secteurs', () => {
+  assert.equal(sectorFromAngle(0, 12), 0);
+  assert.equal(sectorFromAngle(29, 12), 0);
+  assert.equal(sectorFromAngle(30, 12), 1);
+  assert.equal(sectorFromAngle(359, 12), 11);
+  assert.equal(sectorFromAngle(360, 12), 0);
+});
+
+test('sectorDistance est circulaire', () => {
+  assert.equal(sectorDistance(0, 0, 12), 0);
+  assert.equal(sectorDistance(0, 1, 12), 1);
+  assert.equal(sectorDistance(0, 11, 12), 1);   // par le tour court
+  assert.equal(sectorDistance(0, 6, 12), 6);
+});
+
+test('createCoverageMap suit le remplissage', () => {
+  const c = createCoverageMap(12, BANDS);
+  assert.equal(c.total, 36);
+  assert.equal(c.filled, 0);
+  assert.equal(c.complete, false);
+  assert.equal(c.mark(0, 'mid', 0), true);
+  assert.equal(c.mark(0, 'mid', 1), false);      // déjà couverte
+  assert.equal(c.filled, 1);
+  assert.equal(c.isCovered(0, 'mid'), true);
+  assert.equal(c.isCovered(0, 'low'), false);
+  assert.ok(Math.abs(c.ratio - 1 / 36) < 1e-9);
+});
+
+test('createCoverageMap se complète et se vide', () => {
+  const c = createCoverageMap(2, BANDS);
+  let k = 0;
+  for (let s = 0; s < 2; s++) for (const b of BANDS) c.mark(s, b, k++);
+  assert.equal(c.complete, true);
+  assert.equal(c.missing().length, 0);
+  assert.equal(c.unmarkShot(0), true);
+  assert.equal(c.complete, false);
+  assert.equal(c.unmarkShot(999), false);
+});
+
+test('createCoverageMap.snapshot reflète la grille', () => {
+  const c = createCoverageMap(4, BANDS);
+  c.mark(2, 'high', 0);
+  const snap = c.snapshot();
+  assert.equal(snap.length, 3);
+  const high = snap.find(r => r.band === 'high');
+  assert.deepEqual(high.cells, [false, false, true, false]);
+});
+
+test('guidanceFor déclenche sur une case vide', () => {
+  const c = createCoverageMap(12, BANDS);
+  const g = guidanceFor(c, 0, 'mid');
+  assert.equal(g.action, 'capture');
+  assert.match(g.message, new RegExp(BAND_LABELS.mid));
+});
+
+test('guidanceFor demande de lever ou baisser avant de tourner', () => {
+  const c = createCoverageMap(12, BANDS);
+  c.mark(0, 'mid', 0);
+  // Il reste low et high dans le secteur courant : pas de déplacement demandé.
+  const g = guidanceFor(c, 0, 'mid');
+  assert.ok(['tilt_up', 'tilt_down'].includes(g.action), g.action);
+  assert.equal(g.target.sector, 0);
+});
+
+test('guidanceFor fait avancer quand le secteur est complet', () => {
+  const c = createCoverageMap(12, BANDS);
+  for (const b of BANDS) c.mark(0, b, 0);
+  const g = guidanceFor(c, 0, 'mid');
+  assert.equal(g.action, 'advance');
+});
+
+test('guidanceFor renvoie en arrière sur une zone juste derrière', () => {
+  const c = createCoverageMap(12, BANDS);
+  // Tout couvert sauf le secteur 6, alors que l'utilisateur est déjà en 8 :
+  // 2 secteurs en arrière contre 10 en avant.
+  for (let s = 0; s < 12; s++) for (const b of BANDS) if (s !== 6) c.mark(s, b, 0);
+  const g = guidanceFor(c, 8, 'mid', 1);
+  assert.equal(g.action, 'back');
+  assert.equal(g.target.sector, 6);
+});
+
+test('guidanceFor fait continuer quand le trou est plus proche par l’avant', () => {
+  const c = createCoverageMap(12, BANDS);
+  // Trou en secteur 1, utilisateur en 8 : 5 secteurs en avant (en passant par
+  // 0) contre 7 en arrière — sur un cercle, on continue.
+  for (let s = 0; s < 12; s++) for (const b of BANDS) if (s !== 1) c.mark(s, b, 0);
+  const g = guidanceFor(c, 8, 'mid', 1);
+  assert.equal(g.action, 'advance');
+  assert.equal(g.target.sector, 1);
+});
+
+test('guidanceFor signale le scan complet', () => {
+  const c = createCoverageMap(2, BANDS);
+  let k = 0;
+  for (let s = 0; s < 2; s++) for (const b of BANDS) c.mark(s, b, k++);
+  assert.equal(guidanceFor(c, 0, 'mid').action, 'done');
+});
+
+test('guidanceFor survit à une couverture absente', () => {
+  assert.equal(guidanceFor(null, 0, 'mid').action, 'wait');
+});
+
+test('isScanUsable exige la ligne médiane complète', () => {
+  const c = createCoverageMap(12, BANDS);
+  // Toutes les bandes sauf la médiane : inexploitable malgré un bon ratio.
+  for (let s = 0; s < 12; s++) { c.mark(s, 'low', 0); c.mark(s, 'high', 0); }
+  assert.equal(isScanUsable(c), false);
+  for (let s = 0; s < 12; s++) c.mark(s, 'mid', 0);
+  assert.equal(isScanUsable(c), true);
+});
+
+test('isScanUsable tolère des trous hors ligne médiane', () => {
+  const c = createCoverageMap(12, BANDS);
+  for (let s = 0; s < 12; s++) c.mark(s, 'mid', 0);
+  for (let s = 0; s < 8; s++) { c.mark(s, 'low', 0); c.mark(s, 'high', 0); }
+  assert.ok(c.ratio >= 0.66);
+  assert.equal(isScanUsable(c), true);
+});
+
+test('AZIMUTH_SECTORS et BANDS restent cohérents', () => {
+  assert.equal(AZIMUTH_SECTORS, 12);
+  assert.deepEqual(BANDS, ['low', 'mid', 'high']);
+  BANDS.forEach(b => assert.ok(BAND_LABELS[b], `libellé manquant pour ${b}`));
+});

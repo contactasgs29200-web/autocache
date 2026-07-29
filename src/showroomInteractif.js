@@ -263,3 +263,158 @@ export function frameFileName(index, total, prefix = 'showroom360') {
   const width = String(clampViews(total)).length;
   return `${prefix}_${String(index + 1).padStart(width, '0')}.jpg`;
 }
+
+// =============================================================================
+//  Couverture 2D — le « scan » proprement dit.
+//
+//  Un simple tour horizontal laisse le bas de caisse et le pavillon non
+//  couverts. On découpe donc la surface à parcourir en une grille
+//  azimut × élévation : l'utilisateur doit remplir toutes les cases, guidé par
+//  des consignes directionnelles, comme un enrôlement d'empreinte remplit la
+//  surface du doigt.
+// =============================================================================
+
+export const AZIMUTH_SECTORS = 12;          // 12 secteurs de 30° autour du véhicule
+export const BANDS = ['low', 'mid', 'high'];
+
+export const BAND_LABELS = {
+  low: 'bas de caisse',
+  mid: 'ligne médiane',
+  high: 'toit et vitrage',
+};
+
+// Tangage de visée, en degrés : 0 = appareil vertical (visée horizontale),
+// négatif = caméra inclinée vers le bas, positif = vers le haut.
+export const BAND_PITCH_LIMITS = { lowMax: -12, highMin: 12 };
+
+/**
+ * Convertit l'angle `beta` de DeviceOrientation en tangage de visée.
+ * beta ≈ 90 quand l'appareil est tenu verticalement, écran face à soi.
+ */
+export function pitchFromBeta(beta) {
+  if (!Number.isFinite(beta)) return 0;
+  return beta - 90;
+}
+
+/** Bande d'élévation visée pour un tangage donné. */
+export function bandFromPitch(pitchDeg) {
+  const p = Number.isFinite(pitchDeg) ? pitchDeg : 0;
+  if (p <= BAND_PITCH_LIMITS.lowMax) return 'low';
+  if (p >= BAND_PITCH_LIMITS.highMin) return 'high';
+  return 'mid';
+}
+
+/** Secteur azimutal (0..sectors-1) pour un angle parcouru. */
+export function sectorFromAngle(progressDeg, sectors = AZIMUTH_SECTORS) {
+  const n = Math.max(1, Math.round(sectors));
+  return Math.floor(normalizeAngle(progressDeg) / (360 / n)) % n;
+}
+
+/** Distance circulaire entre deux secteurs, en nombre de secteurs. */
+export function sectorDistance(a, b, sectors = AZIMUTH_SECTORS) {
+  const n = Math.max(1, Math.round(sectors));
+  const d = Math.abs(((a - b) % n + n) % n);
+  return Math.min(d, n - d);
+}
+
+/**
+ * Grille de couverture azimut × élévation.
+ * Chaque case retient l'index de la prise qui l'a remplie (ou null).
+ */
+export function createCoverageMap(sectors = AZIMUTH_SECTORS, bands = BANDS) {
+  const n = Math.max(1, Math.round(sectors));
+  const cells = new Map();                       // "sector:band" → shotIndex
+  const key = (s, b) => `${s}:${b}`;
+
+  return {
+    sectors: n,
+    bands: [...bands],
+    get total() { return n * bands.length; },
+    get filled() { return cells.size; },
+    get ratio() { return cells.size / (n * bands.length); },
+    get complete() { return cells.size >= n * bands.length; },
+
+    isCovered(sector, band) { return cells.has(key(sector, band)); },
+    mark(sector, band, shotIndex) {
+      if (cells.has(key(sector, band))) return false;
+      cells.set(key(sector, band), shotIndex);
+      return true;
+    },
+    /** Retire la dernière prise (bouton « Reprendre »). */
+    unmarkShot(shotIndex) {
+      for (const [k, v] of cells) if (v === shotIndex) { cells.delete(k); return true; }
+      return false;
+    },
+    /** Cases encore vides, dans l'ordre secteur puis bande. */
+    missing() {
+      const out = [];
+      for (let s = 0; s < n; s++) {
+        for (const b of bands) if (!cells.has(key(s, b))) out.push({ sector: s, band: b });
+      }
+      return out;
+    },
+    /** Vue à plat pour le rendu de la grille. */
+    snapshot() {
+      return bands.map(b => ({
+        band: b,
+        cells: Array.from({ length: n }, (_, s) => cells.has(key(s, b))),
+      }));
+    },
+  };
+}
+
+/**
+ * Consigne à afficher, d'après la position visée et ce qu'il reste à couvrir.
+ *
+ * Priorité : si la case visée est vide, on y déclenche. Sinon on désigne la
+ * case manquante la plus proche, en privilégiant un changement de hauteur
+ * (geste immédiat, sans se déplacer) sur un changement de secteur.
+ */
+export function guidanceFor(coverage, sector, band, direction = 1) {
+  if (!coverage) return { action: 'wait', message: 'Initialisation…' };
+  if (coverage.complete) return { action: 'done', message: 'Scan complet' };
+
+  if (!coverage.isCovered(sector, band)) {
+    return { action: 'capture', message: `Maintenez — ${BAND_LABELS[band]}`, sector, band };
+  }
+
+  const bands = coverage.bands;
+  const bandIndex = b => bands.indexOf(b);
+  let best = null;
+  for (const cell of coverage.missing()) {
+    // Tourner coûte plus cher que lever ou baisser le téléphone : le poids 3
+    // pousse à finir les trois hauteurs d'un secteur avant d'avancer.
+    const cost = sectorDistance(cell.sector, sector, coverage.sectors) * 3
+      + Math.abs(bandIndex(cell.band) - bandIndex(band));
+    if (!best || cost < best.cost) best = { ...cell, cost };
+  }
+  if (!best) return { action: 'done', message: 'Scan complet' };
+
+  const dBand = bandIndex(best.band) - bandIndex(band);
+  const dSector = sectorDistance(best.sector, sector, coverage.sectors);
+
+  if (dSector === 0) {
+    return dBand > 0
+      ? { action: 'tilt_up', message: `Levez l’appareil — ${BAND_LABELS[best.band]}`, target: best }
+      : { action: 'tilt_down', message: `Baissez l’appareil — ${BAND_LABELS[best.band]}`, target: best };
+  }
+
+  // Sens de marche : on renvoie l'utilisateur en avant par défaut, en arrière
+  // seulement si la case manquante est nettement derrière lui.
+  const n = coverage.sectors;
+  const ahead = ((best.sector - sector) * (direction >= 0 ? 1 : -1) % n + n) % n;
+  return ahead <= n / 2
+    ? { action: 'advance', message: 'Continuez d’avancer autour du véhicule', target: best }
+    : { action: 'back', message: 'Revenez en arrière — une zone a été sautée', target: best };
+}
+
+/**
+ * Un scan est-il exploitable ? On tolère des trous, mais pas un tour amputé :
+ * la ligne médiane doit être complète (c'est elle qui porte le tour 360°) et la
+ * couverture globale doit dépasser les deux tiers.
+ */
+export function isScanUsable(coverage) {
+  if (!coverage) return false;
+  const midMissing = coverage.missing().filter(c => c.band === 'mid').length;
+  return midMissing === 0 && coverage.ratio >= 0.66;
+}
