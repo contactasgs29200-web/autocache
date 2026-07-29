@@ -20,6 +20,8 @@
 //   ?letterbox=on   ancien prétraitement letterbox au lieu de l'étirement
 //   ?zoom=on        active la 2e passe sur recadrage (désactivée par défaut)
 
+import { freeCanvas, releaseImg } from './imageMemory.js';
+
 const MODEL_URL = '/models/plate-keypoints.onnx';
 const IMGSZ = 640;
 const CONF_THRESHOLD = 0.30;
@@ -142,6 +144,7 @@ function preprocess(img, rect) {
   ctx.drawImage(img, sx, sy, sw, sh, padX, padY, drawW, drawH);
 
   const { data } = ctx.getImageData(0, 0, IMGSZ, IMGSZ);
+  freeCanvas(c); // pixels lus : on rend le backing-store tout de suite
   const area = IMGSZ * IMGSZ;
   const chw = new Float32Array(3 * area);
   for (let i = 0; i < area; i++) {
@@ -276,37 +279,44 @@ export async function detectPlateKeypoints(imageInput) {
   const W = img.naturalWidth || img.width;
   const H = img.naturalHeight || img.height;
 
-  // ── Passe 1 : photo entière, pour localiser la plaque ──
-  const p1 = await runPass(ort, session, img, { sx: 0, sy: 0, sw: W, sh: H });
-  if (!p1) {
-    // Pas de plaque fiable pour ce modèle → on laisse la chaîne de secours
-    // (Plate Recognizer/Claude) décider plutôt que d'affirmer « pas de plaque ».
-    return null;
-  }
-
-  // ── Passe 2 : recadrage plein format autour de la plaque, pour la POSER ──
-  let final = p1, note = 'passe unique';
-  if (zoomEnabled()) {
-    const rect = zoomRect(p1.corners, W, H);
-    if (rect) {
-      const p2 = await runPass(ort, session, img, rect);
-      const verdict = acceptZoom(p1, p2);
-      if (verdict.ok) {
-        final = p2;
-        note = `zoom ×${rect.zoom.toFixed(1)} retenu, conf ${p1.conf.toFixed(2)}→${p2.conf.toFixed(2)}`;
-      } else {
-        note = `zoom ×${rect.zoom.toFixed(1)} écarté — ${verdict.why} (passe 1 conservée)`;
-      }
-    } else {
-      note = 'zoom inutile (plaque déjà grande)';
+  try {
+    // ── Passe 1 : photo entière, pour localiser la plaque ──
+    const p1 = await runPass(ort, session, img, { sx: 0, sy: 0, sw: W, sh: H });
+    if (!p1) {
+      // Pas de plaque fiable pour ce modèle → on laisse la chaîne de secours
+      // (Plate Recognizer/Claude) décider plutôt que d'affirmer « pas de plaque ».
+      return null;
     }
+
+    // ── Passe 2 : recadrage plein format autour de la plaque, pour la POSER ──
+    let final = p1, note = 'passe unique';
+    if (zoomEnabled()) {
+      const rect = zoomRect(p1.corners, W, H);
+      if (rect) {
+        const p2 = await runPass(ort, session, img, rect);
+        const verdict = acceptZoom(p1, p2);
+        if (verdict.ok) {
+          final = p2;
+          note = `zoom ×${rect.zoom.toFixed(1)} retenu, conf ${p1.conf.toFixed(2)}→${p2.conf.toFixed(2)}`;
+        } else {
+          note = `zoom ×${rect.zoom.toFixed(1)} écarté — ${verdict.why} (passe 1 conservée)`;
+        }
+      } else {
+        note = 'zoom inutile (plaque déjà grande)';
+      }
+    }
+
+    // Pixels d'origine → repère normalisé [0,1] attendu par detectPlate().
+    const corners = final.corners.map((p) => ({ x: clamp01(p.x / W), y: clamp01(p.y / H) }));
+    const xs = corners.map((p) => p.x), ys = corners.map((p) => p.y);
+    const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+
+    console.log(`[Keypoints] plaque détectée conf=${final.conf.toFixed(2)} — coins maison (${note})`);
+    return { found: true, conf: final.conf, bbox, corners, source: 'keypoints' };
+  } finally {
+    // Bitmap plein format de la photo (~50 Mo pour 12 Mpx) : rendu dès la
+    // dernière passe, sans attendre le ramasse-miettes. Sur mobile, plusieurs
+    // détections en vol pendant un lot suffisaient sinon à faire tuer l'onglet.
+    releaseImg(img);
   }
-
-  // Pixels d'origine → repère normalisé [0,1] attendu par detectPlate().
-  const corners = final.corners.map((p) => ({ x: clamp01(p.x / W), y: clamp01(p.y / H) }));
-  const xs = corners.map((p) => p.x), ys = corners.map((p) => p.y);
-  const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
-
-  console.log(`[Keypoints] plaque détectée conf=${final.conf.toFixed(2)} — coins maison (${note})`);
-  return { found: true, conf: final.conf, bbox, corners, source: 'keypoints' };
 }

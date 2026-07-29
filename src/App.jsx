@@ -7,6 +7,10 @@ import AuthTransition, { AUTH_MOTION_CSS, AUTH_EXIT_MS, prefersReducedMotion } f
 import ProcessingIndicator, { ProcessingLabel, PROCESSING_MOTION_CSS, PROCESSING_EXIT_MS } from "./components/ProcessingMotion.jsx";
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
+import {
+  isMobileDevice, freeCanvas, releaseImg, loadImg, breathe,
+  thumbFromCanvas, thumbFromDataURL, thumbURLFromFile,
+} from "./imageMemory.js";
 import ShowroomCapture from "./components/ShowroomCapture.jsx";
 import Spin360 from "./components/Spin360.jsx";
 import { isSpinUsable } from "./showroomInteractif.js";
@@ -297,36 +301,6 @@ function makeWallTextDataURL(text, color, fontKey = "rajdhani", strokeColor = nu
     ctx.stroke();
   }
   return c.toDataURL("image/png");
-}
-
-function toBase64(file, maxPx = 1600, quality = 0.92) {
-  return new Promise((res, rej) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const w = img.naturalWidth || img.width;
-      const h = img.naturalHeight || img.height;
-      const scale = Math.min(1, maxPx / Math.max(w, h));
-      const c = document.createElement("canvas");
-      c.width = Math.round(w * scale);
-      c.height = Math.round(h * scale);
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-      URL.revokeObjectURL(url);
-      res({ b64: c.toDataURL("image/jpeg", quality).split(",")[1], imgW: c.width, imgH: c.height });
-    };
-    img.onerror = rej;
-    img.src = url;
-  });
-}
-
-function loadImg(src) {
-  return new Promise((res, rej) => {
-    const i = new Image();
-    i.crossOrigin = "anonymous";
-    i.onload = () => res(i);
-    i.onerror = rej;
-    i.src = src;
-  });
 }
 
 // Tailles d'essai successives (côté le plus long) pour ranger le logo dans le
@@ -932,22 +906,6 @@ function makeShowroomBackground(index, W, H) {
 const SHOWROOM_IMAGES = ['/showrooms/Luxury.jpeg', '/showrooms/blanc.jpg', '/showrooms/Classique.jpeg', '/showrooms/Clean.jpeg'];
 const SHOWROOM_LABELS = ['Luxury', 'Showroom Blanc', 'Classique', 'Garage'];
 const SHOWROOM_THUMBS = [0, 1, 2, 3].map(i => SHOWROOM_IMAGES[i] ?? makeShowroomBackground(i, 160, 90));
-
-// Libère immédiatement le backing-store (RAM/GPU) d'un canvas temporaire au lieu
-// d'attendre le ramasse-miettes. Décisif sur mobile : sans ça, les canvas du
-// pipeline Showroom s'accumulent et la pression mémoire fait recharger l'onglet
-// (symptôme « retour à l'accueil »). N'affecte ni la résolution ni la qualité du
-// rendu final — on ne libère que des canvas intermédiaires déjà exploités.
-// Appareil mobile (iOS/Android) : WebKit tue l'onglet (page blanche + retour
-// accueil) quand la mémoire canvas cumulée explose. Les pipelines plafonnent
-// leurs résolutions de travail sur ces appareils.
-function isMobileDevice() {
-  return typeof navigator !== "undefined" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-}
-
-function freeCanvas(...cs) {
-  for (const c of cs) { if (c) { c.width = 0; c.height = 0; } }
-}
 
 // Redimensionne un dataUrl à maxPx max (côté le plus long) pour alléger l'envoi API
 function shrinkDataUrl(dataUrl, maxPx = 1024, quality = 0.88) {
@@ -2681,8 +2639,10 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH, baseDataURL = n
 }
 
 async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2, autoPlate = true, preDetectedPlate = undefined) {
-  const { b64, imgW, imgH } = await toBase64(photoFile);
-
+  // NB : aucune conversion base64 préalable ici. Il y en avait une, dont le
+  // résultat n'était utilisé nulle part : elle décodait la photo en entier et
+  // produisait une chaîne de plusieurs Mo, jetée aussitôt — un décodage plein
+  // format de trop par photo, payé sur le budget mémoire de l'onglet mobile.
   const photoURL = URL.createObjectURL(photoFile);
   const photoImg = await loadImg(photoURL);
   URL.revokeObjectURL(photoURL);
@@ -2753,6 +2713,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.filter = `brightness(${adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation})`;
   ctx.drawImage(photoImg, 0, 0, c.width, c.height);
   ctx.filter = "none";
+  // La photo source est copiée dans le canvas de travail : son bitmap plein
+  // format (jusqu'à ~50 Mo) n'a plus d'utilité, on le rend tout de suite.
+  releaseImg(photoImg);
   // Amélioration couleurs (canvas) — intensité réglable pour enhancePro
   // Try/catch défensif : on ne laisse JAMAIS une exception sur une photo
   // empêcher silencieusement l'application de la correction colorimétrique.
@@ -2826,7 +2789,17 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
   const yoloCorners = yolo?.corners ?? null;
   const yoloSource  = yolo ? (yolo.source || 'platerecognizer') : null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, autoPlateOff: !autoPlate, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloSource, imgW: c.width, imgH: c.height };
+  const outW = c.width, outH = c.height;
+  const processed = c.toDataURL("image/jpeg", 0.97);
+  // Vignette pour la grille de résultats, prise sur le canvas encore chaud.
+  // Sans elle, chaque carte de la grille affichait le rendu plein format
+  // (jusqu'à 2400 px) que le navigateur devait décoder : ~17 Mo de bitmap par
+  // photo traitée, cumulés jusqu'à faire tuer l'onglet sur mobile.
+  const thumb = thumbFromCanvas(c);
+  // Canvas de travail exploité (dataURL + vignette extraits) : on rend sa
+  // mémoire maintenant plutôt qu'au prochain ramasse-miettes.
+  freeCanvas(c);
+  return { name: photoFile.name, processed, thumb, plateFound, autoPlateOff: !autoPlate, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloSource, imgW: outW, imgH: outH };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -3449,12 +3422,15 @@ export default function AutoCache() {
     }
   }, [user, authLoading, entering]);
 
-  // ── Préchauffe le module @imgly/background-removal dès que l'utilisateur
-  // est authentifié, pour ne plus payer le coût d'init au premier traitement.
+  // ── Préchauffe les modèles utiles dès que l'utilisateur est authentifié,
+  // pour ne plus payer le coût d'init au premier traitement.
+  // @imgly/background-removal ne sert QU'au Showroom : tant qu'il est
+  // indisponible, le précharger ne fait que consommer de la bande passante et
+  // de la mémoire — cher payé sur un smartphone, pour un module jamais appelé.
   useEffect(() => {
     if (!user || authLoading) return;
     const idleCb = window.requestIdleCallback ?? ((cb) => setTimeout(cb, 1500));
-    const handle = idleCb(() => { preloadBackgroundRemoval(); preloadPlateKeypoints(); });
+    const handle = idleCb(() => { if (!SHOWROOM_COMING_SOON) preloadBackgroundRemoval(); preloadPlateKeypoints(); });
     return () => {
       if (window.cancelIdleCallback && typeof handle === 'number') window.cancelIdleCallback(handle);
     };
@@ -3576,11 +3552,56 @@ export default function AutoCache() {
     img.src = srcDataURL;
   };
 
+  // ── Vignettes des photos importées ───────────────────────────────────────
+  // Les fichiers arrivent d'un appareil photo de smartphone : 12 Mpx, soit
+  // ~50 Mo de bitmap chacun une fois décodé. Afficher les originaux dans la
+  // grille de sélection saturait le thread principal (des blocs de la page
+  // restaient invisibles pendant l'apparition des photos) et gonflait la
+  // mémoire avant même le traitement. On génère donc une vignette par photo,
+  // UNE À LA FOIS (un seul décodage plein format en vol) : la grille affiche
+  // un emplacement gris puis la vignette dès qu'elle est prête, et la page
+  // reste peinte pendant ce temps. `file` reste l'original, intact.
+  const droppedPhotoIdsRef = useRef(new Set());
+
+  const buildPhotoThumbs = async entries => {
+    for (const e of entries) {
+      const url = await thumbURLFromFile(e.file);
+      if (droppedPhotoIdsRef.current.has(e.id)) {
+        droppedPhotoIdsRef.current.delete(e.id);
+        URL.revokeObjectURL(url); // photo retirée entre-temps
+        continue;
+      }
+      setPhotos(prev => prev.map(p => (p.id === e.id ? { ...p, preview: url } : p)));
+      await breathe(0); // rend la main au navigateur entre deux décodages
+    }
+  };
+
   const handlePhotoFiles = files => {
     const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
-    setPhotos(prev => [...prev, ...imgs.map(f => ({ file: f, preview: URL.createObjectURL(f), id: `${f.name}-${Math.random()}` }))]);
+    if (!imgs.length) return;
+    const entries = imgs.map(f => ({ file: f, preview: null, id: `${f.name}-${Math.random()}` }));
+    setPhotos(prev => [...prev, ...entries]);
     // Ajouter des photos à la main casse l'ordre circulaire du tour : le lot
     // n'est plus présentable en 360°.
+    setSpin360Mode(false);
+    buildPhotoThumbs(entries);
+  };
+
+  // Retirer / vider libère les vignettes : sans révocation, la mémoire des
+  // blob URLs ne redescend jamais tant que l'onglet est ouvert.
+  const releasePhotoPreviews = list => {
+    for (const p of list) {
+      if (p.preview) URL.revokeObjectURL(p.preview);
+      else droppedPhotoIdsRef.current.add(p.id); // vignette encore en cours
+    }
+  };
+  const removePhoto = id => {
+    releasePhotoPreviews(photos.filter(p => p.id === id));
+    setPhotos(prev => prev.filter(p => p.id !== id));
+  };
+  const clearPhotos = () => {
+    releasePhotoPreviews(photos);
+    setPhotos([]);
     setSpin360Mode(false);
   };
 
@@ -3590,10 +3611,12 @@ export default function AutoCache() {
   const handleCapturedViews = (files, meta = {}) => {
     const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
     if (!imgs.length) return;
-    photos.forEach(p => URL.revokeObjectURL(p.preview));
-    setPhotos(imgs.map((f, i) => ({ file: f, preview: URL.createObjectURL(f), id: `spin-${i}-${Math.random()}` })));
+    releasePhotoPreviews(photos);
+    const entries = imgs.map((f, i) => ({ file: f, preview: null, id: `spin-${i}-${Math.random()}` }));
+    setPhotos(entries);
     setSpinRingCount(meta.ringCount ?? imgs.length);
     setSpin360Mode(true);
+    buildPhotoThumbs(entries);
   };
 
   const startAfterInfo = async () => {
@@ -3647,10 +3670,16 @@ export default function AutoCache() {
           : (SHOWROOM_IMAGES[showroomSetupBg] ?? makeShowroomBackground(showroomSetupBg, 2400, 1350)))
       : null;
 
-    // ── Pipelining : la détection de plaque (réseau, plusieurs secondes) des
-    // photos suivantes tourne PENDANT le rendu canvas/showroom (local) de la
-    // photo courante, au lieu d'attendre son tour. Deux détections d'avance
-    // maximum : latence divisée sans pic mémoire (les appels sont réseau).
+    // ── Pipelining : la détection de plaque (plusieurs secondes) des photos
+    // suivantes tourne PENDANT le rendu canvas/showroom (local) de la photo
+    // courante, au lieu d'attendre son tour.
+    //
+    // Profondeur réduite sur mobile. Une détection n'est pas qu'un appel
+    // réseau : elle décode la photo EN PLEINE RÉSOLUTION (~50 Mo de bitmap)
+    // et fait tourner le modèle keypoints dans le navigateur. Trois en vol
+    // en même temps que le rendu de la photo courante, c'est le pic qui
+    // faisait tuer l'onglet dès le troisième fichier (« retour à l'accueil »).
+    const PLATE_PREFETCH = isMobileDevice() ? 1 : 2; // détections d'avance
     const plateJobs = new Array(photosToProcess.length).fill(undefined);
     const startPlateJob = (idx) => {
       if (idx >= 0 && idx < photosToProcess.length && plateJobs[idx] === undefined) {
@@ -3659,10 +3688,10 @@ export default function AutoCache() {
           : Promise.resolve(null);
       }
     };
-    startPlateJob(0); startPlateJob(1);
+    for (let d = 0; d <= PLATE_PREFETCH; d++) startPlateJob(d);
 
     for (let i = 0; i < photosToProcess.length; i++) {
-      startPlateJob(i + 1); startPlateJob(i + 2);
+      for (let d = 1; d <= PLATE_PREFETCH; d++) startPlateJob(i + d);
       const plateResult = await plateJobs[i];
       const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomActive, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate, plateResult);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
@@ -3869,12 +3898,21 @@ export default function AutoCache() {
         entry.signBaseUrl  = base; // conservée pour déplacer/redimensionner l'enseigne
         try {
           const baked = await overlaySignOnImage(base, signImageUrl, pos, scale);
-          if (entry.showroomDataURL) entry.showroomDataURL = baked; else entry.processed = baked;
+          if (entry.showroomDataURL) entry.showroomDataURL = baked; else {
+            entry.processed = baked;
+            // La vignette datait d'avant l'enseigne : on la refait sur le
+            // rendu final (sinon la grille afficherait le plein format).
+            entry.thumb = await thumbFromDataURL(baked);
+          }
         } catch (e) { console.error('Sign overlay error:', e); }
       }
       all.push(entry);
       setResults([...all]);
-      setProgress({ n: i + 1, total: photos.length });
+      setProgress({ n: i + 1, total: photosToProcess.length });
+      // Respiration entre deux photos : le navigateur peint la progression et
+      // récupère la mémoire des canvas qu'on vient de libérer. Enchaîner sans
+      // pause est précisément ce qui faisait planter le lot sur smartphone.
+      await breathe();
     }
     // Mettre à jour le compteur de photos utilisées
     const newCount = photosUsed + photosToProcess.length;
@@ -4147,6 +4185,7 @@ export default function AutoCache() {
     // session à l'autre (cf. restauration depuis localStorage). L'effacer ici
     // le faisait disparaître de l'écran à la reconnexion, alors qu'il était
     // toujours enregistré — il ne revenait qu'après un rechargement de page.
+    releasePhotoPreviews(photos);
     setPhotos([]); setResults([]); setTab("setup"); setSpin360Mode(false);
   };
 
@@ -4407,7 +4446,9 @@ export default function AutoCache() {
                      br: remap(lightbox.corners.br), bl: remap(lightbox.corners.bl) };
     }
     const updated = { ...lightbox, processed: croppedProcessed,
-      baseDataURL: croppedBase ?? lightbox.baseDataURL, corners: newCorners, cropped: true };
+      baseDataURL: croppedBase ?? lightbox.baseDataURL, corners: newCorners, cropped: true,
+      // La vignette de la grille suit le rendu (sinon : image d'avant rognage)
+      thumb: await thumbFromDataURL(croppedProcessed) };
     setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
     setLightbox(updated);
     setAdjustCorners(newCorners);
@@ -4624,7 +4665,7 @@ export default function AutoCache() {
     } else {
       // Mode normal : sauvegarde la photo avec le cache plaque
       const url = sign ? await overlaySignOnImage(flatURL, sign, sPos, sScale) : flatURL;
-      const updated = { ...lightbox, processed: url, corners: latestCorners, ...(sign ? { signBaseUrl: flatURL } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
+      const updated = { ...lightbox, processed: url, corners: latestCorners, thumb: await thumbFromDataURL(url), ...(sign ? { signBaseUrl: flatURL } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       // Régénère le showroom avec les nouveaux coins si showroom actif
@@ -4679,7 +4720,8 @@ export default function AutoCache() {
     const updated = { ...snap, signPos: live.pos, signScale: live.scale };
     try {
       const baked = await overlaySignOnImage(baseClean, snap.signImageUrl, live.pos, live.scale);
-      if (snap.showroomDataURL) updated.showroomDataURL = baked; else updated.processed = baked;
+      if (snap.showroomDataURL) updated.showroomDataURL = baked;
+      else { updated.processed = baked; updated.thumb = await thumbFromDataURL(baked); }
     } catch (err) { console.error('sign rebake', err); }
     setLightbox(prev => prev?.name === updated.name ? updated : prev);
     setResults(prev => prev.map(r => r.name === updated.name ? updated : r));
@@ -5443,15 +5485,19 @@ export default function AutoCache() {
                     <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(4, 1fr)" : "repeat(5, 1fr)", gap: 5, maxHeight: 210, overflowY: "auto", marginBottom: 10 }}>
                       {photos.map(p => (
                         <div key={p.id} style={{ position: "relative" }}>
-                          <img src={p.preview} style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", borderRadius: 2, border: "1px solid var(--c-252525)", display: "block" }} />
-                          <button onClick={e => { e.stopPropagation(); setPhotos(prev => prev.filter(x => x.id !== p.id)); }}
+                          {/* preview = vignette réduite (jamais l'original 12 Mpx) ;
+                              null = pas encore générée → emplacement neutre. */}
+                          {p.preview
+                            ? <img src={p.preview} loading="lazy" decoding="async" style={{ width: "100%", aspectRatio: "4/3", objectFit: "cover", borderRadius: 2, border: "1px solid var(--c-252525)", display: "block" }} />
+                            : <div style={{ width: "100%", aspectRatio: "4/3", borderRadius: 2, border: "1px solid var(--c-252525)", background: "var(--c-1e1e1e)" }} />}
+                          <button onClick={e => { e.stopPropagation(); removePhoto(p.id); }}
                             style={{ position: "absolute", top: 2, right: 2, width: 15, height: 15, borderRadius: "50%", background: "#f26522", border: "none", color: "#090909", fontSize: 10, cursor: "pointer", fontWeight: 700 }}>×</button>
                         </div>
                       ))}
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <span style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)" }}>{photos.length} photo{photos.length > 1 ? "s" : ""}</span>
-                      <button onClick={() => { setPhotos([]); setSpin360Mode(false); }} style={{ background: "transparent", border: "1px solid var(--c-1e1e1e)", color: "var(--c-ddd)", padding: "3px 10px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>Tout effacer</button>
+                      <button onClick={clearPhotos} style={{ background: "transparent", border: "1px solid var(--c-1e1e1e)", color: "var(--c-ddd)", padding: "3px 10px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>Tout effacer</button>
                     </div>
                   </>
                 )}
@@ -5522,8 +5568,8 @@ export default function AutoCache() {
                               const sel = signSelectedIds.has(p.id);
                               return (
                                 <div key={p.id} onClick={() => setSignSelectedIds(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
-                                  style={{ position: "relative", paddingTop: "70%", borderRadius: 3, overflow: "hidden", cursor: "pointer", border: `2px solid ${sel ? "#f26522" : "transparent"}` }}>
-                                  <img src={p.preview} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: sel ? 1 : 0.45 }} />
+                                  style={{ position: "relative", paddingTop: "70%", borderRadius: 3, overflow: "hidden", cursor: "pointer", border: `2px solid ${sel ? "#f26522" : "transparent"}`, background: "var(--c-1e1e1e)" }}>
+                                  {p.preview && <img src={p.preview} loading="lazy" decoding="async" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: sel ? 1 : 0.45 }} />}
                                   {sel && <div style={{ position: "absolute", top: 3, right: 3, width: 16, height: 16, borderRadius: "50%", background: "#f26522", color: "#090909", fontSize: 11, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>}
                                 </div>
                               );
@@ -5662,7 +5708,12 @@ export default function AutoCache() {
                   {results.map((r, i) => (
                     <div key={i} style={{ background: "var(--c-161616)", border: "1px solid var(--c-252525)", borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ position: "relative", cursor: "zoom-in" }} onClick={() => openLightbox(r)} title="Cliquer pour agrandir">
-                        <img src={r.showroomDataURL || r.processed} style={{ width: "100%", aspectRatio: "4 / 3", objectFit: "contain", background: "var(--c-1e1e1e)", display: "block" }} />
+                        {/* Vignette (r.thumb) et non le rendu plein format :
+                            une carte de 150–260 px n'a pas besoin de 2400 px,
+                            et décoder les pleins formats de tout le lot tuait
+                            l'onglet sur smartphone. Le plein format est servi
+                            par la visionneuse et le téléchargement. */}
+                        <img src={r.showroomDataURL || r.thumb || r.processed} loading="lazy" decoding="async" style={{ width: "100%", aspectRatio: "4 / 3", objectFit: "contain", background: "var(--c-1e1e1e)", display: "block" }} />
                         {!r.showroomDataURL && window.location.search.includes('plateDebug') && r.yoloBbox && r.imgW && (
                           <svg
                             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}
@@ -6937,8 +6988,12 @@ export default function AutoCache() {
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div onClick={e => e.stopPropagation()}
             style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: isMobile ? "18px 14px" : "28px 30px", maxWidth: 760, width: "94%" }}>
+            {/* Vignettes : le visualiseur précharge TOUTES les vues d'un coup
+                (jusqu'à 36) et les affiche sur 240–380 px de haut. En plein
+                format, ce préchargement décodait des centaines de Mo de
+                bitmaps d'un seul geste — l'onglet n'y survivait pas. */}
             <Spin360
-              frames={results.slice(0, spinRingCount || results.length).map(r => r.showroomDataURL || r.processed)}
+              frames={results.slice(0, spinRingCount || results.length).map(r => r.showroomDataURL || r.thumb || r.processed)}
               height={isMobile ? 240 : 380}
               onClose={() => setShowSpinViewer(false)}
             />
