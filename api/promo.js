@@ -1,6 +1,13 @@
+// Trois familles de codes :
+//   photos  → crédite le compteur de photos
+//   plan    → force un plan d'abonnement
+//   feature → déverrouille une fonctionnalité en accès restreint
 const PROMO_CODES = {
   "AURELE30":  { photos: 30, reset: true },
   "AURELE5":   { photos: 5,  reset: false },
+  // Showroom interactif (capture guidée + tour 360°) — accès sur invitation
+  // le temps de la phase de test terrain.
+  "AURELE3D":  { feature: "showroom_interactif", label: "Showroom interactif" },
   "AURELEPREMIUM":   { plan: "premium" },
   "AURELEPRO":       { plan: "premium" }, // ancien code → abonnement unique
   "AURELEESSENTIEL": { plan: "premium" }, // ancien code → abonnement unique
@@ -22,5 +29,6 @@ export default function handler(req, res) {
   if (!promo) return res.status(200).json({ valid: false, message: "Code administrateur invalide." });
 
   if (promo.plan) return res.status(200).json({ valid: true, plan: promo.plan });
+  if (promo.feature) return res.status(200).json({ valid: true, feature: promo.feature, label: promo.label || promo.feature });
   return res.status(200).json({ valid: true, photos: promo.photos, reset: promo.reset });
 }
