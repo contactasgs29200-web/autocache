@@ -9,7 +9,7 @@ import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quad
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 import {
   isMobileDevice, freeCanvas, releaseImg, loadImg, breathe,
-  thumbFromCanvas, thumbFromDataURL, thumbURLFromFile,
+  openPhoto, thumbFromCanvas, thumbFromDataURL, thumbURLFromFile,
 } from "./imageMemory.js";
 import ShowroomCapture from "./components/ShowroomCapture.jsx";
 import Spin360 from "./components/Spin360.jsx";
@@ -1728,23 +1728,24 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
 // On envoie une copie réduite à la détection (rapide, sous la limite Vercel) ;
 // les coins renvoyés sont normalisés (÷ dimensions envoyées) → indépendants de
 // la résolution, donc directement réutilisables sur le canvas natif.
-function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      const w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
-      const s = Math.min(1, maxSide / Math.max(w0, h0));
-      const w = Math.max(1, Math.round(w0 * s)), h = Math.max(1, Math.round(h0 * s));
-      const c = document.createElement('canvas');
-      c.width = w; c.height = h;
-      c.getContext('2d').drawImage(img, 0, 0, w, h);
-      URL.revokeObjectURL(url);
-      resolve({ base64: c.toDataURL('image/jpeg', quality), w, h });
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image load failed')); };
-    img.src = url;
-  });
+async function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
+  const photo = await openPhoto(file);
+  const s = Math.min(1, maxSide / Math.max(photo.natW, photo.natH));
+  const w = Math.max(1, Math.round(photo.natW * s)), h = Math.max(1, Math.round(photo.natH * s));
+  // Décodage direct à la taille envoyée : la copie plein format n'a jamais
+  // servi qu'à être réduite ici.
+  const source = await photo.pixels(w, h);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source.src, 0, 0, w, h);
+  source.release();
+  photo.release();
+  const base64 = c.toDataURL('image/jpeg', quality);
+  freeCanvas(c);
+  return { base64, w, h };
 }
 
 // Dernière erreur SERVEUR de la détection de plaque (HTTP/réseau — pas les
@@ -1794,9 +1795,12 @@ async function fablePlateAPI(b64DataUrl, mode, tier) {
 // (Snapshot). Elle remplace la passe locate (Haiku) — localisation garantie,
 // Claude ne fait plus que le refine des 4 coins sur le crop.
 async function detectPlateFable(imageFile, presetBox = null) {
+  // Cette passe recadre la plaque au détail natif : elle a donc besoin du plein
+  // format. Le `finally` le rend dès la sortie, quel que soit le chemin.
+  let img = null;
   try {
     const url = URL.createObjectURL(imageFile);
-    const img = await loadImg(url);
+    img = await loadImg(url);
     URL.revokeObjectURL(url);
     const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
 
@@ -2045,6 +2049,8 @@ async function detectPlateFable(imageFile, presetBox = null) {
     console.error('[plate-corners] erreur:', e.message);
     plateLastApiError = plateLastApiError ?? ('réseau/exception : ' + e.message);
     return null;
+  } finally {
+    releaseImg(img);
   }
 }
 
@@ -2151,10 +2157,13 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
     const best = quads.slice().sort((A, B) => quadArea(B) - quadArea(A))[0];
     let corners = orderQuad(best).map(p => ({ x: p[0] / w, y: p[1] / h }));
     // Aimantation locale : pousse chaque bord jusqu'au vrai contour.
+    // Aimantation : elle a besoin du détail natif de la plaque, donc d'un
+    // décodage plein format. Il est rendu dès la mesure terminée.
     const url = URL.createObjectURL(imageFile);
     const img = await loadImg(url);
     URL.revokeObjectURL(url);
     corners = snapCornersOnImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height, corners);
+    releaseImg(img);
     const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
     const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
     console.log(`Plaque détectée (Plate Recognizer): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
@@ -2643,10 +2652,6 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // résultat n'était utilisé nulle part : elle décodait la photo en entier et
   // produisait une chaîne de plusieurs Mo, jetée aussitôt — un décodage plein
   // format de trop par photo, payé sur le budget mémoire de l'onglet mobile.
-  const photoURL = URL.createObjectURL(photoFile);
-  const photoImg = await loadImg(photoURL);
-  URL.revokeObjectURL(photoURL);
-
   // ── Dimensionnement du canvas piloté par la TAILLE DE LA PLAQUE ──
   // Le cache plaque est dessiné en perspective DANS la région de la plaque
   // du canvas de sortie. En pixels, cette région a la taille que lui impose
@@ -2658,8 +2663,11 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   // cible fixe (TARGET_PLATE_PX), indépendamment de la résolution de la
   // photo. Un plancher général (MIN_WORK_PX) couvre le cas « pas de plaque
   // détectée », et un garde-fou mémoire (MAX_DIM) borne la taille du canvas.
-  const natW = photoImg.naturalWidth  || photoImg.width;
-  const natH = photoImg.naturalHeight || photoImg.height;
+  // Taille intrinsèque d'abord, pixels ensuite : la photo n'est rasterisée
+  // qu'une fois, plus bas, directement à la taille du canvas de sortie —
+  // jamais en plein format (voir openPhoto).
+  const photo = await openPhoto(photoFile);
+  const natW = photo.natW, natH = photo.natH;
 
   // Détection plaque (coordonnées normalisées 0–1, sur le fichier original).
   // Option "cache plaque automatique" décochée : aucune détection (ni coût
@@ -2711,11 +2719,14 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.filter = `brightness(${adj.brightness}) contrast(${adj.contrast}) saturate(${adj.saturation})`;
-  ctx.drawImage(photoImg, 0, 0, c.width, c.height);
+  // Décodage à la taille exacte du canvas de sortie : sur une photo iPhone
+  // ramenée à 2400 px, cela économise le bitmap plein format de 48 Mo qui
+  // n'existait que pour être réduit dans la ligne suivante.
+  const source = await photo.pixels(c.width, c.height);
+  ctx.drawImage(source.src, 0, 0, c.width, c.height);
+  source.release();
+  photo.release();
   ctx.filter = "none";
-  // La photo source est copiée dans le canvas de travail : son bitmap plein
-  // format (jusqu'à ~50 Mo) n'a plus d'utilité, on le rend tout de suite.
-  releaseImg(photoImg);
   // Amélioration couleurs (canvas) — intensité réglable pour enhancePro
   // Try/catch défensif : on ne laisse JAMAIS une exception sur une photo
   // empêcher silencieusement l'application de la correction colorimétrique.

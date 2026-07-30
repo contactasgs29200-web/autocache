@@ -48,6 +48,124 @@ export function breathe(ms = isMobileDevice() ? 150 : 0) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// ── Décodage à la taille de travail ───────────────────────────────────────
+// Le vrai gouffre mémoire n'est pas le fichier (3–5 Mo) mais son bitmap : une
+// photo iPhone de 4032×3024 occupe 48 Mo dès qu'elle est décodée, même pour
+// finir dessinée dans un canvas de 2400 px ou une vignette de 640. Le chemin
+// classique (`<img>` + drawImage) matérialise TOUJOURS ce plein format avant de
+// le réduire.
+//
+// `createImageBitmap(file, { resizeWidth, resizeHeight })` évite ce détour : le
+// décodeur du système sous-échantillonne pendant le décodage, on ne paie donc
+// que la taille finale. Encore faut-il qu'il honore aussi l'orientation EXIF —
+// sinon les photos de portrait de l'iPhone sortiraient couchées. On ne le
+// suppose pas : on le VÉRIFIE sur l'appareil avec la sonde ci-dessous, et à la
+// moindre anomalie on revient au chemin `<img>`, plus coûteux mais sûr.
+//
+// JPEG de 309 octets, 8×16, portant un EXIF Orientation=6 (rotation 90°) :
+// tout décodeur qui applique l'EXIF le présente en 16×8.
+const EXIF_PROBE = 'data:image/jpeg;base64,/9j/4QAiRXhpZgAASUkqAAgAAAABABIBAwABAAAABgAAAAAAAAD/2wBDAKBueIx4ZKCMgoy0qqC+8P//8Nzc8P//////////////////////////////////////////////////////////2wBDAaq0tPDS8P//////////////////////////////////////////////////////////////////////////////wAARCAAQAAgDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAP/xAAYEAEAAwEAAAAAAAAAAAAAAAAAFGKh4f/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwBHtnRYB//Z';
+
+let scaledDecodeProbe = null;
+/**
+ * Le navigateur sait-il décoder en sous-échantillonné SANS perdre
+ * l'orientation EXIF ? Sondé une seule fois, mémorisé.
+ * `?scaledDecode=off` force le chemin `<img>` (comparaison sur photos réelles).
+ */
+export function supportsScaledDecode() {
+  if (!scaledDecodeProbe) scaledDecodeProbe = (async () => {
+    try {
+      if (typeof createImageBitmap !== 'function') return false;
+      if (typeof window !== 'undefined' && window.location.search.includes('scaledDecode=off')) return false;
+      const blob = await fetch(EXIF_PROBE).then(r => r.blob());
+      const bmp = await createImageBitmap(blob, {
+        imageOrientation: 'from-image', resizeWidth: 4, resizeQuality: 'high',
+      });
+      // Attendu : 4×2. 2×4 = orientation ignorée ; 16×8 = resize ignoré.
+      const ok = bmp.width === 4 && bmp.height === 2;
+      bmp.close?.();
+      if (!ok) console.warn('[decode] sous-échantillonnage non fiable — chemin <img> conservé');
+      return ok;
+    } catch (e) { return false; }
+  })();
+  return scaledDecodeProbe;
+}
+
+/**
+ * Taille intrinsèque d'un fichier image, sans dessiner : les métadonnées de
+ * l'en-tête suffisent, le bitmap n'a pas à être rasterisé.
+ */
+export async function imageSize(file) {
+  const url = URL.createObjectURL(file);
+  let img = null;
+  try {
+    img = await loadImg(url);
+    return { w: img.naturalWidth || img.width, h: img.naturalHeight || img.height };
+  } finally {
+    releaseImg(img);
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * Ouvre une photo pour un pipeline : donne sa taille intrinsèque tout de suite,
+ * et ses pixels seulement quand on sait à quelle taille on les veut.
+ *
+ *   const photo = await openPhoto(file);
+ *   //  … calculs à partir de photo.natW / photo.natH …
+ *   const src = await photo.pixels(destW, destH);
+ *   ctx.drawImage(src.src, 0, 0, destW, destH);
+ *   src.release(); photo.release();
+ *
+ * Navigateur capable de sous-échantillonner : rien n'est rasterisé avant
+ * `pixels()`, et jamais en plein format. Sinon : le plein format est décodé UNE
+ * fois et réutilisé pour la mesure comme pour le dessin — exactement le
+ * comportement d'avant, sans double décodage.
+ */
+export async function openPhoto(file) {
+  if (await supportsScaledDecode()) {
+    const { w, h } = await imageSize(file);
+    return { natW: w, natH: h, scaled: true, pixels: (pw, ph) => decodeAt(file, pw, ph), release: () => {} };
+  }
+  const url = URL.createObjectURL(file);
+  const img = await loadImg(url);
+  URL.revokeObjectURL(url);
+  return {
+    natW: img.naturalWidth || img.width,
+    natH: img.naturalHeight || img.height,
+    scaled: false,
+    pixels: async () => ({ src: img, release: () => {} }),
+    release: () => releaseImg(img),
+  };
+}
+
+/**
+ * Source dessinable pour `file`, décodée à `w`×`h` quand le navigateur le
+ * permet (sinon plein format, comme avant). Dans les deux cas l'appelant
+ * dessine avec une taille de destination explicite :
+ *   ctx.drawImage(src, 0, 0, w, h)
+ * puis appelle `release()`.
+ */
+export async function decodeAt(file, w, h) {
+  const dw = Math.max(1, Math.round(w)), dh = Math.max(1, Math.round(h));
+  if (await supportsScaledDecode()) {
+    try {
+      const bmp = await createImageBitmap(file, {
+        imageOrientation: 'from-image', resizeWidth: dw, resizeHeight: dh, resizeQuality: 'high',
+      });
+      return { src: bmp, width: bmp.width, height: bmp.height, scaled: true,
+               release: () => { try { bmp.close(); } catch (_) {} } };
+    } catch (e) {
+      console.warn('[decode] sous-échantillonnage échoué, repli <img>:', e?.message);
+    }
+  }
+  const url = URL.createObjectURL(file);
+  const img = await loadImg(url);
+  URL.revokeObjectURL(url);
+  return { src: img, width: img.naturalWidth || img.width, height: img.naturalHeight || img.height,
+           scaled: false, release: () => releaseImg(img) };
+}
+
 // ── Vignettes ─────────────────────────────────────────────────────────────
 // Une photo affichée dans une grille de 150 px est quand même décodée EN
 // ENTIER par le navigateur. À plusieurs photos, le thread principal n'a plus
@@ -116,26 +234,25 @@ export async function thumbFromDataURL(dataUrl, maxPx = RESULT_THUMB_PX, quality
  * navigateur affichera le plein format, dégradé mais jamais de case vide).
  */
 export async function thumbURLFromFile(file, maxPx = SELECT_THUMB_PX, quality = 0.82) {
-  const src = URL.createObjectURL(file);
-  let img = null;
+  let photo = null, source = null;
   try {
-    img = await loadImg(src);
-    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
-    const scale = Math.min(1, maxPx / Math.max(w, h));
+    photo = await openPhoto(file);
+    const scale = Math.min(1, maxPx / Math.max(photo.natW, photo.natH));
+    const tw = Math.max(1, Math.round(photo.natW * scale)), th = Math.max(1, Math.round(photo.natH * scale));
+    source = await photo.pixels(tw, th);
     const c = document.createElement('canvas');
-    c.width  = Math.max(1, Math.round(w * scale));
-    c.height = Math.max(1, Math.round(h * scale));
+    c.width = tw; c.height = th;
     const ctx = c.getContext('2d');
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, 0, 0, c.width, c.height);
-    releaseImg(img); img = null;
+    ctx.drawImage(source.src, 0, 0, tw, th);
+    source.release(); source = null;
+    photo.release(); photo = null;
     const blob = await new Promise(res => { try { c.toBlob(res, 'image/jpeg', quality); } catch (e) { res(null); } });
     freeCanvas(c);
-    if (!blob) return src;
-    URL.revokeObjectURL(src);
-    return URL.createObjectURL(blob);
+    if (blob) return URL.createObjectURL(blob);
   } catch (e) {
-    return src;
-  } finally { releaseImg(img); }
+    console.warn('[thumb] vignette impossible, original affiché:', e?.message);
+  } finally { source?.release(); photo?.release(); }
+  return URL.createObjectURL(file); // repli : le navigateur affichera l'original
 }

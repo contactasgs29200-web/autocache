@@ -20,7 +20,7 @@
 //   ?letterbox=on   ancien prétraitement letterbox au lieu de l'étirement
 //   ?zoom=on        active la 2e passe sur recadrage (désactivée par défaut)
 
-import { freeCanvas, releaseImg } from './imageMemory.js';
+import { freeCanvas, releaseImg, openPhoto } from './imageMemory.js';
 
 const MODEL_URL = '/models/plate-keypoints.onnx';
 const IMGSZ = 640;
@@ -272,9 +272,27 @@ export async function detectPlateKeypoints(imageInput) {
     return null;
   }
 
-  let img;
-  try { img = await loadImageFromInput(imageInput); }
-  catch (e) { console.warn('[Keypoints] chargement image échoué:', e?.message); return null; }
+  // L'entrée du modèle est un 640×640 : décoder la photo en plein format (48 Mo
+  // pour 12 Mpx) n'apporte rien ici, et c'est un des pics qui faisaient tuer
+  // l'onglet pendant un lot sur mobile. On décode donc à une taille de travail
+  // modeste. Les coins sont normalisés (÷ W,H) en sortie : travailler à une
+  // autre échelle ne change RIEN au résultat.
+  // Exception : `?zoom=on` (passe 2 de débogage) veut le détail natif, puisque
+  // c'est précisément ce qu'elle mesure.
+  const WORK_MAX_PX = 1600;
+  let img, releaseSource = null;
+  try {
+    if (typeof imageInput === 'string' || zoomEnabled()) {
+      img = await loadImageFromInput(imageInput);
+      releaseSource = () => releaseImg(img);
+    } else {
+      const photo = await openPhoto(imageInput);
+      const scale = Math.min(1, WORK_MAX_PX / Math.max(photo.natW, photo.natH));
+      const src = await photo.pixels(Math.round(photo.natW * scale), Math.round(photo.natH * scale));
+      img = src.src;
+      releaseSource = () => { src.release(); photo.release(); };
+    }
+  } catch (e) { console.warn('[Keypoints] chargement image échoué:', e?.message); return null; }
 
   const W = img.naturalWidth || img.width;
   const H = img.naturalHeight || img.height;
@@ -314,9 +332,9 @@ export async function detectPlateKeypoints(imageInput) {
     console.log(`[Keypoints] plaque détectée conf=${final.conf.toFixed(2)} — coins maison (${note})`);
     return { found: true, conf: final.conf, bbox, corners, source: 'keypoints' };
   } finally {
-    // Bitmap plein format de la photo (~50 Mo pour 12 Mpx) : rendu dès la
-    // dernière passe, sans attendre le ramasse-miettes. Sur mobile, plusieurs
-    // détections en vol pendant un lot suffisaient sinon à faire tuer l'onglet.
-    releaseImg(img);
+    // Bitmap rendu dès la dernière passe, sans attendre le ramasse-miettes.
+    // Sur mobile, plusieurs détections en vol pendant un lot suffisaient
+    // sinon à faire tuer l'onglet.
+    try { releaseSource?.(); } catch (_) {}
   }
 }
