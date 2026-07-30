@@ -3067,8 +3067,8 @@ function SettingsIcon({ name, size = 16 }) {
 // ── Abonnement unique AutoCache, décliné en 3 formules de facturation ──
 const SUBSCRIPTION_FORMULES = [
   { key: "weekly",  name: "Hebdomadaire", tag: "Découverte", price: "4,90 €",   period: "/semaine", note: "Renouvelé tous les 7 jours", badge: null },
-  { key: "monthly", name: "Mensuel",      tag: "Conseillé",  price: "14,90 €",  period: "/mois",     note: "Renouvelé chaque mois, le même jour", badge: "Conseillé" },
-  { key: "annual",  name: "Annuel",       tag: "Économies",  price: "129,90 €", period: "/an",       note: "au lieu de 178,80 € en mensuel", badge: "Économies" },
+  { key: "monthly", name: "Mensuel",      tag: "Conseillé",  price: "12,90 €",  period: "/mois",     note: "Renouvelé chaque mois, le même jour", badge: "Conseillé" },
+  { key: "annual",  name: "Annuel",       tag: "Économies",  price: "119 €",    period: "/an",       note: "au lieu de 154,80 € en mensuel", badge: "Économies" },
 ];
 const FORMULE_LABELS = { weekly: "Hebdomadaire", monthly: "Mensuelle", annual: "Annuelle" };
 // ── Showroom Virtuel : fonctionnalité encore en développement ───────────────
@@ -3084,7 +3084,7 @@ const SHOWROOM_COMING_SOON = true;
 // Le Showroom Virtuel n'y figure pas tant qu'il est en développement : on ne
 // vend que ce qui est réellement disponible.
 const SUBSCRIPTION_FEATURES = [
-  "300 photos / mois",
+  "1 000 photos / mois",
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
@@ -3998,7 +3998,7 @@ export default function AutoCache() {
   }, [processing]);
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "premium" (ancien : "essential" | "pro")
   const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
-  const PLAN_LIMIT = isPaid ? 300 : TRIAL_LIMIT;
+  const PLAN_LIMIT = isPaid ? 1000 : TRIAL_LIMIT;
   const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
   // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
   // Le Showroom reste verrouillé pour tout le monde tant qu'il est en développement.
@@ -4038,7 +4038,7 @@ export default function AutoCache() {
     setSubInfoLoading(false);
   }, [user?.id, subInfoLoading]);
 
-  // ── Renouvellement mensuel des crédits (300 photos / mois) ──
+  // ── Renouvellement mensuel des crédits (1 000 photos / mois) ──
   // Indépendant de la cadence de facturation : que l'abonnement soit hebdo,
   // mensuel ou annuel, le quota se réinitialise chaque mois au même jour.
   useEffect(() => {
@@ -7023,7 +7023,7 @@ export default function AutoCache() {
                       {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, letterSpacing: 1 }}>
-                      300 photos / mois · Toutes les fonctionnalités incluses
+                      1 000 photos / mois · Toutes les fonctionnalités incluses
                     </div>
                   </div>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
