@@ -97,6 +97,10 @@ function InstallHelpModal({ onClose, ios }) {
   );
 }
 
+// Version déployée, injectée à la construction (voir vite.config.js).
+const BUILD_ID   = typeof __BUILD_ID__   !== 'undefined' ? __BUILD_ID__   : 'dev';
+const BUILD_DATE = typeof __BUILD_DATE__ !== 'undefined' ? __BUILD_DATE__ : '';
+
 const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
@@ -3435,11 +3439,21 @@ export default function AutoCache() {
 
   // ── Préchauffe les modèles utiles dès que l'utilisateur est authentifié,
   // pour ne plus payer le coût d'init au premier traitement.
+  //
+  // PAS SUR MOBILE. Ce préchauffage garde en mémoire, dès l'ouverture de
+  // l'application, le runtime WebAssembly d'onnxruntime (~24 Mo) et les poids
+  // du modèle de plaque (12 Mo) — soit un lest de plusieurs dizaines de Mo
+  // pendant que l'utilisateur choisit ses photos, c'est-à-dire exactement au
+  // moment où l'onglet manque de mémoire. Sur mobile, le modèle est donc chargé
+  // à la première détection : la première photo attend un instant de plus, au
+  // lieu de faire tuer la page avant même le lancement.
+  //
   // @imgly/background-removal ne sert QU'au Showroom : tant qu'il est
   // indisponible, le précharger ne fait que consommer de la bande passante et
   // de la mémoire — cher payé sur un smartphone, pour un module jamais appelé.
   useEffect(() => {
     if (!user || authLoading) return;
+    if (isMobileDevice()) return;
     const idleCb = window.requestIdleCallback ?? ((cb) => setTimeout(cb, 1500));
     const handle = idleCb(() => { if (!SHOWROOM_COMING_SOON) preloadBackgroundRemoval(); preloadPlateKeypoints(); });
     return () => {
@@ -5120,6 +5134,11 @@ export default function AutoCache() {
                       <div style={{ fontSize: 13, color: "var(--c-ddd5c8)", fontFamily: "var(--font-apple)", fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>{user.user_metadata.full_name}</div>
                     )}
                     <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div>
+                    {/* Version déployée : permet de vérifier depuis le téléphone
+                        QUEL code tourne, au lieu de le supposer. */}
+                    <div style={{ fontSize: 9, color: "var(--c-666)", fontFamily: "var(--font-apple)", letterSpacing: 1, marginTop: 4 }}>
+                      VERSION {BUILD_ID} · {BUILD_DATE}
+                    </div>
                   </div>
                   {/* Apparence : bascule Jour / Nuit */}
                   <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--c-222)" }}>
