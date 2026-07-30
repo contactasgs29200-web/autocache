@@ -8,7 +8,7 @@ const PRICE_ENV = {
 };
 
 // Le coupon "-5€ première échéance" s'applique uniquement aux formules
-// mensuelle et annuelle (l'hebdo "découverte" à 5,90€ est déjà l'offre d'entrée).
+// mensuelle et annuelle (l'hebdo "découverte" à 4,90€ est déjà l'offre d'entrée).
 const COUPON_FORMULES = ["monthly", "annual"];
 
 export default async function handler(req, res) {

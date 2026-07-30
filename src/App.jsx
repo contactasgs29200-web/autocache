@@ -3066,7 +3066,7 @@ function SettingsIcon({ name, size = 16 }) {
 
 // ── Abonnement unique AutoCache, décliné en 3 formules de facturation ──
 const SUBSCRIPTION_FORMULES = [
-  { key: "weekly",  name: "Hebdomadaire", tag: "Découverte", price: "5,90 €",   period: "/semaine", note: "Renouvelé tous les 7 jours", badge: null },
+  { key: "weekly",  name: "Hebdomadaire", tag: "Découverte", price: "4,90 €",   period: "/semaine", note: "Renouvelé tous les 7 jours", badge: null },
   { key: "monthly", name: "Mensuel",      tag: "Conseillé",  price: "14,90 €",  period: "/mois",     note: "Renouvelé chaque mois, le même jour", badge: "Conseillé" },
   { key: "annual",  name: "Annuel",       tag: "Économies",  price: "129,90 €", period: "/an",       note: "au lieu de 178,80 € en mensuel", badge: "Économies" },
 ];
