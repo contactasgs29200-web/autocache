@@ -3072,6 +3072,12 @@ const SUBSCRIPTION_FORMULES = [
   { key: "annual",  name: "Annuel",       tag: "Économies",  price: "119 €",    period: "/an",       note: "au lieu de 154,80 € en mensuel", badge: "Économies" },
 ];
 const FORMULE_LABELS = { weekly: "Hebdomadaire", monthly: "Mensuelle", annual: "Annuelle" };
+
+// Attente de l'activation au retour de Stripe : 12 tentatives espacées de
+// 1,5 s, soit ~18 s. Large devant le cas normal (le webhook répond en moins
+// d'une seconde) sans laisser l'abonné devant un écran figé si Stripe tarde.
+const ACTIVATION_TRIES = 12;
+const ACTIVATION_DELAY_MS = 1500;
 // ── Showroom Virtuel : fonctionnalité encore en développement ───────────────
 // Tant que ce drapeau est vrai, l'option est affichée en « prochainement
 // disponible » : elle ne peut pas être cochée, n'est jamais appliquée au
@@ -3100,6 +3106,9 @@ const SUBSCRIPTION_FEATURES_TEASER = "Et bientôt de nouvelles fonctionnalités"
 export default function AutoCache() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  // Activation de l'abonnement au retour de Stripe Checkout
+  const [activating, setActivating] = useState(false);
+  const [activationFailed, setActivationFailed] = useState(false);
   // ── Transition « connexion → application » ──
   // `authExit` efface la carte de connexion, puis `entering` fait apparaître
   // l'application pendant que le logo rejoint l'en-tête.
@@ -3420,8 +3429,33 @@ export default function AutoCache() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("payment") === "success") {
       window.history.replaceState({}, "", window.location.pathname);
-      // Recharger la session pour récupérer le plan mis à jour par le webhook
-      setTimeout(() => supabase.auth.refreshSession(), 2000);
+      // ── Activation après paiement ──
+      // Le webhook Stripe met le compte à jour côté serveur, mais le jeton de
+      // session déjà présent dans le navigateur porte encore l'ancien plan, et
+      // Supabase ne le rafraîchit de lui-même qu'à son expiration (une heure).
+      // Une attente fixe serait un pari : démarrage à froid de la fonction
+      // webhook, latence de livraison Stripe, écriture Supabase — le tout peut
+      // dépasser quelques secondes, et l'abonné retomberait alors sur l'écran
+      // d'essai après avoir payé. On interroge donc jusqu'à ce que le plan
+      // bascule réellement, avec un plafond pour ne pas boucler indéfiniment.
+      setActivating(true);
+      (async () => {
+        for (let i = 0; i < ACTIVATION_TRIES; i++) {
+          const { data } = await supabase.auth.refreshSession();
+          if (data?.user) {
+            setUser(data.user);
+            if ((data.user.user_metadata?.plan ?? "trial") !== "trial") {
+              setActivating(false);
+              return;
+            }
+          }
+          await new Promise(r => setTimeout(r, ACTIVATION_DELAY_MS));
+        }
+        // Le paiement est encaissé — c'est la propagation qui traîne. On le dit
+        // clairement plutôt que de laisser l'abonné croire qu'il a payé pour rien.
+        setActivating(false);
+        setActivationFailed(true);
+      })();
     }
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user || null);
@@ -4936,6 +4970,8 @@ export default function AutoCache() {
         input[type=range]{-webkit-appearance:none;height:2px;background:var(--c-252525);border-radius:1px;outline:none;width:100%;}
         input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#f26522;cursor:pointer;}
         ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-thumb{background:#f26522;border-radius:2px;}
+        /* Indicateur d'activation de l'abonnement au retour de Stripe */
+        @keyframes ac-spin{ to{ transform:rotate(360deg); } }
         @media(max-width:767px){
           input[type=range]{height:4px;}
           input[type=range]::-webkit-slider-thumb{width:20px;height:20px;}
@@ -6803,6 +6839,33 @@ export default function AutoCache() {
       {showInstallHelp && <InstallHelpModal ios={isIOS} onClose={() => setShowInstallHelp(false)} />}
 
       {/* ── Bandeau erreur serveur détection plaque ── */}
+      {/* Activation en cours après paiement */}
+      {activating && (
+        <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 9600, maxWidth: "min(680px, 94vw)", background: "rgba(8,16,10,0.97)", border: "1px solid #27ae60", borderRadius: 6, padding: "12px 16px", display: "flex", gap: 12, alignItems: "center", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
+          <div style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid rgba(39,174,96,0.3)", borderTopColor: "#27ae60", animation: "ac-spin 0.8s linear infinite", flexShrink: 0 }} />
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#27ae60", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Paiement accepté — activation en cours</div>
+            <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
+              Votre abonnement s'ouvre dans quelques secondes. Ne fermez pas cette page.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Paiement encaissé mais activation non confirmée dans le délai imparti */}
+      {activationFailed && (
+        <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 9600, maxWidth: "min(680px, 94vw)", background: "rgba(20,14,4,0.97)", border: "1px solid #f26522", borderRadius: 6, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
+          <div style={{ fontSize: 18 }}>⏳</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#f26522", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Paiement bien reçu — activation en attente</div>
+            <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
+              Votre paiement est encaissé, mais l'activation n'est pas encore remontée jusqu'ici. Rechargez la page dans une minute. Si l'abonnement n'apparaît toujours pas, écrivez-nous : nous le débloquons manuellement.
+            </div>
+          </div>
+          <button onClick={() => setActivationFailed(false)} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+      )}
+
       {plateErrorBanner && (
         <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 9500, maxWidth: "min(680px, 94vw)", background: "rgba(20,8,4,0.97)", border: "1px solid #c0392b", borderRadius: 6, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
           <div style={{ fontSize: 18 }}>⚠</div>
