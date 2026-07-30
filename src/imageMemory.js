@@ -173,7 +173,9 @@ export async function decodeAt(file, w, h) {
 // la mémoire grimpe jusqu'à la mise à mort de l'onglet. Les grilles affichent
 // donc les vignettes produites ici ; le plein format reste pour la visionneuse,
 // le téléchargement et l'envoi par mail.
-export const SELECT_THUMB_PX = 640; // grille des photos importées
+// Les tuiles de sélection font ~90 pt de large, soit ~270 px sur un écran ×3 :
+// 480 px reste largement au-dessus du nécessaire, pour moitié moins de mémoire.
+export const SELECT_THUMB_PX = 480; // grille des photos importées
 export const RESULT_THUMB_PX = 700; // grille des photos traitées
 
 // iOS sous pression mémoire renvoie parfois un dataURL vide ("data:,") sans
@@ -234,25 +236,114 @@ export async function thumbFromDataURL(dataUrl, maxPx = RESULT_THUMB_PX, quality
  * navigateur affichera le plein format, dégradé mais jamais de case vide).
  */
 export async function thumbURLFromFile(file, maxPx = SELECT_THUMB_PX, quality = 0.82) {
-  let photo = null, source = null;
+  let bmp = null, photo = null, source = null;
   try {
-    photo = await openPhoto(file);
-    const scale = Math.min(1, maxPx / Math.max(photo.natW, photo.natH));
-    const tw = Math.max(1, Math.round(photo.natW * scale)), th = Math.max(1, Math.round(photo.natH * scale));
-    source = await photo.pixels(tw, th);
+    let tw, th, drawable;
+    if (await supportsScaledDecode()) {
+      // Aucune mesure préalable : `resizeWidth` seul suffit, la hauteur suit le
+      // rapport de l'image. Mesurer d'abord coûterait un décodage plein format,
+      // soit exactement le travail qu'on veut éviter sur le thread principal.
+      bmp = await createImageBitmap(file, {
+        imageOrientation: 'from-image', resizeWidth: maxPx, resizeQuality: 'high',
+      });
+      drawable = bmp; tw = bmp.width; th = bmp.height;
+    } else {
+      photo = await openPhoto(file);
+      const scale = Math.min(1, maxPx / Math.max(photo.natW, photo.natH));
+      tw = Math.max(1, Math.round(photo.natW * scale));
+      th = Math.max(1, Math.round(photo.natH * scale));
+      source = await photo.pixels(tw, th);
+      drawable = source.src;
+    }
     const c = document.createElement('canvas');
     c.width = tw; c.height = th;
     const ctx = c.getContext('2d');
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(source.src, 0, 0, tw, th);
-    source.release(); source = null;
-    photo.release(); photo = null;
+    ctx.drawImage(drawable, 0, 0, tw, th);
+    bmp?.close?.(); bmp = null;
+    source?.release(); source = null;
+    photo?.release(); photo = null;
     const blob = await new Promise(res => { try { c.toBlob(res, 'image/jpeg', quality); } catch (e) { res(null); } });
     freeCanvas(c);
     if (blob) return URL.createObjectURL(blob);
   } catch (e) {
     console.warn('[thumb] vignette impossible, original affiché:', e?.message);
-  } finally { source?.release(); photo?.release(); }
+  } finally { try { bmp?.close?.(); } catch (_) {} source?.release(); photo?.release(); }
   return URL.createObjectURL(file); // repli : le navigateur affichera l'original
+}
+
+// ── Génération des vignettes hors du thread principal ─────────────────────
+// Décoder et ré-encoder quatre photos de smartphone occupe le thread principal
+// plusieurs secondes d'affilée : mesuré à 8,2 s pour 4 fichiers de 9,5 Mo, en
+// UNE seule tâche. Pendant tout ce temps le navigateur ne peut plus repeindre —
+// d'où les zones vides ou mauves sur iPhone. Le travail part donc dans un
+// worker ; le thread principal ne reçoit qu'un blob prêt à afficher.
+let thumbWorker = null, thumbWorkerUsable = null, thumbSeq = 0;
+const thumbJobs = new Map();
+
+function getThumbWorker() {
+  if (thumbWorkerUsable === false) return null;
+  if (thumbWorker) return thumbWorker;
+  try {
+    if (typeof Worker !== 'function' || typeof OffscreenCanvas !== 'function'
+        || typeof OffscreenCanvas.prototype.convertToBlob !== 'function') {
+      thumbWorkerUsable = false; return null;
+    }
+    thumbWorker = new Worker(new URL('./thumbWorker.js', import.meta.url), { type: 'module' });
+    thumbWorker.onmessage = (e) => {
+      const job = thumbJobs.get(e.data?.id);
+      if (job) { thumbJobs.delete(e.data.id); job(e.data); }
+    };
+    thumbWorker.onerror = () => {
+      // Worker inutilisable : on rend la main au chemin classique.
+      thumbWorkerUsable = false;
+      for (const job of thumbJobs.values()) job({ blob: null });
+      thumbJobs.clear();
+      stopThumbWorker();
+    };
+    thumbWorkerUsable = true;
+    return thumbWorker;
+  } catch (e) { thumbWorkerUsable = false; return null; }
+}
+
+export function stopThumbWorker() {
+  if (thumbWorker) { try { thumbWorker.terminate(); } catch (_) {} thumbWorker = null; }
+}
+
+function thumbURLViaWorker(file, maxPx, quality) {
+  return new Promise(resolve => {
+    const w = getThumbWorker();
+    if (!w) return resolve(null);
+    const id = ++thumbSeq;
+    let settled = false;
+    const finish = (url) => { if (!settled) { settled = true; thumbJobs.delete(id); resolve(url); } };
+    thumbJobs.set(id, (msg) => finish(msg?.blob ? URL.createObjectURL(msg.blob) : null));
+    // Garde-fou : un worker muet ne doit jamais bloquer un import.
+    setTimeout(() => finish(null), 20000);
+    try { w.postMessage({ id, file, maxPx, quality }); } catch (e) { finish(null); }
+  });
+}
+
+/**
+ * Vignettes d'une série de fichiers, une à la fois (un seul décodage en vol).
+ * `onReady(index, url)` est appelé au fil de l'eau : l'appelant décide du
+ * rythme d'affichage. Renvoie le tableau des URLs dans l'ordre des fichiers.
+ */
+export async function thumbURLsFromFiles(files, { maxPx = SELECT_THUMB_PX, quality = 0.82, onReady } = {}) {
+  const out = new Array(files.length).fill(null);
+  try {
+    const viaWorker = await supportsScaledDecode(); // même moteur : orientation déjà validée
+    for (let i = 0; i < files.length; i++) {
+      let url = viaWorker ? await thumbURLViaWorker(files[i], maxPx, quality) : null;
+      if (!url) url = await thumbURLFromFile(files[i], maxPx, quality);
+      out[i] = url;
+      try { onReady?.(i, url); } catch (e) { /* l'affichage ne doit pas casser la série */ }
+      await breathe(0);
+    }
+  } finally {
+    // Série terminée : le worker et sa mémoire sont rendus tout de suite.
+    stopThumbWorker();
+  }
+  return out;
 }

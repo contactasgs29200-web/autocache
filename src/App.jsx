@@ -9,7 +9,7 @@ import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quad
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 import {
   isMobileDevice, freeCanvas, releaseImg, loadImg, breathe,
-  openPhoto, thumbFromCanvas, thumbFromDataURL, thumbURLFromFile,
+  openPhoto, thumbFromCanvas, thumbFromDataURL, thumbURLsFromFiles,
 } from "./imageMemory.js";
 import ShowroomCapture from "./components/ShowroomCapture.jsx";
 import Spin360 from "./components/Spin360.jsx";
@@ -3588,17 +3588,34 @@ export default function AutoCache() {
   // reste peinte pendant ce temps. `file` reste l'original, intact.
   const droppedPhotoIdsRef = useRef(new Set());
 
+  // Les vignettes arrivent une par une (worker), mais l'affichage est groupé :
+  // l'écran de configuration est un gros arbre, et chaque mise à jour d'état le
+  // re-rend en entier. Quatre rendus complets enchaînés, c'est autant de temps
+  // pendant lequel le navigateur ne peut pas repeindre. La première vignette
+  // s'affiche donc immédiatement, les suivantes par paquets (400 ms).
   const buildPhotoThumbs = async entries => {
-    for (const e of entries) {
-      const url = await thumbURLFromFile(e.file);
-      if (droppedPhotoIdsRef.current.has(e.id)) {
-        droppedPhotoIdsRef.current.delete(e.id);
-        URL.revokeObjectURL(url); // photo retirée entre-temps
-        continue;
+    let buffer = [];
+    let lastFlush = 0;
+    const flush = () => {
+      if (!buffer.length) return;
+      const batch = buffer; buffer = [];
+      const kept = new Map();
+      for (const [id, url] of batch) {
+        if (droppedPhotoIdsRef.current.has(id)) {
+          droppedPhotoIdsRef.current.delete(id);
+          if (url) URL.revokeObjectURL(url); // photo retirée pendant la génération
+        } else if (url) kept.set(id, url);
       }
-      setPhotos(prev => prev.map(p => (p.id === e.id ? { ...p, preview: url } : p)));
-      await breathe(0); // rend la main au navigateur entre deux décodages
-    }
+      lastFlush = Date.now();
+      if (kept.size) setPhotos(prev => prev.map(p => (kept.has(p.id) ? { ...p, preview: kept.get(p.id) } : p)));
+    };
+    await thumbURLsFromFiles(entries.map(e => e.file), {
+      onReady: (i, url) => {
+        buffer.push([entries[i].id, url]);
+        if (Date.now() - lastFlush > 400) flush();
+      },
+    });
+    flush();
   };
 
   const handlePhotoFiles = files => {
