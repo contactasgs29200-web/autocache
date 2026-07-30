@@ -4027,7 +4027,20 @@ export default function AutoCache() {
         const startDate = new Date(d.periodStart * 1000);
         const now = new Date();
         const daysLeft = Math.max(0, Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)));
-        setSubInfo({ periodStart: startDate, periodEnd: endDate, plan: d.plan, formule: d.formule, daysLeft });
+        setSubInfo({
+          periodStart: startDate, periodEnd: endDate, plan: d.plan, formule: d.formule, daysLeft,
+          status: d.status, cancelAtPeriodEnd: !!d.cancelAtPeriodEnd,
+        });
+        // Le plan est porté par le jeton de session, qui n'est rafraîchi qu'au
+        // bout d'une heure. Quand Stripe indique un abonnement en défaut de
+        // paiement alors que la session locale se croit encore payante, on
+        // force le rafraîchissement : la coupure d'accès décidée par le webhook
+        // prend effet tout de suite au lieu d'attendre l'expiration du jeton.
+        const stripeGrantsAccess = d.status === 'active' || d.status === 'trialing';
+        if (!stripeGrantsAccess && (user.user_metadata?.plan ?? 'trial') !== 'trial') {
+          const { data: refreshed } = await supabase.auth.refreshSession();
+          if (refreshed?.user) setUser(refreshed.user);
+        }
       } else {
         setSubInfo({ hasSubscription: false });
       }
@@ -4087,7 +4100,8 @@ export default function AutoCache() {
 
   // Grille des 3 formules — même format que les cartes plans (liste cochée par carte)
   const renderFormulesGrid = () => (
-    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 24 }}>
+    <>
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 12 }}>
       {SUBSCRIPTION_FORMULES.map(f => {
         const hot = f.key === "monthly";
         return (
@@ -4129,6 +4143,11 @@ export default function AutoCache() {
         );
       })}
     </div>
+    {/* Levée d'objection à l'endroit où elle se pose : au moment de choisir. */}
+    <div style={{ fontSize: 11, color: "var(--c-888)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.6, textAlign: "center", marginBottom: 24 }}>
+      Sans engagement — résiliable à tout moment en deux clics. Votre accès reste ouvert jusqu'au terme de la période déjà réglée, sans nouveau prélèvement.
+    </div>
+    </>
   );
 
   // Close credit popup on click outside
@@ -5008,21 +5027,39 @@ export default function AutoCache() {
                                   {subInfo.periodStart.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
                                 </span>
                               </div>
+                              {/* Résilié : plus de prélèvement à venir, on annonce
+                                  une fin d'accès et non une prochaine échéance. */}
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                                <span style={{ color: "var(--c-ddd)" }}>Prochain paiement</span>
+                                <span style={{ color: "var(--c-ddd)" }}>
+                                  {subInfo.cancelAtPeriodEnd ? "Fin de l'accès" : "Prochain paiement"}
+                                </span>
                                 <span style={{ color: "var(--c-ddd)", fontFamily: "var(--font-apple)", fontSize: 12 }}>
                                   {subInfo.periodEnd.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
                                 </span>
                               </div>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                <span style={{ color: "var(--c-ddd)" }}>Renouvellement</span>
+                                <span style={{ color: "var(--c-ddd)" }}>
+                                  {subInfo.cancelAtPeriodEnd ? "Temps restant" : "Renouvellement"}
+                                </span>
                                 <span style={{
-                                  color: subInfo.daysLeft <= 3 ? "#f26522" : "#22c55e",
+                                  color: subInfo.cancelAtPeriodEnd || subInfo.daysLeft <= 3 ? "#f26522" : "#22c55e",
                                   fontFamily: "var(--font-apple)", fontSize: 13, fontWeight: 700,
                                 }}>
                                   {subInfo.daysLeft === 0 ? "Aujourd'hui" : `${subInfo.daysLeft} jour${subInfo.daysLeft > 1 ? "s" : ""}`}
                                 </span>
                               </div>
+
+                              {subInfo.cancelAtPeriodEnd && (
+                                <div style={{ marginTop: 10, padding: "8px 10px", background: "rgba(242,101,34,0.08)", border: "1px solid rgba(242,101,34,0.25)", borderRadius: 3, fontSize: 11, lineHeight: 1.5, color: "var(--c-ddd)", fontFamily: "var(--font-apple)" }}>
+                                  Abonnement résilié. Aucun nouveau prélèvement ne sera effectué ; votre accès reste ouvert jusqu'à cette date.
+                                </div>
+                              )}
+
+                              {(subInfo.status === "past_due" || subInfo.status === "unpaid") && (
+                                <div style={{ marginTop: 10, padding: "8px 10px", background: "rgba(192,57,43,0.08)", border: "1px solid rgba(192,57,43,0.25)", borderRadius: 3, fontSize: 11, lineHeight: 1.5, color: "#e07a6a", fontFamily: "var(--font-apple)" }}>
+                                  Le dernier prélèvement a échoué. L'abonnement ne sera pas renouvelé et l'accès reste suspendu tant que le paiement n'est pas régularisé — mettez votre carte à jour depuis votre espace de facturation.
+                                </div>
+                              )}
                             </div>
                           ) : subInfo?.hasSubscription === false ? (
                             <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Credits via code administrateur.</div>
@@ -7042,11 +7079,17 @@ export default function AutoCache() {
                       const res = await fetch("/api/customer-portal", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ userId: user.id }),
+                        // "cancel" ouvre directement le parcours de résiliation ;
+                        // sans action, on ouvre l'accueil du portail.
+                        body: JSON.stringify(action === "cancel"
+                          ? { userId: user.id, action: "cancel" }
+                          : { userId: user.id }),
                       });
                       const data = await res.json();
                       if (data.url) {
                         window.location.href = data.url;
+                      } else if (data.alreadyCancelled) {
+                        setPortalError("Votre abonnement est déjà résilié : il prendra fin à l'échéance en cours et ne sera plus prélevé.");
                       } else {
                         setPortalError(data.error || "Impossible d'accéder au portail.");
                       }
@@ -7064,6 +7107,20 @@ export default function AutoCache() {
                         style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-333)", padding: "12px 0", fontFamily: "var(--font-apple)", fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: !!portalLoading ? "wait" : "pointer", marginBottom: 10 }}>
                         {portalLoading === "invoices" ? "Ouverture..." : "Factures & Historique"}
                       </button>
+
+                      {/* Résiliation — masquée si elle est déjà programmée */}
+                      {!subInfo?.cancelAtPeriodEnd && (
+                        <button
+                          disabled={!!portalLoading}
+                          onClick={() => openPortal("cancel")}
+                          style={{ width: "100%", background: "transparent", color: "var(--c-777)", border: "1px solid var(--c-1e1e1e)", padding: "10px 0", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: !!portalLoading ? "wait" : "pointer", marginBottom: 10 }}>
+                          {portalLoading === "cancel" ? "Ouverture..." : "Résilier mon abonnement"}
+                        </button>
+                      )}
+
+                      <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 10 }}>
+                        Sans engagement : vous pouvez résilier à tout moment. Votre accès reste ouvert jusqu'au terme de la période déjà réglée, et aucun nouveau prélèvement n'est effectué.
+                      </div>
 
                       {portalError && (
                         <div style={{ fontSize: 11, color: "#c0392b", fontFamily: "var(--font-apple)", marginBottom: 10, padding: "8px 12px", background: "rgba(192,57,43,0.08)", border: "1px solid rgba(192,57,43,0.2)", borderRadius: 3 }}>

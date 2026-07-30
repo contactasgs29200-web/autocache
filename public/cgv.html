@@ -172,10 +172,11 @@
 
   <h2>Article 5 — Modalités de paiement</h2>
   <p>Le paiement est effectué par prélèvement automatique sur carte bancaire, selon la cadence de la formule choisie — hebdomadaire, mensuelle ou annuelle — via la plateforme de paiement sécurisée <strong>Stripe</strong>. Le Prestataire n'a accès à aucune donnée bancaire du Client ; celles-ci sont traitées exclusivement par Stripe conformément à la norme PCI DSS.</p>
-  <p>En cas d'échec du prélèvement, l'accès aux fonctionnalités payantes est suspendu immédiatement. Le Client conserve un accès limité correspondant à l'essai gratuit jusqu'à régularisation.</p>
+  <p>En cas d'échec du prélèvement, l'accès aux fonctionnalités payantes est suspendu immédiatement et l'abonnement <strong>n'est pas renouvelé</strong> tant que le paiement n'a pas abouti. Le Client conserve un accès limité correspondant à l'essai gratuit jusqu'à régularisation. Stripe procède automatiquement à de nouvelles tentatives de prélèvement ; dès qu'une tentative aboutit, l'accès complet et le quota mensuel sont rétablis sans intervention du Client. Si aucune tentative n'aboutit, l'abonnement est résilié de plein droit.</p>
 
   <h2>Article 6 — Durée et renouvellement</h2>
   <p>L'abonnement est souscrit pour la durée de la formule choisie — une semaine, un mois ou un an — renouvelable tacitement à chaque échéance. Le renouvellement est automatique sauf résiliation par le Client avant la date d'échéance.</p>
+  <p>L'abonnement est <strong class="highlight">sans engagement de durée</strong> : le Client peut y mettre fin à tout moment, sans préavis ni frais, dans les conditions de l'article 8.</p>
 
   <h2>Article 7 — Droit de rétractation</h2>
   <p>Conformément à l'article L.221-28 du Code de la consommation, le droit de rétractation ne s'applique pas aux services pleinement exécutés avant la fin du délai de rétractation, lorsque le Client a expressément demandé l'exécution immédiate du service.</p>
@@ -183,7 +184,14 @@
   <p>Toutefois, par engagement commercial, AutoCache Pro offre un remboursement intégral de la première échéance si le Client en fait la demande dans les <strong>48 heures</strong> suivant la souscription, à condition qu'il n'ait pas traité plus de 10 photos.</p>
 
   <h2>Article 8 — Résiliation</h2>
-  <p>Le Client peut résilier son abonnement à tout moment depuis la rubrique <em>Mon Abonnement</em> de son espace personnel, via le portail client Stripe. La résiliation prend effet à la fin de la période en cours ; aucun remboursement au prorata n'est effectué. Après résiliation, le compte revient automatiquement à l'accès limité de l'essai gratuit.</p>
+  <p>Le Client peut résilier son abonnement <strong class="highlight">à tout moment</strong>, sans préavis, sans frais et sans avoir à motiver sa demande, depuis la rubrique <em>Mon Abonnement</em> de son espace personnel, au moyen du bouton <em>Résilier mon abonnement</em> qui ouvre le portail client Stripe.</p>
+  <p>La résiliation produit les effets suivants, appliqués automatiquement :</p>
+  <ul>
+    <li><strong>Aucun nouveau prélèvement</strong> n'est effectué à compter de la demande ;</li>
+    <li>le Client <strong>conserve l'intégralité de son accès et de son quota jusqu'au terme de la période déjà réglée</strong>, dont la date lui est affichée dans son espace personnel ;</li>
+    <li>à cette échéance, le compte revient automatiquement à l'accès limité de l'essai gratuit, sans autre démarche.</li>
+  </ul>
+  <p>Aucun remboursement au prorata de la période en cours n'est effectué, celle-ci restant intégralement utilisable. Le Client peut souscrire à nouveau à tout moment.</p>
   <p>Le Prestataire se réserve le droit de résilier sans préavis tout compte en cas de violation des présentes CGV, d'usage frauduleux ou abusif du service.</p>
 
   <h2>Article 9 — Utilisation du service</h2>

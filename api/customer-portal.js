@@ -19,15 +19,25 @@ export default async function handler(req, res) {
   const stripeCustomerId = user.user_metadata?.stripe_customer_id;
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+  // Abonnement « en cours » au sens large : on inclut les statuts en défaut de
+  // paiement, sinon un abonnement past_due disparaît de l'interface et le Client
+  // n'a plus aucun moyen de comprendre pourquoi son accès est coupé, ni de
+  // mettre sa carte à jour.
+  const LIVE_STATUSES = ["active", "trialing", "past_due", "unpaid"];
+
+  async function findSubscription() {
+    const { data } = await stripe.subscriptions.list({
+      customer: stripeCustomerId, status: "all", limit: 10,
+    });
+    return data.find(s => LIVE_STATUSES.includes(s.status)) || null;
+  }
+
   /* ── action: "subscription-info" ── */
   if (action === "subscription-info") {
     if (!stripeCustomerId) return res.status(200).json({ hasSubscription: false });
     try {
-      const subscriptions = await stripe.subscriptions.list({
-        customer: stripeCustomerId, status: "active", limit: 1,
-      });
-      if (subscriptions.data.length === 0) return res.status(200).json({ hasSubscription: false });
-      const sub = subscriptions.data[0];
+      const sub = await findSubscription();
+      if (!sub) return res.status(200).json({ hasSubscription: false });
       return res.status(200).json({
         hasSubscription: true,
         periodStart: sub.current_period_start,
@@ -35,9 +45,42 @@ export default async function handler(req, res) {
         plan: sub.metadata?.plan || null,
         formule: sub.metadata?.formule || null,
         status: sub.status,
+        // Résiliation demandée : plus aucun prélèvement, l'accès court jusqu'à
+        // `periodEnd`. L'interface doit dire « fin d'accès » et non
+        // « prochain paiement », sinon la résiliation paraît sans effet.
+        cancelAtPeriodEnd: sub.cancel_at_period_end === true,
       });
     } catch (e) {
       console.error("Subscription info error:", e);
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  /* ── action: "cancel" ── */
+  // Ouvre le portail Stripe directement sur le parcours de résiliation, plutôt
+  // que sur l'accueil du portail : le Client ne dépend plus de la présence du
+  // bouton « Annuler » dans la configuration du portail pour pouvoir résilier.
+  // Stripe applique `cancel_at_period_end` : aucun nouveau prélèvement, accès
+  // conservé jusqu'au terme de la période déjà réglée.
+  if (action === "cancel") {
+    if (!stripeCustomerId) return res.status(400).json({ error: "Aucun compte Stripe associé" });
+    try {
+      const sub = await findSubscription();
+      if (!sub) return res.status(404).json({ error: "Aucun abonnement en cours" });
+      if (sub.cancel_at_period_end) {
+        return res.status(200).json({ alreadyCancelled: true, periodEnd: sub.current_period_end });
+      }
+      const session = await stripe.billingPortal.sessions.create({
+        customer: stripeCustomerId,
+        return_url: req.headers.origin || "https://autocache.fr",
+        flow_data: {
+          type: "subscription_cancel",
+          subscription_cancel: { subscription: sub.id },
+        },
+      });
+      return res.status(200).json({ url: session.url });
+    } catch (e) {
+      console.error("Cancel flow error:", e);
       return res.status(500).json({ error: e.message });
     }
   }
