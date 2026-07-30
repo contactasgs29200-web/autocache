@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
+import { periodsElapsed, advanceAnchor } from "../src/subscriptionQuota.js";
 
 // Désactiver le body parser pour lire le raw body (requis pour la vérification Stripe)
 export const config = { api: { bodyParser: false } };
@@ -39,17 +40,6 @@ async function setUserPlan(userId, plan) {
 // suivante, donc sans coupure l'utilisateur consommerait un nouveau quota sans
 // avoir payé, et ce pendant toute la fenêtre de relance (plusieurs semaines).
 const ACTIVE_STATUSES = ["active", "trialing"];
-
-// Nombre de mois calendaires révolus depuis `anchorIso`. Réplique la règle
-// appliquée côté application pour le renouvellement du quota, afin que les deux
-// chemins ne puissent pas accorder deux quotas pour un même mois.
-export function monthsElapsed(anchorIso, now = new Date()) {
-  const anchor = new Date(anchorIso);
-  if (Number.isNaN(anchor.getTime())) return 0;
-  let months = (now.getFullYear() - anchor.getFullYear()) * 12 + (now.getMonth() - anchor.getMonth());
-  if (now.getDate() < anchor.getDate()) months -= 1; // jour du mois pas encore atteint
-  return Math.max(0, months);
-}
 
 // Retrouve l'utilisateur Supabase associé à un abonnement Stripe.
 // Chemin normal : les métadonnées posées à la création du Checkout.
@@ -189,17 +179,21 @@ export default async function handler(req, res) {
         if (userId && ACTIVE_STATUSES.includes(subscription.status)) {
           const meta = { plan };
           if (formule) meta.formule = formule;
-          // Le quota est MENSUEL quelle que soit la cadence de facturation
-          // (article 3 des CGV). On ne le remet donc pas à zéro à chaque
-          // encaissement : sur la formule hebdomadaire, cela accorderait
-          // 1 000 photos par semaine. On ne réinitialise que si un mois s'est
-          // réellement écoulé depuis le début de la fenêtre en cours.
+          // La fenêtre de quota suit la cadence de facturation (7 jours en
+          // hebdomadaire, un mois sinon). On ne réinitialise que si une fenêtre
+          // entière s'est écoulée : un encaissement seul ne suffit pas, sans
+          // quoi une relance aboutie rouvrirait un quota déjà consommé.
           const { data: current } = await supabaseAdmin().auth.admin.getUserById(userId);
           const anchor = current?.user?.user_metadata?.photos_period_start;
-          if (!anchor || monthsElapsed(anchor) >= 1) {
+          const periods = anchor ? periodsElapsed(formule, anchor) : 0;
+          if (!anchor) {
             meta.photos_used = 0;
             meta.headlight_photos_used = 0;
             meta.photos_period_start = new Date().toISOString();
+          } else if (periods >= 1) {
+            meta.photos_used = 0;
+            meta.headlight_photos_used = 0;
+            meta.photos_period_start = advanceAnchor(formule, anchor, periods);
           }
           const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
             user_metadata: meta,

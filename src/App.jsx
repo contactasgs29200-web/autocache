@@ -13,6 +13,7 @@ import { isSpinUsable } from "./showroomInteractif.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
+import { photosForFormule, periodsElapsed, advanceAnchor, quotaLabel } from "./subscriptionQuota.js";
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 767);
@@ -3083,8 +3084,10 @@ const SHOWROOM_COMING_SOON = true;
 // Options incluses dans l'abonnement, affichées cochées sur chaque formule.
 // Le Showroom Virtuel n'y figure pas tant qu'il est en développement : on ne
 // vend que ce qui est réellement disponible.
+// La ligne de quota n'y figure pas : elle dépend de la formule et est ajoutée
+// en tête de liste par la carte (250 / semaine en hebdomadaire, 1 000 / mois
+// sur les deux autres).
 const SUBSCRIPTION_FEATURES = [
-  "1 000 photos / mois",
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
@@ -3998,7 +4001,10 @@ export default function AutoCache() {
   }, [processing]);
   const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "premium" (ancien : "essential" | "pro")
   const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
-  const PLAN_LIMIT = isPaid ? 1000 : TRIAL_LIMIT;
+  // Le quota dépend de la cadence de facturation : 250 photos par semaine en
+  // hebdomadaire, 1 000 par mois sur les formules mensuelle et annuelle.
+  const userFormule = user?.user_metadata?.formule;
+  const PLAN_LIMIT = isPaid ? photosForFormule(userFormule) : TRIAL_LIMIT;
   const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
   // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
   // Le Showroom reste verrouillé pour tout le monde tant qu'il est en développement.
@@ -4051,29 +4057,29 @@ export default function AutoCache() {
     setSubInfoLoading(false);
   }, [user?.id, subInfoLoading]);
 
-  // ── Renouvellement mensuel des crédits (1 000 photos / mois) ──
-  // Indépendant de la cadence de facturation : que l'abonnement soit hebdo,
-  // mensuel ou annuel, le quota se réinitialise chaque mois au même jour.
+  // ── Renouvellement du quota ──
+  // La fenêtre suit la cadence de facturation : 7 jours en hebdomadaire,
+  // un mois calendaire sur les formules mensuelle et annuelle. Les règles sont
+  // dans src/subscriptionQuota.js, partagées avec le webhook Stripe pour que
+  // les deux chemins ne puissent pas accorder deux quotas pour une même fenêtre.
   useEffect(() => {
     if (!user?.id) return;
     const meta = user.user_metadata || {};
     if ((meta.plan ?? "trial") === "trial") return; // l'essai n'a pas de renouvellement
-    const now = new Date();
     const anchorStr = meta.photos_period_start;
     if (!anchorStr) {
-      // Initialise la fenêtre mensuelle (abonnement créé avant ce mécanisme)
-      const data = { photos_period_start: now.toISOString() };
+      // Initialise la fenêtre (abonnement créé avant ce mécanisme)
+      const data = { photos_period_start: new Date().toISOString() };
       supabase.auth.updateUser({ data });
       setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...data } } : prev);
       return;
     }
-    const anchor = new Date(anchorStr);
-    let months = (now.getFullYear() - anchor.getFullYear()) * 12 + (now.getMonth() - anchor.getMonth());
-    if (now.getDate() < anchor.getDate()) months -= 1; // jour du mois pas encore atteint
-    if (months >= 1) {
-      const newAnchor = new Date(anchor);
-      newAnchor.setMonth(newAnchor.getMonth() + months);
-      const data = { photos_used: 0, photos_period_start: newAnchor.toISOString() };
+    const periods = periodsElapsed(meta.formule, anchorStr);
+    if (periods >= 1) {
+      const data = {
+        photos_used: 0,
+        photos_period_start: advanceAnchor(meta.formule, anchorStr, periods),
+      };
       supabase.auth.updateUser({ data });
       setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...data } } : prev);
     }
@@ -4120,7 +4126,7 @@ export default function AutoCache() {
             </div>
             <div style={{ fontSize: 9.5, color: "var(--c-888)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, marginBottom: 16, minHeight: 26 }}>{f.note}</div>
             <div style={{ marginBottom: 20 }}>
-              {SUBSCRIPTION_FEATURES.map((label, i) => (
+              {[quotaLabel(f.key), ...SUBSCRIPTION_FEATURES].map((label, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
                   <span style={{ fontSize: 12, color: "#27ae60", flexShrink: 0 }}>✓</span>
                   <span style={{ fontSize: 11, color: "var(--c-bbb)", fontFamily: "var(--font-apple)", letterSpacing: 0.5 }}>{label}</span>
@@ -7060,7 +7066,7 @@ export default function AutoCache() {
                       {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, letterSpacing: 1 }}>
-                      1 000 photos / mois · Toutes les fonctionnalités incluses
+                      {quotaLabel(user?.user_metadata?.formule)} · Toutes les fonctionnalités incluses
                     </div>
                   </div>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
