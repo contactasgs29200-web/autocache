@@ -12,6 +12,8 @@
 //  PRÉREQUIS : variable d'environnement Vercel PLATE_RECOGNIZER_TOKEN.
 // =============================================================================
 
+import { requireUser } from './_auth.js';
+
 export const config = {
   api: {
     bodyParser: {
@@ -29,6 +31,10 @@ function buildForm(buf, regions) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST seulement' });
+
+  // Chaque appel consomme du quota Plate Recognizer : réservé aux connectés.
+  const user = await requireUser(req, res);
+  if (!user) return;
 
   // Les deux noms coexistent selon l'époque de la config Vercel.
   const token = process.env.PLATE_RECOGNIZER_TOKEN || process.env.PLATERECOGNIZER_API_KEY;

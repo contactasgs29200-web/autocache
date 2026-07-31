@@ -16,6 +16,8 @@
 // Sortie  : { dataUrl: "data:image/png;base64,...", provider, shadow }
 //           Le PNG contient le véhicule détouré, ombre incluse dans l'alpha.
 
+import { requireUser } from './_auth.js';
+
 export const config = { api: { bodyParser: { sizeLimit: '12mb' } }, maxDuration: 60 };
 
 // Choix du fournisseur d'après l'environnement. Exporté pour les tests.
@@ -77,6 +79,10 @@ async function removebgCutout(b64, apiKey, shadow) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Chaque appel consomme du crédit Photoroom / remove.bg.
+  const user = await requireUser(req, res);
+  if (!user) return;
 
   const provider = pickProvider(process.env);
   if (!provider) {

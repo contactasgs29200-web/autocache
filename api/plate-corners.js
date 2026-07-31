@@ -149,6 +149,10 @@ const okBox = b => b && [b.x1, b.y1, b.x2, b.y2].every(v => typeof v === 'number
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  // Chaque appel consomme du crédit Anthropic : réservé aux comptes connectés.
+  const user = await requireUser(req, res);
+  if (!user) return;
+
   const { b64, mode, tier } = req.body || {};
   const apiKey = process.env.ANTHROPIC_API_KEY;
 

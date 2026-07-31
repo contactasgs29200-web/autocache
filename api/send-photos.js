@@ -9,12 +9,18 @@
 //                         (Senders, Domains & Dedicated IPs → Senders)
 //   BREVO_SENDER_NAME   → (optionnel) nom affiché de l'expéditeur
 
+import { requireUser } from './_auth.js';
+
 export const config = { api: { bodyParser: { sizeLimit: '5mb' } } };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Empêche l'usage du compte Brevo comme relais d'envoi anonyme.
+  const user = await requireUser(req, res);
+  if (!user) return;
 
   const apiKey = process.env.BREVO_API_KEY;
   const senderEmail = process.env.BREVO_SENDER_EMAIL;

@@ -1,21 +1,16 @@
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
+import { requireUser } from "./_auth.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
 
-  const { userId, action } = req.body || {};
-  if (!userId) return res.status(400).json({ error: "Missing userId" });
+  // L'identité vient du jeton, plus du corps de la requête. Auparavant, poster
+  // un `userId` quelconque suffisait à obtenir une session du portail de
+  // facturation de ce client — factures, moyen de paiement, résiliation.
+  const user = await requireUser(req, res);
+  if (!user) return;
 
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
-
-  const { data: { user }, error } = await supabase.auth.admin.getUserById(userId);
-  if (error || !user) return res.status(404).json({ error: "Utilisateur introuvable" });
-
+  const { action } = req.body || {};
   const stripeCustomerId = user.user_metadata?.stripe_customer_id;
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 

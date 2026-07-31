@@ -5,6 +5,8 @@
 // détourage. En cas d'échec, le frontend retombe sur ses heuristiques
 // locales (plaque + composantes connexes), comme avant.
 
+import { requireUser } from './_auth.js';
+
 export const config = { api: { bodyParser: { sizeLimit: '10mb' } } };
 
 const MODELS = { default: 'claude-haiku-4-5', best: 'claude-sonnet-5' };
@@ -35,6 +37,10 @@ function extractJSON(txt) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Chaque appel consomme du crédit Anthropic : réservé aux comptes connectés.
+  const user = await requireUser(req, res);
+  if (!user) return;
 
   const { b64, tier } = req.body || {};
   const apiKey = process.env.ANTHROPIC_API_KEY;

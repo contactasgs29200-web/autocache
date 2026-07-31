@@ -98,6 +98,20 @@ const SUPABASE_URL = "https://vwfqwfmrllnbbxyvhjht.supabase.co";
 const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3ZnF3Zm1ybGxuYmJ4eXZoamh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQyNjUxMjgsImV4cCI6MjA4OTg0MTEyOH0.0BJUku8o25mEOmpx4rXiPkHLEI-GkxmCGBCRc00M4OA";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
+// ── Appels à /api : le jeton de session accompagne chaque requête ──────────
+// Toutes les fonctions serveur exigent désormais un compte connecté. L'identité
+// est portée par ce jeton, signé par Supabase, et non plus par un identifiant
+// écrit dans le corps de la requête — qu'un appelant pouvait choisir librement.
+async function authHeaders(extra = {}) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  };
+}
+
 // ── Helper : clip arrondi sur un contexte canvas ─────────────────────────
 // radius : 0–50, représente le rayon en % de H (50 = pilule)
 function applyRoundedClip(ctx, W, H, radius) {
@@ -1026,7 +1040,7 @@ async function proShowroomCutout(dataUrl) {
     const b64 = small.includes(',') ? small.split(',')[1] : small;
     const r = await fetch('/api/showroom-cutout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ b64 }),
     });
     if (r.status === 501) {
@@ -1805,7 +1819,7 @@ async function fablePlateAPI(b64DataUrl, mode, tier) {
   const b64 = b64DataUrl.includes(',') ? b64DataUrl.split(',')[1] : b64DataUrl;
   const r = await fetch('/api/plate-corners', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ b64, mode, ...(tier ? { tier } : {}) }),
   });
   if (!r.ok) {
@@ -2153,9 +2167,10 @@ function throttledPR(fn) {
 async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
   try {
     const { base64, w, h } = await downscaledImageBase64(imageFile, 1600, 0.85);
+    const headers = await authHeaders();
     const doFetch = () => fetch('/api/detect-plates', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ imageBase64: base64, regions }),
     });
     let r = await throttledPR(doFetch);
@@ -2245,7 +2260,7 @@ async function detectVehicles(imageFile) {
     const { base64 } = await downscaledImageBase64(imageFile, 1280, 0.8);
     const r = await fetch('/api/detect-vehicles', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(),
       body: JSON.stringify({ b64: base64.includes(',') ? base64.split(',')[1] : base64 }),
     });
     if (!r.ok) { console.warn('[Vehicles] HTTP', r.status); return null; }
@@ -2881,14 +2896,11 @@ function AuthScreen({ onAuth, exiting }) {
           options: { data: { full_name: fullName.trim(), phone: phone.trim() } }
         });
         if (error) throw error;
-        // Stocker le téléphone dans la colonne phone de Supabase (sans vérification)
-        if (signUpData?.user?.id) {
-          await fetch('/api/set-user-phone', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: signUpData.user.id, phone: phone.trim() })
-          }).catch(() => {}); // non-bloquant si ça échoue
-        }
+        // Le téléphone est déjà enregistré dans les métadonnées ci-dessus. Sa
+        // recopie dans la colonne `phone` de Supabase se fait à la première
+        // connexion : l'inscription exige une confirmation par email, donc
+        // aucune session n'existe encore ici et l'appel serveur — désormais
+        // authentifié — serait refusé.
         setSuccess("Compte créé ! Vérifiez votre email puis connectez-vous.");
         setMode("login");
       }
@@ -3994,7 +4006,7 @@ export default function AutoCache() {
         setEmailStatus({ type: "progress", msg: `Envoi ${b + 1}/${batches.length}…` });
         const resp = await fetch("/api/send-photos", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: await authHeaders(),
           body: JSON.stringify({
             to,
             subject: "Vos photos AutoCache",
@@ -4058,8 +4070,8 @@ export default function AutoCache() {
     try {
       const r = await fetch('/api/customer-portal', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, action: 'subscription-info' }),
+        headers: await authHeaders(),
+        body: JSON.stringify({ action: 'subscription-info' }),
       });
       const d = await r.json();
       if (d.hasSubscription) {
@@ -4090,6 +4102,26 @@ export default function AutoCache() {
     }
     setSubInfoLoading(false);
   }, [user?.id, subInfoLoading]);
+
+  // ── Recopie du téléphone dans la colonne dédiée ──
+  // Renseigné aux métadonnées à l'inscription, il ne peut être recopié dans la
+  // colonne `phone` qu'une fois la session ouverte, l'appel serveur exigeant
+  // un compte authentifié. On ne tente la synchronisation qu'une seule fois,
+  // quand la colonne est encore vide.
+  useEffect(() => {
+    if (!user?.id) return;
+    const pending = user.user_metadata?.phone;
+    if (!pending || user.phone) return;
+    (async () => {
+      try {
+        await fetch('/api/set-user-phone', {
+          method: 'POST',
+          headers: await authHeaders(),
+          body: JSON.stringify({ phone: pending }),
+        });
+      } catch { /* non bloquant : le numéro reste disponible dans les métadonnées */ }
+    })();
+  }, [user?.id, user?.phone]);
 
   // ── Renouvellement du quota ──
   // La fenêtre suit la cadence de facturation : 7 jours en hebdomadaire,
@@ -4125,8 +4157,8 @@ export default function AutoCache() {
     try {
       const res = await fetch("/api/create-checkout-session", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ formule, userId: user.id, userEmail: user.email }),
+        headers: await authHeaders(),
+        body: JSON.stringify({ formule }),
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
@@ -4213,7 +4245,7 @@ export default function AutoCache() {
     if (!promoCode.trim() || promoStatus === "loading") return;
     setPromoStatus("loading");
     try {
-      const res = await fetch("/api/promo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: promoCode.trim() }) });
+      const res = await fetch("/api/promo", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ code: promoCode.trim() }) });
       const data = await res.json();
       if (!data.valid) { setPromoStatus("error"); setPromoMsg(data.message); return; }
       if (data.plan) {
@@ -7147,12 +7179,10 @@ export default function AutoCache() {
                     try {
                       const res = await fetch("/api/customer-portal", {
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
+                        headers: await authHeaders(),
                         // "cancel" ouvre directement le parcours de résiliation ;
                         // sans action, on ouvre l'accueil du portail.
-                        body: JSON.stringify(action === "cancel"
-                          ? { userId: user.id, action: "cancel" }
-                          : { userId: user.id }),
+                        body: JSON.stringify(action === "cancel" ? { action: "cancel" } : {}),
                       });
                       const data = await res.json();
                       if (data.url) {

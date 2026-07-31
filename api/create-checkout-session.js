@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { requireUser, corsHeaders } from "./_auth.js";
 
 // Abonnement unique AutoCache, décliné en 3 formules de facturation.
 const PRICE_ENV = {
@@ -12,14 +13,20 @@ const PRICE_ENV = {
 const COUPON_FORMULES = ["monthly", "annual"];
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  corsHeaders(res);
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const { formule, userId, userEmail } = req.body || {};
-  if (!formule || !userId || !userEmail) return res.status(400).json({ error: "Paramètres manquants." });
+  // Le compte à créditer est celui du jeton, jamais celui annoncé dans le
+  // corps : sans cela, on pouvait ouvrir un paiement rattaché au compte d'un
+  // tiers, et l'abonnement se serait activé sur le mauvais compte.
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  const userId = user.id;
+  const userEmail = user.email;
+  const { formule } = req.body || {};
+  if (!formule || !userEmail) return res.status(400).json({ error: "Paramètres manquants." });
 
   const envName = PRICE_ENV[formule];
   if (!envName) return res.status(400).json({ error: "Formule inconnue." });
