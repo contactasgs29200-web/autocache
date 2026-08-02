@@ -483,38 +483,60 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
   const plateH = bboxB - bboxT;
   if (plateW < 1 || plateH < 1) return;
 
-  // ── Step 1: multi-step halving ──
-  // Canvas drawImage handles 2× downscale well but degrades at 4×+.
-  // Halve the source progressively until it's close to the output size.
-  // IMPORTANT (netteté du cache plaque) : la source halvée ne doit JAMAIS
-  // descendre sous la résolution de supersampling (plateW × SS_MAX),
-  // sinon l'étape 3 ré-agrandit la source dans l'offscreen → cache plaque
-  // flou. On garde une marge ×2 pour un sous-échantillonnage propre.
+  // Le cache est-il quasi rectangulaire ? Cette réponse fixe la résolution
+  // d'arrivée de la source : le chemin rapide (étape 2) dessine directement à
+  // plateW, le chemin perspective (étape 3) passe par un offscreen supersamplé
+  // à plateW × SS_MAX.
   const SS_MAX = 4;
-  const targetW = Math.max(plateW * SS_MAX * 2, 1400);
+  const eps = 1.5;
+  const axisAligned = Math.abs(tl.y - tr.y) < eps && Math.abs(bl.y - br.y) < eps &&
+                      Math.abs(tl.x - bl.x) < eps && Math.abs(tr.x - br.x) < eps;
+  const consumerW = axisAligned ? plateW : plateW * SS_MAX;
+
+  // ── Step 1: réduction progressive de la source ──
+  // drawImage réduit proprement d'un facteur 2 et se dégrade au-delà de 4.
+  // On amène donc la source à 2× la résolution d'arrivée : halvings successifs
+  // puis un dernier pas à la taille exacte. Sans cela, un cache généré de
+  // 3120 px atterrissait en UN seul drawImage sur une plaque de ~150 px
+  // (réduction ×20) — d'où le texte crénelé, très visible en zoomant.
+  // La source ne descend jamais sous la résolution d'arrivée : elle serait
+  // sinon ré-agrandie en aval (cache flou).
+  const targetW = Math.min(iw, Math.max(2, Math.round(consumerW * 2)));
   let src = img, sw = iw, sh = ih;
+  const dropSrc = () => { if (src !== img) freeCanvas(src); };
   while (sw > targetW * 2 && sw > 2) {
     const half = document.createElement('canvas');
-    half.width = Math.round(sw / 2);
-    half.height = Math.round(sh / 2);
+    half.width = Math.max(1, Math.round(sw / 2));
+    half.height = Math.max(1, Math.round(sh / 2));
     const hCtx = half.getContext('2d');
     hCtx.imageSmoothingEnabled = true;
     hCtx.imageSmoothingQuality = 'high';
     hCtx.drawImage(src, 0, 0, half.width, half.height);
+    dropSrc();
     src = half; sw = half.width; sh = half.height;
+  }
+  if (sw > targetW * 1.05) {
+    const fin = document.createElement('canvas');
+    fin.width = targetW;
+    fin.height = Math.max(1, Math.round(sh * targetW / sw));
+    const fCtx = fin.getContext('2d');
+    fCtx.imageSmoothingEnabled = true;
+    fCtx.imageSmoothingQuality = 'high';
+    fCtx.drawImage(src, 0, 0, fin.width, fin.height);
+    dropSrc();
+    src = fin; sw = fin.width; sh = fin.height;
   }
 
   // ── Step 2: axis-aligned fast path ──
   // Near-rectangular plates bypass the band decomposition entirely
   // for a single, clean drawImage call.
-  const eps = 1.5;
-  if (Math.abs(tl.y - tr.y) < eps && Math.abs(bl.y - br.y) < eps &&
-      Math.abs(tl.x - bl.x) < eps && Math.abs(tr.x - br.x) < eps) {
+  if (axisAligned) {
     ctx.save();
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(src, tl.x, tl.y, tr.x - tl.x, bl.y - tl.y);
     ctx.restore();
+    dropSrc();
     return;
   }
 
@@ -580,7 +602,9 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(offCanvas, bboxL, bboxT, plateW, plateH);
     ctx.restore();
+    freeCanvas(offCanvas);
   }
+  dropSrc();
 }
 
 // ?plateDebug=raw : laisse la plaque VISIBLE et n'affiche que l'overlay des
@@ -740,6 +764,9 @@ function applyFloorBlur(ctx, canvasEl, W, H) {
 
   // Superpose le sol flouté sur l'image principale
   ctx.drawImage(off, 0, 0);
+  // Deux canvas pleine taille viennent de vivre en même temps que le canvas
+  // principal : on les rend tout de suite, sans attendre le GC.
+  freeCanvas(off, mask);
 }
 
 // ── Amélioration photo style "pro" ────────────────────────────────────────────
@@ -2716,7 +2743,7 @@ async function uncropCutout(croppedCutoutUrl, roi, origW, origH, baseDataURL = n
   return c.toDataURL('image/png');
 }
 
-async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2, autoPlate = true, preDetectedPlate = undefined) {
+async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhance = false, useGptAngle = false, floorClean = false, enhancePro = false, bodyPolish = false, enhanceProIntensity = 2, autoPlate = true, preDetectedPlate = undefined, showroomActive = false) {
   const { b64, imgW, imgH } = await toBase64(photoFile);
 
   const photoURL = URL.createObjectURL(photoFile);
@@ -2762,17 +2789,30 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
 
   const MIN_WORK_PX     = 1600;  // plancher image entière (fallback sans plaque)
   const TARGET_PLATE_PX = 400;   // largeur de plaque visée → qualité constante
-  // Garde-fou mémoire (plus grand côté du canvas). Sur mobile, un canvas
-  // 4400px (~52 Mo RGBA) multiplié par les étapes du pipeline showroom
-  // dépasse le budget canvas de WebKit → onglet tué (page qui "plante" et
-  // revient à l'accueil). On plafonne à 2400px : suffisant pour l'export
-  // showroom 2400×1350 et pour un cache plaque net.
-  const MAX_DIM         = isMobileDevice() ? 2400 : 4400;
+  // Garde-fou mémoire. Sur mobile, un canvas 4400px (~52 Mo RGBA) multiplié par
+  // les étapes du pipeline showroom dépasse le budget canvas de WebKit →
+  // onglet tué (page qui "plante" et revient à l'accueil). Le showroom garde
+  // donc son plafond de 2400px (suffisant pour l'export showroom 2400×1350).
+  // SANS showroom, un seul canvas plein format vit à la fois : on peut monter
+  // plus haut, et c'est décisif pour le cache plaque — à 2400px de plafond, une
+  // plaque photographiée à 200px reste à 200px dans l'export et pixellise dès
+  // qu'on zoome. On borne aussi l'AIRE, seule vraie mesure du coût mémoire :
+  // une photo portrait très allongée coûte moins qu'un 3:2 de même hauteur.
+  // Le budget mobile suit le nombre de canvas pleine taille vivants en même
+  // temps : showroom (plusieurs étapes) < sol flouté pro (3 canvas) < simple
+  // pose de cache (1 seul).
+  const mobile = isMobileDevice();
+  const MAX_DIM  = mobile ? (showroomActive ? 2400 : enhancePro ? 2900 : 3400) : 4400;
+  const MAX_AREA = mobile ? (showroomActive ? 4.6e6 : enhancePro ? 5.5e6 : 7.5e6) : 20e6;
   let renderScale = Math.max(1, MIN_WORK_PX / Math.max(natW, natH));
   if (plateNativePx > 2) {
     renderScale = Math.max(renderScale, TARGET_PLATE_PX / plateNativePx);
   }
-  renderScale = Math.min(renderScale, MAX_DIM / Math.max(natW, natH));
+  renderScale = Math.min(
+    renderScale,
+    MAX_DIM / Math.max(natW, natH),
+    Math.sqrt(MAX_AREA / Math.max(1, natW * natH)),
+  );
   // Desktop : jamais de réduction sous la résolution native (renderScale ≥ 1).
   // Mobile : la réduction est PRÉCISÉMENT le but du plafond — une photo
   // iPhone 4032px traitée en pleine résolution fait échouer les canvas en
@@ -3243,8 +3283,13 @@ export default function AutoCache() {
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
   const [manualPlateMode, setManualPlateMode] = useState(false); // true = pose manuelle (plaque non détectée)
   const [lbZoom, setLbZoom] = useState(1);            // zoom de la lightbox (1 = normal, max 8)
-  const [lbPan,  setLbPan]  = useState({ x: 0, y: 0 }); // décalage (px) du calque zoomé
+  const [lbPan,  setLbPanState]  = useState({ x: 0, y: 0 }); // décalage (px) du calque zoomé
   const [lbPanDrag, setLbPanDrag] = useState(null);   // { startMx, startMy, startPan }
+  // Refs miroir du pan et du drag : les événements tactiles s'enchaînent plus
+  // vite que les rendus React, et un pan qui repart d'une valeur périmée saute.
+  const lbPanRef     = useRef({ x: 0, y: 0 });
+  const lbPanDragRef = useRef(null);
+  const applyLbPan = (p) => { lbPanRef.current = p; setLbPanState(p); };
   const [settingsOpen, setSettingsOpen] = useState(false); // menu settings en haut à droite
   const settingsRef = useRef(null); // ref pour fermer au clic extérieur
   // Thème de l'interface : "light" (jour, par défaut) ou "dark" (nuit)
@@ -3742,7 +3787,7 @@ export default function AutoCache() {
     for (let i = 0; i < photosToProcess.length; i++) {
       startPlateJob(i + 1); startPlateJob(i + 2);
       const plateResult = await plateJobs[i];
-      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomActive, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate, plateResult);
+      const r = await processPhoto(photosToProcess[i].file, logoImg, adjEnabled ? adj : { brightness: 1, contrast: 1, saturation: 1 }, bgColor, enhance, !!logoImg || showroomActive, floorClean, enhancePro, bodyPolish, enhanceProIntensity, autoPlate, plateResult, showroomActive);
       const entry = { ...r, logoPreview: logo.preview, bgColor, generated: !!logo.generated };
       if (showroomActive && showroomBgDataUrl) {
         try {
@@ -4341,7 +4386,7 @@ export default function AutoCache() {
     setAdjustMode(false); setAdjustDrag(null);
     resetAdjustPlates(r);
     setShowMaskEditor(false);
-    setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
+    setLbZoom(1); applyLbPan({ x: 0, y: 0 }); clearLbPan();
     setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
     setShowroomZoom(r.showroomZoom ?? DEFAULT_SHOWROOM_ZOOM);
     setShowroomBlend(r.showroomBlend ?? 0);
@@ -4417,7 +4462,7 @@ export default function AutoCache() {
     setLightbox(null);
     setCropMode(false); setCropDrag(null);
     setAdjustMode(false); setAdjustDrag(null);
-    setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
+    setLbZoom(1); applyLbPan({ x: 0, y: 0 }); clearLbPan();
   };
 
   const startCropDrag = (e, type) => {
@@ -4935,22 +4980,32 @@ export default function AutoCache() {
     const factor = e.deltaY < 0 ? 1.25 : 1 / 1.25;
     const newZoom = Math.max(1, Math.min(8, lbZoom * factor));
     if (newZoom === 1) {
-      setLbZoom(1); setLbPan({ x: 0, y: 0 }); return;
+      setLbZoom(1); applyLbPan({ x: 0, y: 0 }); return;
     }
     const newX = mx - (mx - lbPan.x) * newZoom / lbZoom;
     const newY = my - (my - lbPan.y) * newZoom / lbZoom;
     setLbZoom(newZoom);
-    setLbPan({
+    applyLbPan({
       x: Math.max(rect.width  * (1 - newZoom), Math.min(0, newX)),
       y: Math.max(rect.height * (1 - newZoom), Math.min(0, newY)),
     });
   };
 
+  // Ancre un déplacement à la position courante du doigt/curseur : le pan
+  // repartira de là, sans saut, depuis le décalage actuellement appliqué.
+  const anchorLbPan = (clientX, clientY) => {
+    const drag = { startMx: clientX, startMy: clientY, startPan: { ...lbPanRef.current } };
+    lbPanDragRef.current = drag;
+    setLbPanDrag(drag);
+  };
+
+  const clearLbPan = () => { lbPanDragRef.current = null; setLbPanDrag(null); };
+
   const onLbPanDown = (e) => {
     // Ne pas démarrer le pan si un drag rognage/ajustement est en cours
     if (lbZoom > 1 && !cropDrag && !adjustDrag) {
       if (e.preventDefault) e.preventDefault();
-      setLbPanDrag({ startMx: e.clientX, startMy: e.clientY, startPan: { ...lbPan } });
+      anchorLbPan(e.clientX, e.clientY);
     }
   };
 
@@ -4962,6 +5017,7 @@ export default function AutoCache() {
     if (cropMode) return;
     if (e.touches.length === 2) {
       e.preventDefault();
+      clearLbPan(); // le pinch prend la main sur un éventuel pan en cours
       const t0 = e.touches[0], t1 = e.touches[1];
       const dx = t0.clientX - t1.clientX, dy = t0.clientY - t1.clientY;
       pinchRef.current = {
@@ -4974,6 +5030,19 @@ export default function AutoCache() {
     } else if (e.touches.length === 1 && lbZoom > 1 && !adjustMode) {
       onLbPanDown({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY, preventDefault: () => e.preventDefault() });
     }
+  };
+
+  // Fin d'un contact. Après un pinch, l'utilisateur relève souvent UN seul
+  // doigt et continue à glisser avec l'autre : on ré-ancre alors le pan sur le
+  // doigt restant, sinon le glissement suivant serait ignoré (aucun touchstart
+  // n'est émis pour un doigt déjà posé).
+  const onLbTouchEndEvt = (e) => {
+    if (e?.touches?.length === 1 && !cropMode && !adjustMode) {
+      pinchRef.current = null;
+      if (lbZoom > 1) { anchorLbPan(e.touches[0].clientX, e.touches[0].clientY); return; }
+    }
+    pinchRef.current = null;
+    clearLbPan();
   };
 
   const onLbTouchMove = (e) => {
@@ -4992,26 +5061,35 @@ export default function AutoCache() {
       const newX = mx - (mx - pinchRef.current.startPan.x) * newZoom / pinchRef.current.startZoom;
       const newY = my - (my - pinchRef.current.startPan.y) * newZoom / pinchRef.current.startZoom;
       setLbZoom(newZoom);
-      if (newZoom === 1) { setLbPan({ x: 0, y: 0 }); return; }
-      setLbPan({
+      if (newZoom === 1) { applyLbPan({ x: 0, y: 0 }); return; }
+      applyLbPan({
         x: Math.max(rect.width  * (1 - newZoom), Math.min(0, newX)),
         y: Math.max(rect.height * (1 - newZoom), Math.min(0, newY)),
       });
     } else if (e.touches.length === 1 && !adjustMode) {
-      onLbPanMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
+      const t = e.touches[0];
+      // Photo zoomée : le doigt la déplace. Si aucun pan n'est armé (doigt
+      // resté posé à la fin d'un pinch, ou geste démarré hors de l'image), on
+      // l'arme ici plutôt que d'ignorer le glissement.
+      if (lbZoom > 1 && !lbPanDragRef.current && !cropDrag && !adjustDrag && !signDragRef.current) {
+        anchorLbPan(t.clientX, t.clientY);
+        e.preventDefault();
+        return;
+      }
+      if (lbPanDragRef.current) e.preventDefault();
+      onLbPanMove({ clientX: t.clientX, clientY: t.clientY });
     }
   };
 
-  const onLbTouchEnd = () => { pinchRef.current = null; setLbPanDrag(null); };
-
   const onLbPanMove = (e) => {
-    if (!lbPanDrag || !lbContainerRef.current) return;
+    const drag = lbPanDragRef.current || lbPanDrag;
+    if (!drag || !lbContainerRef.current) return;
     const rect = lbContainerRef.current.getBoundingClientRect();
-    const dx = e.clientX - lbPanDrag.startMx;
-    const dy = e.clientY - lbPanDrag.startMy;
-    setLbPan({
-      x: Math.max(rect.width  * (1 - lbZoom), Math.min(0, lbPanDrag.startPan.x + dx)),
-      y: Math.max(rect.height * (1 - lbZoom), Math.min(0, lbPanDrag.startPan.y + dy)),
+    const dx = e.clientX - drag.startMx;
+    const dy = e.clientY - drag.startMy;
+    applyLbPan({
+      x: Math.max(rect.width  * (1 - lbZoom), Math.min(0, drag.startPan.x + dx)),
+      y: Math.max(rect.height * (1 - lbZoom), Math.min(0, drag.startPan.y + dy)),
     });
   };
 
@@ -6149,15 +6227,15 @@ export default function AutoCache() {
             else if (cropMode) onCropTouchMove(e);
             else onLbTouchMove(e);
           }}
-          onTouchEnd={() => {
+          onTouchEnd={e => {
             if (adjustRafRef.current) { cancelAnimationFrame(adjustRafRef.current); adjustRafRef.current = 0; }
             // Sauvegarde le coin relâché (équivalent tactile de onMouseUp)
             commitAdjust();
             adjustDragRef.current = null; setAdjustDrag(null);
             setLoupeActive(false);
             setCropDrag(null);
-            setLbPanDrag(null);
-            pinchRef.current = null;
+            // Pinch → pan : ré-ancre le déplacement sur le doigt encore posé
+            onLbTouchEndEvt(e);
           }}
           onMouseUp={() => {
             if (adjustRafRef.current) { cancelAnimationFrame(adjustRafRef.current); adjustRafRef.current = 0; }
@@ -6166,7 +6244,7 @@ export default function AutoCache() {
             commitAdjust();
             adjustDragRef.current = null;
             setAdjustDrag(null);
-            setLbPanDrag(null);
+            clearLbPan();
           }}
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: isMobile ? 8 : 16, userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none", WebkitTapHighlightColor: "transparent" }}
         >
@@ -6289,7 +6367,7 @@ export default function AutoCache() {
             onWheel={onLbWheel}
             onMouseDown={onLbPanDown}
             onTouchStart={onLbTouchStart}
-            onDoubleClick={e => { e.stopPropagation(); setLbZoom(1); setLbPan({ x: 0, y: 0 }); }}
+            onDoubleClick={e => { e.stopPropagation(); setLbZoom(1); applyLbPan({ x: 0, y: 0 }); }}
             style={{
               position: "relative", display: "inline-block", maxWidth: "100%",
               borderRadius: 3, border: "1px solid var(--c-222)", overflow: "hidden", lineHeight: 0,
@@ -6300,7 +6378,7 @@ export default function AutoCache() {
             {/* Indicateur de zoom — cliquable sur mobile pour réinitialiser */}
             {lbZoom > 1.05 && (
               <div
-                onClick={isMobile ? (e => { e.stopPropagation(); setLbZoom(1); setLbPan({ x: 0, y: 0 }); }) : undefined}
+                onClick={isMobile ? (e => { e.stopPropagation(); setLbZoom(1); applyLbPan({ x: 0, y: 0 }); }) : undefined}
                 style={{ position: "absolute", top: 8, right: isMobile ? 54 : 8, background: "rgba(0,0,0,0.82)", color: "#f26522", fontSize: 11, fontFamily: "var(--font-apple)", padding: isMobile ? "5px 10px" : "3px 8px", borderRadius: 2, zIndex: 30, letterSpacing: 1, cursor: isMobile ? "pointer" : "default" }}
               >
                 ×{lbZoom.toFixed(1)}{isMobile && " ↩"}
@@ -7088,8 +7166,12 @@ export default function AutoCache() {
               : lightbox.showroomDataURL
               ? "Flèches pour déplacer · 🔍 pour zoomer la voiture · Sauvegarde auto · Cliquer en dehors pour fermer"
               : lbZoom > 1
-              ? "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser"
-              : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer"}
+              ? (isMobile
+                ? "Pincer pour zoomer · Un doigt pour se déplacer · Toucher ×N pour réinitialiser"
+                : "Molette pour zoomer · Glisser pour se déplacer · Double-clic pour réinitialiser")
+              : (isMobile
+                ? "Pincer pour zoomer · ✂ Rogner · ⊹ Ajuster · ✕ pour fermer"
+                : "Molette pour zoomer · ✂ Rogner · ⊹ Ajuster · Cliquer en dehors pour fermer")}
           </div>
         </div>
       )}
