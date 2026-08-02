@@ -5,6 +5,7 @@ import {
   stepById, plateQuadForStep, plateWidthForYaw, quadBBox, coverSourceRect,
   doneStepIds, nextPendingStepIndex, isTourComplete, bonusCount,
   tourFileName, orderedShots, tourProgress,
+  blurScore, meanLuma, frameAdvice, QUALITY,
 } from '../src/guidedTour.js';
 
 // ── Plan de prise de vue ─────────────────────────────────────────────────────
@@ -226,4 +227,67 @@ test('orderedShots tolère un parcours incomplet', () => {
   const out = orderedShots([shot('rear'), shot(BONUS_STEP.id)]);
   assert.deepEqual(out.map(o => o.stepId), ['rear', BONUS_STEP.id]);
   assert.deepEqual(out.map(o => o.name), ['parcours_01_arriere.jpg', 'parcours_02_bonus-01.jpg']);
+});
+
+// ── Contrôle de prise de vue ─────────────────────────────────────────────────
+
+// Bruit = hautes fréquences = net ; dégradé lisse = flou ; uni = rien.
+function noiseImage(w, h, seed = 1) {
+  const g = new Float32Array(w * h);
+  let s = seed;
+  for (let i = 0; i < g.length; i++) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    g[i] = (s % 256);
+  }
+  return g;
+}
+const flatImage = (w, h, value = 128) => new Float32Array(w * h).fill(value);
+function gradientImage(w, h) {
+  const g = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y * w + x] = (x / w) * 255;
+  return g;
+}
+
+test('blurScore sépare une image nette d’une image lisse', () => {
+  const sharp = blurScore(noiseImage(32, 32), 32, 32);
+  const smooth = blurScore(gradientImage(32, 32), 32, 32);
+  assert.ok(sharp > smooth * 10, `sharp=${sharp} smooth=${smooth}`);
+});
+
+test('blurScore vaut 0 sur une image uniforme ou dégénérée', () => {
+  assert.equal(blurScore(flatImage(16, 16), 16, 16), 0);
+  assert.equal(blurScore(null, 16, 16), 0);
+  assert.equal(blurScore(flatImage(2, 2), 2, 2), 0);
+});
+
+test('meanLuma calcule la luminance moyenne', () => {
+  assert.equal(meanLuma(flatImage(8, 8, 100)), 100);
+  assert.equal(meanLuma([]), 0);
+});
+
+test('frameAdvice ne dit rien sur une prise correcte', () => {
+  assert.equal(frameAdvice({ blurVar: 500, luma: 120 }), null);
+});
+
+test('frameAdvice signale le flou avec un motif exploitable', () => {
+  const a = frameAdvice({ blurVar: 5, luma: 120 });
+  assert.equal(a.code, 'blur');
+  assert.match(a.message, /flou/i);
+});
+
+test('frameAdvice diagnostique l’exposition avant la netteté', () => {
+  // Une photo noire est forcément aussi « floue » : le motif utile est
+  // l'exposition, c'est lui qui doit remonter.
+  assert.equal(frameAdvice({ blurVar: 0, luma: 5 }).code, 'dark');
+  assert.equal(frameAdvice({ blurVar: 0, luma: 250 }).code, 'bright');
+});
+
+test('frameAdvice accepte des seuils personnalisés', () => {
+  assert.equal(frameAdvice({ blurVar: 100, luma: 120 }, { minBlurVar: 200 }).code, 'blur');
+  assert.equal(frameAdvice({ blurVar: 10, luma: 120 }, { minBlurVar: 5 }), null);
+});
+
+test('QUALITY expose des seuils cohérents', () => {
+  assert.ok(QUALITY.minLuma < QUALITY.maxLuma);
+  assert.ok(QUALITY.minBlurVar > 0);
 });

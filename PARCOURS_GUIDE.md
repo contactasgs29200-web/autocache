@@ -2,7 +2,8 @@
 
 Disponible pour tous, sans code d'accès. Le bouton apparaît dans **02 — Photos
 de véhicules** dès que la page a accès à une caméra (`getUserMedia`, donc HTTPS
-ou localhost).
+ou localhost). Il occupe la place de l'ancien *Showroom interactif*, retiré du
+produit — voir §6.
 
 ---
 
@@ -145,8 +146,35 @@ trois secondes ; une plaque restée lisible, non.
   le travail, gratuitement. Le modèle ONNX local (`plate-keypoints.onnx`)
   pourrait confirmer en direct que la plaque est bien dans le cache — piste
   ouverte, non faite.
-- **Pas de tour 360°.** Quatre vues ne font pas une rotation ; c'est le rôle du
-  *Showroom interactif* (`SHOWROOM_INTERACTIF.md`), qui reste accessible par
-  code administrateur.
+- **Pas de tour 360°.** Quatre vues ne font pas une rotation.
 - **Pas de guidage à la boussole.** Aucun capteur n'est lu : c'est l'utilisateur
   qui sait où il est autour de sa voiture, et la consigne écrite suffit.
+
+---
+
+## 6. Ce qui a été retiré
+
+Le **Showroom interactif** — scan guidé en 36 zones (tour × trois hauteurs)
+piloté par la boussole, puis tour 360° au doigt — a été supprimé et remplacé
+par ce parcours à cet emplacement. Sont partis avec lui :
+
+```
+src/components/ShowroomCapture.jsx   UI de scan
+src/components/Spin360.jsx           visualiseur rotatif
+src/showroomInteractif.js            logique d'orbite et de couverture
+tests/showroomInteractif.test.js
+SHOWROOM_INTERACTIF.md
+```
+
+Ainsi que, dans `App.jsx`, les états `spin360Mode` / `spinRingCount` /
+`showSpinViewer`, le bouton « Tour 360° » de l'écran des résultats et le
+drapeau d'accès `showroom_interactif` ; et le code administrateur `AURELE3D`
+dans `api/promo.js` (le mécanisme générique de déverrouillage par
+`feature`, lui, reste en place pour un usage futur).
+
+Le contrôle local de netteté et d'exposition, seul morceau réutilisé, vit
+désormais dans `src/guidedTour.js` (`blurScore`, `meanLuma`, `frameAdvice`).
+Tout le reste est récupérable dans l'historique git.
+
+Attention à ne pas confondre avec le **mode Showroom** (fond de studio virtuel,
+`showroomActive`, `SHOWROOM_V2.md`) : c'est une autre fonctionnalité, intacte.

@@ -127,14 +127,15 @@ pas meilleur que le compositing 2D actuel, pour 100 fois le prix.
 
 ## 7. Ce qui est déjà prêt si le bench est concluant
 
-La capture guidée du Showroom interactif (`src/components/ShowroomCapture.jsx`)
-couvre déjà le véhicule en 36 zones — tour × trois hauteurs — avec contrôle de
-netteté et consignes directionnelles. C'est exactement la capture qu'exige un
-scan 3D : seule la densité change (36 vues aujourd'hui, ~150 pour un scan).
+Le parcours photo guidé (`src/components/GuidedTour.jsx`, voir
+`PARCOURS_GUIDE.md`) apporte déjà la moitié du chemin : accès caméra, capture
+recadrée sur la zone visée, gabarit à l'écran, contrôle de netteté et
+d'exposition local, écran de revue. Un scan 3D reprendrait cette couche telle
+quelle et n'ajouterait que le plan de capture dense (~150 vues au lieu de 4) et
+son guidage.
 
-Passer au 3D ne demanderait donc pas de refaire la capture, seulement :
-- augmenter la densité de vues par zone ;
-- envoyer le lot à un service de calcul au lieu du pipeline local ;
-- afficher le modèle au lieu du carrousel.
-
-Le travail déjà fait n'est pas perdu, quelle que soit l'issue du bench.
+L'ancien Showroom interactif poussait ce guidage jusqu'à une couverture en 36
+zones (tour × trois hauteurs) pilotée par la boussole. Il a été retiré du
+produit ; son code reste dans l'historique git (voir le commit qui supprime
+`src/components/ShowroomCapture.jsx`) et servirait de point de départ si le
+bench est concluant.

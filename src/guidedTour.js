@@ -268,6 +268,70 @@ export function orderedShots(shots) {
   }));
 }
 
+// =============================================================================
+//  Contrôle de prise de vue — calculs locaux sur le flux vidéo.
+//
+//  Aucun appel réseau : la netteté et l'exposition se mesurent sur une vignette
+//  de luminance. Le verdict est INDICATIF — il conseille, il ne bloque jamais
+//  le déclencheur : sur une photo d'annonce à contre-jour, c'est l'utilisateur
+//  qui décide.
+//
+//  Pas de contrôle de cadrage ici : le cadrage est libre (on peut vouloir un
+//  détail de jante), et le gabarit du cache suffit à guider les vues imposées.
+// =============================================================================
+
+/** Seuils calibrés pour un smartphone tenu à ~3 m du véhicule. */
+export const QUALITY = {
+  minBlurVar: 45,   // variance du laplacien — en dessous, flou de bougé
+  minLuma: 26,      // sous-exposé (contre-jour, nuit)
+  maxLuma: 234,     // surexposé (soleil de face)
+};
+
+/**
+ * Variance du laplacien — mesure de netteté classique.
+ * Image nette = beaucoup de hautes fréquences = variance élevée.
+ * `gray` : Float32Array|Uint8ClampedArray de luminance, longueur w*h.
+ */
+export function blurScore(gray, w, h) {
+  if (!gray || w < 3 || h < 3) return 0;
+  let sum = 0, sumSq = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      // Noyau laplacien 4-voisins.
+      const lap = 4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - w] - gray[i + w];
+      sum += lap; sumSq += lap * lap; n++;
+    }
+  }
+  if (!n) return 0;
+  const mean = sum / n;
+  return sumSq / n - mean * mean;
+}
+
+/** Luminance moyenne (0–255) — détecte contre-jour et surexposition. */
+export function meanLuma(gray) {
+  if (!gray || !gray.length) return 0;
+  let s = 0;
+  for (let i = 0; i < gray.length; i++) s += gray[i];
+  return s / gray.length;
+}
+
+/**
+ * Conseil de prise de vue, ou null si rien à signaler. Le message doit dire
+ * quoi corriger, pas seulement que c'est raté.
+ *
+ * L'exposition est diagnostiquée AVANT la netteté : une photo noire est
+ * forcément aussi « floue », mais le motif utile pour l'utilisateur est
+ * l'exposition.
+ */
+export function frameAdvice({ blurVar, luma }, thresholds = QUALITY) {
+  const t = { ...QUALITY, ...thresholds };
+  if (luma < t.minLuma) return { code: 'dark', message: 'Trop sombre — cherchez de la lumière' };
+  if (luma > t.maxLuma) return { code: 'bright', message: 'Surexposé — évitez le soleil de face' };
+  if (blurVar < t.minBlurVar) return { code: 'blur', message: 'Photo floue — stabilisez l’appareil' };
+  return null;
+}
+
 /** Résumé d'avancement affiché sous le viseur. */
 export function tourProgress(shots) {
   const done = doneStepIds(shots).length;

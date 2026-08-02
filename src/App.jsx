@@ -9,10 +9,7 @@ import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quad
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 import { plateList, plateFields, defaultPlateQuad } from "./plateCaches.js";
 import { dataURLToBlob, withImageExt } from "./imageFile.js";
-import ShowroomCapture from "./components/ShowroomCapture.jsx";
 import GuidedTour from "./components/GuidedTour.jsx";
-import Spin360 from "./components/Spin360.jsx";
-import { isSpinUsable } from "./showroomInteractif.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -3332,17 +3329,6 @@ export default function AutoCache() {
   const [showTutorial, setShowTutorial] = useState(false);
   // ── Parcours photo guidé ──
   const [showGuidedTour, setShowGuidedTour] = useState(false);
-  // ── Showroom interactif ──
-  const [showCapture360, setShowCapture360] = useState(false);
-  // Vrai quand le lot courant vient d'une capture guidée : les résultats sont
-  // alors ordonnés autour du véhicule et présentables en tour 360°.
-  const [spin360Mode, setSpin360Mode] = useState(false);
-  const [showSpinViewer, setShowSpinViewer] = useState(false);
-  // Nombre de vues de la ligne médiane, placées en tête du lot : seules
-  // celles-là forment le carrousel. Les vues basses et hautes sont traitées
-  // comme des photos normales mais sortiraient de l'orbite si on les
-  // incluait dans la rotation.
-  const [spinRingCount, setSpinRingCount] = useState(0);
   const [showCreditPopup, setShowCreditPopup] = useState(false);
   const [subInfo, setSubInfo] = useState(null); // { periodStart, periodEnd, plan, daysLeft }
   const [subInfoLoading, setSubInfoLoading] = useState(false);
@@ -3825,15 +3811,11 @@ export default function AutoCache() {
   const handlePhotoFiles = files => {
     const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
     setPhotos(prev => [...prev, ...imgs.map(f => ({ file: f, preview: URL.createObjectURL(f), id: `${f.name}-${Math.random()}` }))]);
-    // Ajouter des photos à la main casse l'ordre circulaire du tour : le lot
-    // n'est plus présentable en 360°.
-    setSpin360Mode(false);
   };
 
-  // Photos du parcours guidé. Contrairement au scan 360°, elles s'AJOUTENT au
-  // lot : le parcours ne décrit pas un ordre circulaire à préserver, et on peut
-  // enchaîner plusieurs véhicules ou compléter avec des photos importées.
-  // Chaque vue du parcours emporte la position du cache plaque visée à l'écran
+  // Photos du parcours guidé. Elles s'AJOUTENT au lot : on peut enchaîner un
+  // parcours et des photos importées, ou plusieurs véhicules. Chaque vue du
+  // parcours emporte la position du cache plaque visée à l'écran
   // (`plateHint`), transmise telle quelle à la détection.
   const handleGuidedPhotos = items => {
     const entries = (items || []).filter(it => it?.file?.type?.startsWith("image/"));
@@ -3845,19 +3827,6 @@ export default function AutoCache() {
       id: `guide-${stamp}-${i}`,
       plateHint: it.plateHint ?? null,
     }))]);
-    setSpin360Mode(false);
-  };
-
-  // Vues issues de la capture guidée. Un tour 360° décrit UN véhicule dans un
-  // ordre circulaire : la capture remplace donc le lot au lieu de s'y ajouter,
-  // sinon l'ordre des vues (et le tour) n'aurait plus de sens.
-  const handleCapturedViews = (files, meta = {}) => {
-    const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
-    if (!imgs.length) return;
-    photos.forEach(p => URL.revokeObjectURL(p.preview));
-    setPhotos(imgs.map((f, i) => ({ file: f, preview: URL.createObjectURL(f), id: `spin-${i}-${Math.random()}` })));
-    setSpinRingCount(meta.ringCount ?? imgs.length);
-    setSpin360Mode(true);
   };
 
   const startAfterInfo = async () => {
@@ -4277,10 +4246,6 @@ export default function AutoCache() {
   // Seule condition qui déclenche réellement le rendu showroom du pipeline.
   const showroomActive  = showroomEnabled && canUseShowroom;
   const canUseBodyPolish  = isPaid;
-  // Showroom interactif : accès sur invitation uniquement, déverrouillé par le
-  // code administrateur AURELE3D (métadonnée `showroom_interactif`). Aucun lien
-  // avec l'abonnement tant que la fonctionnalité est en test terrain.
-  const canUseShowroomInteractif = user?.user_metadata?.showroom_interactif === true;
   const canStart = logo && photos.length > 0 && !processing;
 
   const fetchSubInfo = useCallback(async () => {
@@ -4457,7 +4422,7 @@ export default function AutoCache() {
     // session à l'autre (cf. restauration depuis localStorage). L'effacer ici
     // le faisait disparaître de l'écran à la reconnexion, alors qu'il était
     // toujours enregistré — il ne revenait qu'après un rechargement de page.
-    setPhotos([]); setResults([]); setTab("setup"); setSpin360Mode(false);
+    setPhotos([]); setResults([]); setTab("setup");
   };
 
   const submitPromo = async () => {
@@ -4475,10 +4440,12 @@ export default function AutoCache() {
         setPromoMsg(`${planLabel} activé.`);
         return;
       }
-      // Déverrouillage d'une fonctionnalité en accès restreint (ex. AURELE3D
-      // → Showroom interactif). Le drapeau vit dans les métadonnées du compte,
-      // il survit donc au rechargement et suit l'utilisateur d'un appareil à
-      // l'autre.
+      // Déverrouillage d'une fonctionnalité en accès restreint. Le drapeau vit
+      // dans les métadonnées du compte, il survit donc au rechargement et suit
+      // l'utilisateur d'un appareil à l'autre. Aucun code n'utilise ce chemin
+      // aujourd'hui (le dernier, AURELE3D → Showroom interactif, est parti avec
+      // la fonctionnalité) ; le mécanisme reste pour le prochain accès sur
+      // invitation.
       if (data.feature) {
         await supabase.auth.updateUser({ data: { [data.feature]: true } });
         setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, [data.feature]: true } } : prev);
@@ -5942,26 +5909,10 @@ export default function AutoCache() {
                   <div style={{ marginBottom: 12 }}>
                     <button onClick={() => setShowGuidedTour(true)}
                       style={{ width: "100%", background: "#f26522", border: "1px solid #f26522", color: "#090909", padding: "11px 0", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
-                      ◎ Parcours photo guidé
+                      ▣ Parcours photo guidé — photographier le véhicule
                     </button>
                     <div style={{ fontSize: 10, color: "var(--c-aaa)", marginTop: 5, textAlign: "center", fontFamily: "var(--font-apple)" }}>
                       4 vues (3/4 avant gauche, face, 3/4 avant droit, arrière) + photos bonus · cache plaque affiché dans le viseur
-                    </div>
-                  </div>
-                )}
-
-                {/* ── Showroom interactif (accès code administrateur) ── */}
-                {canUseShowroomInteractif && (
-                  <div style={{ marginBottom: 12 }}>
-                    <button onClick={() => {
-                        if (photos.length && !window.confirm(`Le tour 360° remplacera les ${photos.length} photo${photos.length > 1 ? "s" : ""} déjà sélectionnée${photos.length > 1 ? "s" : ""}. Continuer ?`)) return;
-                        setShowCapture360(true);
-                      }}
-                      style={{ width: "100%", background: "transparent", border: "1px solid #f26522", color: "#f26522", padding: "11px 0", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
-                      ⟳ Showroom interactif — scanner le véhicule
-                    </button>
-                    <div style={{ fontSize: 10, color: "var(--c-aaa)", marginTop: 5, textAlign: "center", fontFamily: "var(--font-apple)" }}>
-                      Scan guidé en 36 zones (tour + hauteurs) · traité comme des photos normales · tour 360° à l’arrivée
                     </div>
                   </div>
                 )}
@@ -5979,7 +5930,7 @@ export default function AutoCache() {
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <span style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)" }}>{photos.length} photo{photos.length > 1 ? "s" : ""}</span>
-                      <button onClick={() => { setPhotos([]); setSpin360Mode(false); }} style={{ background: "transparent", border: "1px solid var(--c-1e1e1e)", color: "var(--c-ddd)", padding: "3px 10px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>Tout effacer</button>
+                      <button onClick={() => setPhotos([])} style={{ background: "transparent", border: "1px solid var(--c-1e1e1e)", color: "var(--c-ddd)", padding: "3px 10px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2 }}>Tout effacer</button>
                     </div>
                   </>
                 )}
@@ -6166,13 +6117,6 @@ export default function AutoCache() {
                   </div>
                   {!processing && (
                     <div style={{ display: "flex", gap: 8 }}>
-                      {spin360Mode && isSpinUsable(results.length) && (
-                        <button onClick={() => setShowSpinViewer(true)}
-                          title="Prévisualiser le tour 360° du véhicule"
-                          style={{ background: "transparent", color: "#f26522", border: "1px solid #f26522", padding: "9px 16px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
-                          ⟳ Tour 360°
-                        </button>
-                      )}
                       {results.length > 0 && (
                         <button onClick={openEmailModal}
                           title="Envoyer toutes les photos traitées par email"
@@ -7550,35 +7494,6 @@ export default function AutoCache() {
             setShowGuidedTour(false);
           }}
         />
-      )}
-
-      {/* ── Showroom interactif : capture guidée ── */}
-      {showCapture360 && canUseShowroomInteractif && (
-        <ShowroomCapture
-          onClose={() => setShowCapture360(false)}
-          onDone={(files, meta) => {
-            // Les vues deviennent le lot courant : elles passeront par le
-            // pipeline normal (cache plaque, fond, colorimétrie), puis les
-            // vues de la ligne médiane formeront le tour 360°.
-            handleCapturedViews(files, meta);
-            setShowCapture360(false);
-          }}
-        />
-      )}
-
-      {/* ── Showroom interactif : prévisualisation du tour 360° ── */}
-      {showSpinViewer && (
-        <div onClick={() => setShowSpinViewer(false)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-          <div onClick={e => e.stopPropagation()}
-            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: isMobile ? "18px 14px" : "28px 30px", maxWidth: 760, width: "94%" }}>
-            <Spin360
-              frames={results.slice(0, spinRingCount || results.length).map(r => r.showroomDataURL || r.processed)}
-              height={isMobile ? 240 : 380}
-              onClose={() => setShowSpinViewer(false)}
-            />
-          </div>
-        </div>
       )}
 
       {/* ── Modal Code Administrateur ── */}

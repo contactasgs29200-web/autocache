@@ -3,8 +3,8 @@ import {
   GUIDED_STEPS, BONUS_STEP,
   plateQuadForStep, quadBBox, coverSourceRect,
   nextPendingStepIndex, isTourComplete, orderedShots, tourProgress,
+  blurScore, meanLuma, frameAdvice,
 } from "../guidedTour.js";
-import { blurScore, meanLuma, frameQuality } from "../showroomInteractif.js";
 
 // =============================================================================
 //  Parcours photo guidé — prise de vue depuis l'app.
@@ -148,14 +148,10 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
       for (let i = 0; i < gray.length; i++) {
         gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
       }
-      // `fill` neutralisé : le cadrage est libre ici (on peut vouloir un
-      // détail de jante), seules l'exposition et la netteté ont du sens.
-      const verdict = frameQuality({
+      setQuality(frameAdvice({
         blurVar: blurScore(gray, ANALYSIS_W, ANALYSIS_H),
-        fill: 0.5,
         luma: meanLuma(gray),
-      });
-      setQuality(verdict.ok ? null : verdict);
+      }));
     }, ANALYSIS_INTERVAL_MS);
 
     return () => clearInterval(id);
@@ -245,7 +241,7 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
   if (reviewing) {
     const ordered = orderedShots(shots);
     return (
-      <div style={{ position: "fixed", inset: 0, background: "#050505", zIndex: 9500, overflowY: "auto", fontFamily: "var(--font-apple)", padding: 20 }}>
+      <div style={{ position: "fixed", inset: 0, background: "var(--c-121212)", zIndex: 9500, overflowY: "auto", fontFamily: "var(--font-apple)", padding: 20 }}>
         <div style={{ maxWidth: 520, margin: "0 auto" }}>
           <div style={{ fontSize: 13, letterSpacing: 3, color: ACCENT, textTransform: "uppercase", marginBottom: 6 }}>
             Parcours photo guidé
@@ -303,7 +299,7 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
 
   // ── Viseur ────────────────────────────────────────────────────────────────
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#050505", zIndex: 9500, display: "flex", flexDirection: "column", fontFamily: "var(--font-apple)" }}>
+    <div style={{ position: "fixed", inset: 0, background: "var(--c-121212)", zIndex: 9500, display: "flex", flexDirection: "column", fontFamily: "var(--font-apple)" }}>
       <div ref={frameRef} style={{ position: "relative", flex: 1, overflow: "hidden", background: "#000" }}>
         <video ref={videoRef} playsInline muted autoPlay
           style={{ width: "100%", height: "100%", objectFit: "cover", display: cameraError ? "none" : "block" }} />
@@ -344,7 +340,10 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
         {!cameraError && (
           <div style={{ position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.75)", borderRadius: 4, padding: "10px 20px", border: "1px solid rgba(255,255,255,0.18)", maxWidth: "90%", textAlign: "center" }}>
             <div style={{ fontSize: 13, color: "#fff", letterSpacing: 1 }}>{step.instruction}</div>
-            <div style={{ fontSize: 11, color: quality ? "#e8a33d" : "var(--c-aaa)", marginTop: 4, lineHeight: 1.5 }}>
+            {/* Cette bulle est posée sur l'image de la caméra, pas sur une
+                surface de l'app : ses couleurs sont figées claires, une
+                variable de thème y virerait au gris sombre en thème JOUR. */}
+            <div style={{ fontSize: 11, color: quality ? "#e8a33d" : "rgba(255,255,255,0.72)", marginTop: 4, lineHeight: 1.5 }}>
               {quality ? quality.message : bonusMode ? step.detail : "Cadrez pour que la plaque entre dans le cache"}
             </div>
           </div>
@@ -389,7 +388,7 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
           )}
 
           <button onClick={takeShot} disabled={!!cameraError || busy || !ready}
-            style={{ flex: 1, background: cameraError || !ready ? "var(--c-1a1a1a)" : "#fff", border: "none", color: cameraError || !ready ? "var(--c-444)" : "#090909", padding: "12px 0", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: cameraError || busy || !ready ? "default" : "pointer", fontFamily: "var(--font-apple)" }}>
+            style={{ flex: 1, background: cameraError || !ready ? "var(--c-1a1a1a)" : ACCENT, border: "none", color: cameraError || !ready ? "var(--c-444)" : "#090909", padding: "12px 0", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: cameraError || busy || !ready ? "default" : "pointer", fontFamily: "var(--font-apple)" }}>
             {busy ? "…" : !bonusMode && shots.some(s => s.stepId === step.id) ? "Reprendre" : "Photographier"}
           </button>
 

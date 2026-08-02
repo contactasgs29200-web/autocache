@@ -7,9 +7,6 @@ import { requireUser, corsHeaders } from "./_auth.js";
 const PROMO_CODES = {
   "AURELE30":  { photos: 30, reset: true },
   "AURELE5":   { photos: 5,  reset: false },
-  // Showroom interactif (capture guidée + tour 360°) — accès sur invitation
-  // le temps de la phase de test terrain.
-  "AURELE3D":  { feature: "showroom_interactif", label: "Showroom interactif" },
   "AURELEPREMIUM":   { plan: "premium" },
   "AURELEPRO":       { plan: "premium" }, // ancien code → abonnement unique
   "AURELEESSENTIEL": { plan: "premium" }, // ancien code → abonnement unique
