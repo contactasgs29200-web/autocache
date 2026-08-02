@@ -7,6 +7,10 @@ const FAQ_ITEMS = [
     a: "L'IA détecte les plaques d'immatriculation sur chaque photo importée puis applique automatiquement votre cache plaque par-dessus, en respectant la perspective et l'inclinaison. Si le placement n'est pas parfait, vous pouvez utiliser le bouton AJUSTER dans la lightbox pour repositionner manuellement chacun des 4 coins.",
   },
   {
+    q: "Il y a 2 ou 3 voitures sur ma photo : comment cacher toutes les plaques ?",
+    a: "Le bouton ⊕ CACHE SUPPLÉMENTAIRE (dans la lightbox, ou « + Cache » sur la vignette) ajoute un cache par-dessus ceux déjà posés, autant de fois que nécessaire. Le nouveau cache apparaît avec ses poignées oranges : glissez ✥ pour le positionner sur la plaque de la deuxième voiture, puis ajustez les 4 coins. Les caches déjà posés restent visibles avec un numéro gris — cliquez sur ce numéro pour revenir les modifier, ou sur 🗑 pour supprimer le cache sélectionné. Validez avec ✓ TERMINÉ.",
+  },
+  {
     q: "Quels formats de photos puis-je importer ?",
     a: "Les formats JPG, JPEG et PNG sont acceptés. Toutes les résolutions standards (smartphone, reflex) fonctionnent. Pour de meilleurs résultats, privilégiez des photos nettes en plein jour, avec la plaque bien visible.",
   },

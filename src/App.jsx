@@ -7,6 +7,7 @@ import AuthTransition, { AUTH_MOTION_CSS, AUTH_EXIT_MS, prefersReducedMotion } f
 import ProcessingIndicator, { ProcessingLabel, PROCESSING_MOTION_CSS, PROCESSING_EXIT_MS } from "./components/ProcessingMotion.jsx";
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
+import { plateList, plateFields, defaultPlateQuad } from "./plateCaches.js";
 import ShowroomCapture from "./components/ShowroomCapture.jsx";
 import Spin360 from "./components/Spin360.jsx";
 import { isSpinUsable } from "./showroomInteractif.js";
@@ -1574,7 +1575,7 @@ function _opaqueMean(data) {
   return { r, g, b, l: Math.max(1, 0.299 * r + 0.587 * g + 0.114 * b) };
 }
 
-async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, blend = 0, carBoundsHint = null) {
+async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, corners = null, bgColor = '#ffffff', offsetX = 0, offsetY = 0, zoom = 1.0, returnFull = false, wallLogoOpts = null, blend = 0, carBoundsHint = null, extraCorners = []) {
   const [bgImg, carImg, wallImg] = await Promise.all([
     loadImg(bgDataUrl),
     loadImg(cutoutDataUrl),
@@ -1768,12 +1769,15 @@ async function compositeCarOnBg(cutoutDataUrl, bgDataUrl, W, H, logoImg = null, 
   ctx.restore();
   // Snapshot avant plaque (pour Ajuster en mode showroom)
   const baseURL = returnFull ? c.toDataURL('image/jpeg', 0.97) : null;
-  // Cache plaque redessiné en qualité native (corners normalisés 0-1 → pixels composite)
-  if (logoImg && corners) {
+  // Caches plaque redessinés en qualité native (corners normalisés 0-1 →
+  // pixels composite). Photo à plusieurs voitures : tous les caches sont posés.
+  if (logoImg) {
     const mp = p => ({ x: carX + p.x * cw, y: carY + p.y * ch });
-    const ptl = mp(corners.tl), ptr = mp(corners.tr);
-    const pbr = mp(corners.br), pbl = mp(corners.bl);
-    drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'plate');
+    for (const q of plateList({ corners, extraCorners })) {
+      const ptl = mp(q.tl), ptr = mp(q.tr);
+      const pbr = mp(q.br), pbl = mp(q.bl);
+      drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'plate');
+    }
   }
   const dataURL = c.toDataURL('image/jpeg', 0.98);
   freeCanvas(c);
@@ -2842,7 +2846,9 @@ async function processPhoto(photoFile, logoImg, adj, bgColor = "#ffffff", enhanc
   const yoloBbox    = yolo?.bbox    ? { ...yolo.bbox, conf: yolo.conf } : null;
   const yoloCorners = yolo?.corners ?? null;
   const yoloSource  = yolo ? (yolo.source || 'platerecognizer') : null;
-  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, autoPlateOff: !autoPlate, baseDataURL, corners: savedCorners, yoloBbox, yoloCorners, yoloSource, imgW: c.width, imgH: c.height };
+  // extraCorners : caches plaque supplémentaires ajoutés à la main (2e/3e
+  // voiture sur la photo). Vide à la détection, rempli depuis le mode Ajuster.
+  return { name: photoFile.name, processed: c.toDataURL("image/jpeg", 0.97), plateFound, autoPlateOff: !autoPlate, baseDataURL, corners: savedCorners, extraCorners: [], yoloBbox, yoloCorners, yoloSource, imgW: c.width, imgH: c.height };
 }
 
 const Slider = ({ label, value, min, max, step, onChange }) => (
@@ -3214,7 +3220,9 @@ export default function AutoCache() {
   const [cropAngle, setCropAngle] = useState(180); // 0-360, 180 = photo droite (0° de rotation)
   const [adjustMode, setAdjustMode] = useState(false);
   const [showMaskEditor, setShowMaskEditor] = useState(false);
-  const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1
+  const [adjustCorners, setAdjustCorners] = useState(null); // { tl, tr, br, bl } normalized 0-1 — cache ACTIF
+  const [adjustPlates, setAdjustPlates] = useState([]); // tous les caches de la photo (2 ou 3 voitures)
+  const [adjustIndex, setAdjustIndex] = useState(0);    // index du cache actif dans adjustPlates
   const [adjustDrag, setAdjustDrag] = useState(null); // { corner, startMx, startMy, startCorners }
   const [manualPlateMode, setManualPlateMode] = useState(false); // true = pose manuelle (plaque non détectée)
   const [lbZoom, setLbZoom] = useState(1);            // zoom de la lightbox (1 = normal, max 8)
@@ -3238,7 +3246,10 @@ export default function AutoCache() {
   const adjustIsShowroomRef        = useRef(false);
   const adjustShowroomTransformRef = useRef(null);
   const adjustLogoBgRef  = useRef(null); // couleur de fond du trapèze
-  const adjustCornersRef = useRef(null); // derniers coins (mis à jour direct, sans passer par setState)
+  const adjustCornersRef = useRef(null); // derniers coins du cache ACTIF (mis à jour direct, sans passer par setState)
+  const adjustPlatesRef  = useRef([]);   // tous les caches, dans l'espace du canvas d'ajustement
+  const adjustIndexRef   = useRef(0);    // index du cache actif dans adjustPlatesRef
+  const adjustDirtyRef   = useRef(false);// cache ajouté mais pas encore aplati dans l'image
   const adjustDragRef    = useRef(null); // sync immédiat avec setAdjustDrag (évite état périmé sur touch)
   const adjustOverlayCanvasRef = useRef(null); // calque transparent du cache plaque (redessiné à chaque frame)
   const adjustRafRef     = useRef(0);    // rAF en attente (coalesce les touchmove → 1 rendu/frame)
@@ -3875,7 +3886,7 @@ export default function AutoCache() {
           // Default blend = 60 so the vehicle integrates with the décor as soon as
           // the photo is generated. User can still drag the slider down to 0 in the
           // lightbox to disable the effect entirely.
-          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, DEFAULT_SHOWROOM_ZOOM, true, wOpts, 60, carBounds);
+          const sr = await compositeCarOnBg(cutout, showroomBgDataUrl, 2400, 1350, logoImg, r.corners, bgColor, 0, 0, DEFAULT_SHOWROOM_ZOOM, true, wOpts, 60, carBounds, r.extraCorners);
           // iOS : sous pression mémoire, toDataURL() peut renvoyer une image
           // vide ("data:,") sans lever d'erreur → vignette/lightbox cassées.
           // On préfère perdre le décor (photo sans showroom) qu'afficher du vide.
@@ -4282,10 +4293,35 @@ export default function AutoCache() {
     }
   };
 
+  // ── Caches plaque de la photo courante (mode Ajuster) ────────────────────
+  // Charge la liste des caches d'un résultat et rend le premier actif.
+  const resetAdjustPlates = (r) => {
+    const plates = plateList(r);
+    adjustPlatesRef.current  = plates;
+    adjustIndexRef.current   = 0;
+    adjustCornersRef.current = plates[0] || null;
+    setAdjustPlates(plates);
+    setAdjustIndex(0);
+    setAdjustCorners(plates[0] || null);
+  };
+
+  // Liste à jour des caches : `adjustPlatesRef` avec le cache actif remplacé
+  // par les coins en cours d'édition (qui vivent dans `adjustCornersRef`).
+  const currentPlates = (active) => {
+    const list = (adjustPlatesRef.current || []).slice();
+    const act = active || adjustCornersRef.current;
+    if (act) {
+      const i = adjustIndexRef.current;
+      if (i >= 0 && i < list.length) list[i] = act; else list.push(act);
+    }
+    return list;
+  };
+
   const openLightbox  = (r) => {
     setLightbox(r);
     setCropMode(false); setCropBox({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 }); setCropAngle(180);
-    setAdjustMode(false); setAdjustCorners(r.corners || null); setAdjustDrag(null);
+    setAdjustMode(false); setAdjustDrag(null);
+    resetAdjustPlates(r);
     setShowMaskEditor(false);
     setLbZoom(1); setLbPan({ x: 0, y: 0 }); setLbPanDrag(null);
     setShowroomNudge(r.showroomOffset ?? { x: 0, y: 0 });
@@ -4320,7 +4356,7 @@ export default function AutoCache() {
             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
             logoImgEl, prev.corners, prev.bgColor,
             nd.x, nd.y, zm, true, wOpts, bl,
-            prev.carBoundsCache
+            prev.carBoundsCache, prev.extraCorners
           );
           // Ré-applique l'enseigne (le compositing repart du décor sans elle)
           let finalShowroom = sr.dataURL;
@@ -4454,26 +4490,26 @@ export default function AutoCache() {
       ]);
       // Recalcul du transform et des coins dans l'espace rogné (seulement sans rotation)
       let newTransform = null;
-      let newCorners = lightbox.corners;
+      let newPlates = plateList(lightbox);
       if (deg === 0 && lightbox.showroomTransform && croppedBase) {
         const t = lightbox.showroomTransform;
         const cropX = box.x * t.W, cropY = box.y * t.H;
         const newW = Math.round(box.w * t.W), newH = Math.round(box.h * t.H);
         newTransform = { carX: t.carX - cropX, carY: t.carY - cropY, cw: t.cw, ch: t.ch, W: newW, H: newH };
-        // Remap corners showroom → espace rogné
-        if (lightbox.corners) {
-          const sc = cornersToShowroom(lightbox.corners, t);
-          const remap = p => ({
-            x: Math.max(0, Math.min(1, (p.x * t.W - cropX) / newW)),
-            y: Math.max(0, Math.min(1, (p.y * t.H - cropY) / newH)),
-          });
+        // Remap corners showroom → espace rogné (tous les caches de la photo)
+        const remap = p => ({
+          x: Math.max(0, Math.min(1, (p.x * t.W - cropX) / newW)),
+          y: Math.max(0, Math.min(1, (p.y * t.H - cropY) / newH)),
+        });
+        newPlates = newPlates.map(q => {
+          const sc = cornersToShowroom(q, t);
           const remappedSC = { tl: remap(sc.tl), tr: remap(sc.tr), br: remap(sc.br), bl: remap(sc.bl) };
-          newCorners = cornersFromShowroom(remappedSC, newTransform);
-        }
+          return cornersFromShowroom(remappedSC, newTransform);
+        });
       }
       const updated = { ...lightbox, showroomDataURL: croppedShowroom,
         showroomBaseURL: croppedBase, showroomTransform: newTransform,
-        corners: newCorners,
+        ...plateFields(newPlates),
         cutoutDataURL: null, showroomBgUrl: null, cropped: true };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
@@ -4487,21 +4523,22 @@ export default function AutoCache() {
       rotateAndCropDataURL(lightbox.baseDataURL, deg, box),
     ]);
     // Les coins de plaque ne sont valides qu'en l'absence de rotation
-    let newCorners = null;
-    if (deg === 0 && lightbox.corners) {
+    let newPlates = [];
+    if (deg === 0) {
       const { x, y, w, h } = box;
       const remap = p => ({
         x: Math.max(0, Math.min(1, (p.x - x) / w)),
         y: Math.max(0, Math.min(1, (p.y - y) / h)),
       });
-      newCorners = { tl: remap(lightbox.corners.tl), tr: remap(lightbox.corners.tr),
-                     br: remap(lightbox.corners.br), bl: remap(lightbox.corners.bl) };
+      newPlates = plateList(lightbox).map(q => ({
+        tl: remap(q.tl), tr: remap(q.tr), br: remap(q.br), bl: remap(q.bl),
+      }));
     }
     const updated = { ...lightbox, processed: croppedProcessed,
-      baseDataURL: croppedBase ?? lightbox.baseDataURL, corners: newCorners, cropped: true };
+      baseDataURL: croppedBase ?? lightbox.baseDataURL, ...plateFields(newPlates), cropped: true };
     setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
     setLightbox(updated);
-    setAdjustCorners(newCorners);
+    resetAdjustPlates(updated);
     setCropAngle(180);
     setCropMode(false);
   };
@@ -4563,20 +4600,23 @@ export default function AutoCache() {
     ctx.drawImage(baseImg, 0, 0);
   };
 
-  // Seul le cache plaque bouge : on le redessine sur un calque transparent
-  // (effacer + tracer le quadrilatère = bien plus léger qu'un redraw complet).
+  // Seuls les caches plaque bougent : on les redessine sur un calque transparent
+  // (effacer + tracer les quadrilatères = bien plus léger qu'un redraw complet).
+  // `corners` = coins du cache actif ; les autres caches de la photo (2e/3e
+  // voiture) sont redessinés à l'identique à chaque frame.
   const renderAdjustOverlay = (corners) => {
     const canvas = adjustOverlayCanvasRef.current;
     const logoImg = adjustLogoImgRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d'); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (logoImg && corners) {
-      const W = canvas.width, H = canvas.height;
-      const toPixel = p => ({ x: p.x * W, y: p.y * H });
-      const ptl = toPixel(corners.tl), ptr = toPixel(corners.tr);
-      const pbr = toPixel(corners.br), pbl = toPixel(corners.bl);
-      const bgColor = adjustLogoBgRef.current || '#ffffff';
+    if (!logoImg) return;
+    const W = canvas.width, H = canvas.height;
+    const toPixel = p => ({ x: p.x * W, y: p.y * H });
+    const bgColor = adjustLogoBgRef.current || '#ffffff';
+    for (const q of currentPlates(corners)) {
+      const ptl = toPixel(q.tl), ptr = toPixel(q.tr);
+      const pbr = toPixel(q.br), pbl = toPixel(q.bl);
       drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, 'plate');
     }
   };
@@ -4689,11 +4729,26 @@ export default function AutoCache() {
   // où l'événement souris synthétique d'iOS peut être supprimé par preventDefault.
   const commitAdjust = async () => {
     if (!adjustDragRef.current || !adjustCornersRef.current) return;
+    await persistPlates(currentPlates());
+  };
+
+  // Aplatit fond + TOUS les caches plaque et enregistre le résultat.
+  // `plates` est exprimé dans l'espace du canvas d'ajustement (photo, ou
+  // showroom quand le décor est actif) ; la conversion inverse est faite ici.
+  const persistPlates = async (plates) => {
     const canvas = adjustCanvasRef.current;
-    if (!canvas) return;
-    const latestCorners = adjustCornersRef.current;
+    if (!canvas || !adjustBaseImgRef.current) return;
+    const list = (plates || []).filter(Boolean);
+    adjustDirtyRef.current = false;
+    // Réaligne les refs sur la liste enregistrée (l'index peut sortir du
+    // tableau après la suppression d'un cache).
+    adjustPlatesRef.current = list;
+    if (adjustIndexRef.current >= list.length) adjustIndexRef.current = Math.max(0, list.length - 1);
+    const latestCorners = list[adjustIndexRef.current] || null;
+    adjustCornersRef.current = latestCorners;
+    setAdjustPlates(list); setAdjustIndex(adjustIndexRef.current);
     // Garantit que le calque cache plaque correspond aux derniers coins, puis
-    // aplatit fond + cache plaque en une seule image pour l'export.
+    // aplatit fond + caches plaque en une seule image pour l'export.
     renderAdjustOverlay(latestCorners);
     const flat = document.createElement('canvas');
     flat.width = canvas.width; flat.height = canvas.height;
@@ -4705,28 +4760,29 @@ export default function AutoCache() {
     const sign = lightbox.signImageUrl || null; // ré-applique l'enseigne si présente
     const sPos = lightbox.signPos, sScale = lightbox.signScale;
     if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
-      // Mode showroom : fond+voiture+cache plaque aplatis à qualité native
+      // Mode showroom : fond+voiture+caches plaque aplatis à qualité native
       const t = adjustShowroomTransformRef.current;
-      const photoCorners   = cornersFromShowroom(latestCorners, t);
+      const photoPlates = list.map(q => cornersFromShowroom(q, t));
       const url = sign ? await overlaySignOnImage(flatURL, sign, sPos, sScale) : flatURL;
-      const updated = { ...lightbox, corners: photoCorners, showroomDataURL: url, ...(sign ? { signBaseUrl: flatURL } : {}) };
+      const updated = { ...lightbox, ...plateFields(photoPlates), showroomDataURL: url, ...(sign ? { signBaseUrl: flatURL } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
     } else {
-      // Mode normal : sauvegarde la photo avec le cache plaque
+      // Mode normal : sauvegarde la photo avec les caches plaque
       const url = sign ? await overlaySignOnImage(flatURL, sign, sPos, sScale) : flatURL;
-      const updated = { ...lightbox, processed: url, corners: latestCorners, ...(sign ? { signBaseUrl: flatURL } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
+      const updated = { ...lightbox, processed: url, ...plateFields(list), ...(sign ? { signBaseUrl: flatURL } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       // Régénère le showroom avec les nouveaux coins si showroom actif
       if (lightbox.cutoutDataURL && lightbox.showroomBgUrl) {
-        const snap = { ...lightbox, corners: latestCorners };
+        const snap = { ...lightbox, ...plateFields(list) };
         const nudge = showroomNudge;
         const zoom  = showroomZoom;
         try {
           const logoImgEl = await loadImg(snap.logoPreview);
           const sr = await compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
-            logoImgEl, latestCorners, snap.bgColor, nudge.x, nudge.y, zoom, true, null, showroomBlend);
+            logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y, zoom, true, null, showroomBlend,
+            null, snap.extraCorners);
           const finalShowroom = sign ? await overlaySignOnImage(sr.dataURL, sign, sPos, sScale) : sr.dataURL;
           const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend, ...(sign ? { signBaseUrl: sr.dataURL } : {}) };
           setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
@@ -4734,6 +4790,81 @@ export default function AutoCache() {
         } catch (e) { console.error('showroom regen (adjust):', e); }
       }
     }
+  };
+
+  // ── Gestion des caches plaque multiples (photo à 2 ou 3 voitures) ────────
+  // Rend actif le cache `i` de la liste courante.
+  const selectPlate = (i) => {
+    const list = currentPlates();
+    if (i < 0 || i >= list.length) return;
+    adjustPlatesRef.current  = list;
+    adjustIndexRef.current   = i;
+    adjustCornersRef.current = list[i];
+    setAdjustPlates(list); setAdjustIndex(i); setAdjustCorners(list[i]);
+    renderAdjustOverlay(list[i]);
+  };
+
+  // Ouvre le mode Ajuster sur la photo courante. `addNew` pose un cache
+  // supplémentaire (2e/3e voiture) au lieu de reprendre un cache existant ;
+  // le mode s'ouvre aussi sur un nouveau cache quand la photo n'en a aucun.
+  const openAdjust = (r, addNew = false) => {
+    const existing = plateList(r);
+    const plates = (addNew || existing.length === 0)
+      ? [...existing, defaultPlateQuad(existing.length)]
+      : existing;
+    const index = (addNew || existing.length === 0) ? plates.length - 1 : 0;
+    adjustPlatesRef.current  = plates;
+    adjustIndexRef.current   = index;
+    adjustCornersRef.current = plates[index];
+    setAdjustPlates(plates); setAdjustIndex(index); setAdjustCorners(plates[index]);
+    setManualPlateMode(addNew || existing.length === 0);
+    // Un cache tout juste ajouté n'est pas encore dans l'image : à aplatir à la
+    // sortie du mode Ajuster même si l'utilisateur ne le déplace pas.
+    adjustDirtyRef.current = plates.length !== existing.length;
+    setAdjustMode(true);
+    setCropMode(false); setCropDrag(null);
+  };
+
+  // Ajoute un cache supplémentaire SANS quitter le mode Ajuster, et
+  // l'enregistre aussitôt : validé même si l'utilisateur ne le déplace pas.
+  const addPlateInAdjust = async () => {
+    const list = currentPlates();
+    // Le canvas d'ajustement est en repère showroom quand le décor est actif :
+    // on y ramène le quad par défaut, sinon la conversion inverse le rabattrait
+    // sur le bord du véhicule détouré.
+    const t = adjustShowroomTransformRef.current;
+    const q = defaultPlateQuad(list.length);
+    list.push(adjustIsShowroomRef.current && t ? cornersToShowroom(q, t) : q);
+    adjustPlatesRef.current  = list;
+    adjustIndexRef.current   = list.length - 1;
+    adjustCornersRef.current = list[list.length - 1];
+    setAdjustPlates(list); setAdjustIndex(list.length - 1); setAdjustCorners(list[list.length - 1]);
+    setManualPlateMode(true);
+    await persistPlates(list);
+  };
+
+  // Retire le cache actif (ajouté par erreur, ou voiture finalement hors cadre).
+  const deleteActivePlate = async () => {
+    const list = currentPlates();
+    if (list.length <= 1) return;
+    const i = adjustIndexRef.current;
+    list.splice(i, 1);
+    const next = Math.max(0, Math.min(i, list.length - 1));
+    adjustPlatesRef.current  = list;
+    adjustIndexRef.current   = next;
+    adjustCornersRef.current = list[next];
+    setAdjustPlates(list); setAdjustIndex(next); setAdjustCorners(list[next]);
+    await persistPlates(list);
+  };
+
+  // Sort du mode Ajuster en enregistrant l'état courant (un cache ajouté puis
+  // jamais glissé serait sinon perdu).
+  const closeAdjust = async () => {
+    const list = currentPlates();
+    // Aplatir avant le démontage du canvas, et seulement si nécessaire : un
+    // simple aller-retour dans le mode Ajuster ne doit pas relancer un rendu.
+    if (adjustDirtyRef.current && list.length) await persistPlates(list);
+    setAdjustMode(false); setAdjustDrag(null); setManualPlateMode(false);
   };
 
   // ── Déplacement / redimensionnement de l'enseigne dans la lightbox ────────
@@ -4875,10 +5006,13 @@ export default function AutoCache() {
     adjustIsShowroomRef.current        = isShowroom;
     adjustShowroomTransformRef.current = isShowroom ? lightbox.showroomTransform : null;
     // Conversion coins → espace showroom AVANT le chargement async (drag réactif)
-    if (isShowroom && adjustCorners) {
-      const sc = cornersToShowroom(adjustCorners, lightbox.showroomTransform);
-      adjustCornersRef.current = sc;
-      setAdjustCorners(sc);
+    if (isShowroom && (adjustPlatesRef.current || []).length) {
+      const sc = adjustPlatesRef.current.map(q => cornersToShowroom(q, lightbox.showroomTransform));
+      const i  = Math.max(0, Math.min(adjustIndexRef.current, sc.length - 1));
+      adjustPlatesRef.current  = sc;
+      adjustIndexRef.current   = i;
+      adjustCornersRef.current = sc[i];
+      setAdjustPlates(sc); setAdjustIndex(i); setAdjustCorners(sc[i]);
     }
     // Source de l'image de base : showroom sans plaque > photo originale sans plaque
     const baseSrc = isShowroom ? lightbox.showroomBaseURL : lightbox.baseDataURL;
@@ -5926,7 +6060,9 @@ export default function AutoCache() {
                         )}
                         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 4 }}>
                           <span style={{ background: r.plateFound ? "rgba(22,163,74,0.9)" : r.autoPlateOff ? "rgba(80,80,80,0.9)" : "rgba(220,38,38,0.9)", color: "#fff", fontSize: 9, padding: "3px 7px", borderRadius: 2, fontFamily: "var(--font-apple)" }}>
-                            {r.plateFound ? "✓ PLAQUE CACHÉE" : r.autoPlateOff ? "⊕ CACHE MANUEL" : "⚠ NON DÉTECTÉE"}
+                            {r.plateFound
+                              ? (plateList(r).length > 1 ? `✓ ${plateList(r).length} PLAQUES CACHÉES` : "✓ PLAQUE CACHÉE")
+                              : r.autoPlateOff ? "⊕ CACHE MANUEL" : "⚠ NON DÉTECTÉE"}
                           </span>
                           {r.cropped && (
                             <span style={{ background: "rgba(242,101,34,0.85)", color: "#fff", fontSize: 9, padding: "3px 7px", borderRadius: 2, fontFamily: "var(--font-apple)" }}>✂ ROGNÉ</span>
@@ -5936,21 +6072,17 @@ export default function AutoCache() {
                       </div>
                       <div style={{ padding: "9px 11px", display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--c-161616)", gap: 6 }}>
                         <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{r.name}</div>
-                        {!r.plateFound && (
-                          <button
-                            onClick={e => {
-                              e.stopPropagation();
-                              openLightbox(r);
-                              const dc = { tl: { x: 0.35, y: 0.70 }, tr: { x: 0.65, y: 0.70 }, br: { x: 0.65, y: 0.78 }, bl: { x: 0.35, y: 0.78 } };
-                              adjustCornersRef.current = dc;
-                              setAdjustCorners(dc);
-                              setAdjustMode(true);
-                              setManualPlateMode(true);
-                              setCropMode(false);
-                            }}
-                            style={{ background: "#f26522", border: "none", color: "#090909", padding: "4px 9px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, whiteSpace: "nowrap", flexShrink: 0 }}
-                          >+ Cache plaque</button>
-                        )}
+                        {/* Ajoute un cache plaque — aussi quand un cache est
+                            déjà posé : photo à 2 ou 3 voitures. */}
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            openLightbox(r);
+                            openAdjust(r, true);
+                          }}
+                          title={r.plateFound ? "Ajouter un cache sur une autre voiture" : "Poser le cache plaque à la main"}
+                          style={{ background: r.plateFound ? "transparent" : "#f26522", border: r.plateFound ? "1px solid var(--c-3a1400)" : "none", color: r.plateFound ? "#f26522" : "#090909", padding: "4px 9px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, whiteSpace: "nowrap", flexShrink: 0 }}
+                        >+ Cache{r.plateFound ? "" : " plaque"}</button>
                         <button onClick={() => downloadOne(r)} style={{ background: "transparent", border: "1px solid var(--c-2a2a2a)", color: "#f26522", padding: "4px 11px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, flexShrink: 0 }}>DL</button>
                       </div>
                     </div>
@@ -6006,7 +6138,7 @@ export default function AutoCache() {
           {/* ── Bouton Terminé fixe en bas (mobile + adjust mode) ── */}
           {isMobile && adjustMode && (
             <button
-              onClick={e => { e.stopPropagation(); setAdjustMode(false); setAdjustDrag(null); setManualPlateMode(false); }}
+              onClick={e => { e.stopPropagation(); closeAdjust(); }}
               style={{ position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)", zIndex: 1010, height: 44, paddingInline: 28, borderRadius: 22, background: "#e8a020", border: "none", color: "#090909", fontSize: 15, fontWeight: 700, fontFamily: "var(--font-apple)", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", boxShadow: "0 4px 16px rgba(0,0,0,0.7)" }}
             >✓ Terminé</button>
           )}
@@ -6049,34 +6181,43 @@ export default function AutoCache() {
                 style={{ background: cropMode ? "#f26522" : "var(--c-181818)", color: cropMode ? "#090909" : "var(--c-aaa)", border: `1px solid ${cropMode ? "#f26522" : "var(--c-2a2a2a)"}`, padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
               >✂ {isMobile ? "" : "Rogner"}</button>
 
-              {/* Bouton Ajuster — visible seulement si plaque détectée */}
-              {lightbox.plateFound && lightbox.corners && (
+              {/* Bouton Ajuster — visible dès qu'un cache est posé */}
+              {plateList(lightbox).length > 0 && (
                 <button
-                  onClick={e => { e.stopPropagation(); const nm = !adjustMode; if (nm) adjustCornersRef.current = lightbox.corners; setAdjustMode(nm); setManualPlateMode(false); setCropMode(false); setCropDrag(null); setAdjustCorners(lightbox.corners); }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    if (adjustMode) { closeAdjust(); return; }
+                    openAdjust(lightbox, false);
+                  }}
                   style={{ background: adjustMode ? "#e8a020" : "var(--c-181818)", color: adjustMode ? "#090909" : "#e8a020", border: `1px solid ${adjustMode ? "#e8a020" : "#3a2800"}`, padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
                 >⊹ Ajuster</button>
               )}
 
-              {/* Bouton Ajouter cache plaque — visible seulement si plaque NON détectée */}
-              {!lightbox.plateFound && !adjustMode && (
+              {/* Bouton Ajouter cache plaque — toujours disponible : une photo
+                  peut montrer 2 ou 3 voitures, chacune avec sa plaque. */}
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  if (adjustMode) addPlateInAdjust();
+                  else openAdjust(lightbox, true);
+                }}
+                title={plateList(lightbox).length > 0 ? "Ajouter un cache sur une autre voiture" : "Poser le cache plaque à la main"}
+                style={{ background: "var(--c-181818)", color: "#f26522", border: "1px solid var(--c-3a1400)", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+              >⊕ {isMobile ? "Cache" : (plateList(lightbox).length > 0 ? "Cache supplémentaire" : "Ajouter cache plaque")}</button>
+
+              {/* Supprimer le cache actif — seulement si la photo en porte plusieurs */}
+              {adjustMode && adjustPlates.length > 1 && (
                 <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    const dc = { tl: { x: 0.35, y: 0.70 }, tr: { x: 0.65, y: 0.70 }, br: { x: 0.65, y: 0.78 }, bl: { x: 0.35, y: 0.78 } };
-                    adjustCornersRef.current = dc;
-                    setAdjustCorners(dc);
-                    setAdjustMode(true);
-                    setManualPlateMode(true);
-                    setCropMode(false); setCropDrag(null);
-                  }}
-                  style={{ background: "var(--c-181818)", color: "#f26522", border: "1px solid var(--c-3a1400)", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
-                >⊕ {isMobile ? "Cache plaque" : "Ajouter cache plaque"}</button>
+                  onClick={e => { e.stopPropagation(); deleteActivePlate(); }}
+                  title="Supprimer le cache sélectionné"
+                  style={{ background: "var(--c-181818)", color: "#e05252", border: "1px solid #4a1a1a", padding: isMobile ? "6px 10px" : "7px 14px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: isMobile ? 11 : 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
+                >🗑 {isMobile ? "" : `Cache ${adjustIndex + 1}`}</button>
               )}
 
               {/* Télécharger / Fermer ajustement */}
               {adjustMode ? (
                 <button
-                  onClick={e => { e.stopPropagation(); setAdjustMode(false); setAdjustDrag(null); setManualPlateMode(false); }}
+                  onClick={e => { e.stopPropagation(); closeAdjust(); }}
                   style={{ background: "#e8a020", color: "#090909", border: "none", padding: isMobile ? "6px 12px" : "7px 18px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: isMobile ? 12 : 13, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, minHeight: "unset" }}
                 >✓ Terminé</button>
               ) : cropMode ? (<>
@@ -6489,7 +6630,8 @@ export default function AutoCache() {
                           const sr = await compositeCarOnBg(
                             prev.cutoutDataURL, prev.showroomBgUrl, 2400, 1350,
                             logoImgEl, prev.corners, prev.bgColor,
-                            nudge.x, nudge.y, zm, true, wOpts, showroomBlend
+                            nudge.x, nudge.y, zm, true, wOpts, showroomBlend,
+                            null, prev.extraCorners
                           );
                           const upd = { ...prev, showroomDataURL: sr.dataURL, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform };
                           setLightbox(upd);
@@ -6547,31 +6689,72 @@ export default function AutoCache() {
             {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
             {adjustMode && adjustCorners && (
               <div style={{ position: "absolute", inset: 0, cursor: adjustDrag ? "grabbing" : "crosshair", touchAction: "none" }}>
-                {manualPlateMode && !adjustDrag && (
+                {!adjustDrag && (manualPlateMode || adjustPlates.length > 1) && (
                   <div style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.75)", color: "#f26522", fontSize: 11, fontFamily: "var(--font-apple)", padding: "5px 12px", borderRadius: 3, letterSpacing: 1, whiteSpace: "nowrap", pointerEvents: "none" }}>
-                    Glisser ✥ pour positionner · coins oranges pour ajuster · ✓ Terminé pour valider
+                    {adjustPlates.length > 1
+                      ? `Cache ${adjustIndex + 1}/${adjustPlates.length} · toucher un numéro gris pour changer de cache · ✓ Terminé pour valider`
+                      : "Glisser ✥ pour positionner · coins oranges pour ajuster · ✓ Terminé pour valider"}
                   </div>
                 )}
-                {/* Contour du trapèze — viewBox 0-100 = % de l'image, pas d'unité % en SVG */}
+                {/* Contours des trapèzes — viewBox 0-100 = % de l'image, pas d'unité % en SVG.
+                    Le cache actif est en orange, les autres (2e/3e voiture) en gris. */}
                 <svg
                   viewBox="0 0 100 100"
                   preserveAspectRatio="none"
                   style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
                 >
-                  <polygon
-                    points={[
-                      `${adjustCorners.tl.x * 100},${adjustCorners.tl.y * 100}`,
-                      `${adjustCorners.tr.x * 100},${adjustCorners.tr.y * 100}`,
-                      `${adjustCorners.br.x * 100},${adjustCorners.br.y * 100}`,
-                      `${adjustCorners.bl.x * 100},${adjustCorners.bl.y * 100}`,
-                    ].join(" ")}
-                    fill="rgba(232,160,32,0.08)"
-                    stroke="#e8a020"
-                    strokeWidth="0.4"
-                    strokeDasharray="2.5 1.5"
-                    vectorEffect="non-scaling-stroke"
-                  />
+                  {adjustPlates.map((q, i) => {
+                    const active = i === adjustIndex;
+                    const pts = active ? adjustCorners : q;
+                    return (
+                      <polygon
+                        key={`plate-outline-${i}`}
+                        points={[
+                          `${pts.tl.x * 100},${pts.tl.y * 100}`,
+                          `${pts.tr.x * 100},${pts.tr.y * 100}`,
+                          `${pts.br.x * 100},${pts.br.y * 100}`,
+                          `${pts.bl.x * 100},${pts.bl.y * 100}`,
+                        ].join(" ")}
+                        fill={active ? "rgba(232,160,32,0.08)" : "rgba(255,255,255,0.05)"}
+                        stroke={active ? "#e8a020" : "rgba(255,255,255,0.55)"}
+                        strokeWidth="0.4"
+                        strokeDasharray="2.5 1.5"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    );
+                  })}
                 </svg>
+                {/* Pastilles numérotées des caches inactifs — un clic les rend actifs */}
+                {adjustPlates.map((q, i) => {
+                  if (i === adjustIndex) return null;
+                  const cx = (q.tl.x + q.tr.x + q.br.x + q.bl.x) / 4;
+                  const cy = (q.tl.y + q.tr.y + q.br.y + q.bl.y) / 4;
+                  const sz = isMobile ? 24 : 20;
+                  return (
+                    <div
+                      key={`plate-badge-${i}`}
+                      onMouseDown={e => { e.preventDefault(); e.stopPropagation(); selectPlate(i); }}
+                      onTouchStart={e => { e.preventDefault(); e.stopPropagation(); selectPlate(i); }}
+                      title={`Modifier le cache ${i + 1}`}
+                      style={{
+                        position: "absolute",
+                        left: `${cx * 100}%`, top: `${cy * 100}%`,
+                        width: sz, height: sz,
+                        background: "rgba(20,20,20,0.85)",
+                        border: "2px solid rgba(255,255,255,0.75)",
+                        borderRadius: "50%",
+                        transform: "translate(-50%,-50%)",
+                        cursor: "pointer",
+                        zIndex: 9,
+                        touchAction: "none",
+                        boxShadow: "0 0 6px rgba(0,0,0,0.8)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: isMobile ? 12 : 11, color: "#fff", fontWeight: 700, lineHeight: 1,
+                        fontFamily: "var(--font-apple)", userSelect: "none",
+                      }}
+                    >{i + 1}</div>
+                  );
+                })}
                 {/* Points de coin draggables */}
                 {[["tl","nwse-resize"],["tr","nesw-resize"],["br","nwse-resize"],["bl","nesw-resize"]].map(([corner, cur]) => {
                   const isDragging = adjustDrag?.corner === corner;
@@ -6597,8 +6780,9 @@ export default function AutoCache() {
                     }}
                   />;
                 })}
-                {/* Poignée centrale — déplace toute la plaque d'un bloc (mode pose manuelle uniquement) */}
-                {manualPlateMode && (() => {
+                {/* Poignée centrale — déplace tout le cache d'un bloc (pose
+                    manuelle, ou photo portant plusieurs caches) */}
+                {(manualPlateMode || adjustPlates.length > 1) && (() => {
                   const cx = (adjustCorners.tl.x + adjustCorners.tr.x + adjustCorners.br.x + adjustCorners.bl.x) / 4;
                   const cy = (adjustCorners.tl.y + adjustCorners.tr.y + adjustCorners.br.y + adjustCorners.bl.y) / 4;
                   const isMoving = adjustDrag?.corner === 'center';
