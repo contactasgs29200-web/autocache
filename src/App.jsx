@@ -143,7 +143,8 @@ const LOGO_FONTS = [
 // ── Cache plaque généré ───────────────────────────────────────────────────
 // Génère un canvas 1040×220 (ratio 4.73:1) avec texte, couleurs et coins arrondis.
 // radius : 0 = coins droits, 50 = forme de pilule (% de H)
-function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact", borderColor = null, borderWidth = 0) {
+// underline : 0 = aucun trait, 1–10 = épaisseur du filet sous le texte
+function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact", borderColor = null, borderWidth = 0, underline = 0) {
   const W = 3120, H = 660;
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
@@ -179,7 +180,22 @@ function makeLogoDataURL(text, bg, fg, radius, fontKey = "impact", borderColor =
     ctx.font = `${f.weight} ${sz}px ${f.family}`;
   }
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(txt, W / 2, H / 2);
+  // Avec un filet, le texte remonte un peu : c'est le bloc texte + trait qui
+  // doit rester centré dans la plaque, pas le texte seul.
+  const ul = Math.max(0, Math.min(10, Math.round(underline || 0)));
+  const cy = ul > 0 ? H / 2 - H * 0.055 : H / 2;
+  ctx.fillText(txt, W / 2, cy);
+
+  // Filet sous le texte — un peu plus large que le texte pour l'encadrer
+  // (comme sur une plaque de concession), sans jamais toucher les bords.
+  if (ul > 0) {
+    const lw = Math.max(2, Math.round(H * 0.004 * ul));
+    const textW = ctx.measureText(txt).width;
+    const lineW = Math.min(W * 0.88, Math.max(textW * 1.08, W * 0.5));
+    const y = cy + sz * 0.56 + H * 0.03;
+    ctx.fillStyle = fg;
+    ctx.fillRect((W - lineW) / 2, Math.round(y - lw / 2), lineW, lw);
+  }
 
   return c.toDataURL("image/png");
 }
@@ -3204,6 +3220,7 @@ export default function AutoCache() {
   const [genFont,  setGenFont]  = useState("impact");
   const [genBorderColor, setGenBorderColor] = useState("#ffffff");
   const [genBorderWidth, setGenBorderWidth] = useState(0); // 0–10 : épaisseur du liseret
+  const [genUnderline, setGenUnderline] = useState(0); // 0 = pas de trait, 1–10 : épaisseur du filet sous le texte
   const [logoRadius, setLogoRadius] = useState(1); // 0–10 : arrondi des coins, commun import+génération
   const [logoCropActive, setLogoCropActive] = useState(false);
   const [logoCropBox, setLogoCropBox] = useState({ x: 0, y: 0, w: 1, h: 1 });
@@ -3317,6 +3334,7 @@ export default function AutoCache() {
         if (savedGen.genFont) setGenFont(savedGen.genFont);
         if (savedGen.genBorderColor) setGenBorderColor(savedGen.genBorderColor);
         if (typeof savedGen.genBorderWidth === 'number') setGenBorderWidth(savedGen.genBorderWidth);
+        if (typeof savedGen.genUnderline === 'number') setGenUnderline(savedGen.genUnderline);
       }
 
       const savedPreview = localStorage.getItem('ac_logo_preview');
@@ -3382,13 +3400,13 @@ export default function AutoCache() {
     } catch(e) {}
   }, [logoOriginal]);
 
-  // Persiste les paramètres du logo généré (texte, couleurs, police, liseret)
-  // pour pouvoir le reconstruire à l'identique au prochain démarrage.
+  // Persiste les paramètres du logo généré (texte, couleurs, police, liseret,
+  // filet) pour pouvoir le reconstruire à l'identique au prochain démarrage.
   useEffect(() => {
     try {
-      localStorage.setItem('ac_logo_gen', JSON.stringify({ genText, genBg, genFg, genFont, genBorderColor, genBorderWidth }));
+      localStorage.setItem('ac_logo_gen', JSON.stringify({ genText, genBg, genFg, genFont, genBorderColor, genBorderWidth, genUnderline }));
     } catch(e) {}
-  }, [genText, genBg, genFg, genFont, genBorderColor, genBorderWidth]);
+  }, [genText, genBg, genFg, genFont, genBorderColor, genBorderWidth, genUnderline]);
 
   useEffect(() => {
     if (!logoCropDrag) return;
@@ -3568,8 +3586,8 @@ export default function AutoCache() {
   // Regénère le cache plaque dès qu'un paramètre change (mode génération)
   useEffect(() => {
     if (logoMode !== "generate") return;
-    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, logoRadius * 5, genFont, genBorderWidth > 0 ? genBorderColor : null, genBorderWidth), generated: true, bgColor: genBg });
-  }, [logoMode, genText, genBg, genFg, logoRadius, genFont, genBorderColor, genBorderWidth]);
+    setLogo({ file: null, preview: makeLogoDataURL(genText, genBg, genFg, logoRadius * 5, genFont, genBorderWidth > 0 ? genBorderColor : null, genBorderWidth, genUnderline), generated: true, bgColor: genBg });
+  }, [logoMode, genText, genBg, genFg, logoRadius, genFont, genBorderColor, genBorderWidth, genUnderline]);
 
   const handleLogoFile = (f) => {
     if (!f?.type.startsWith("image/")) return;
@@ -5553,6 +5571,30 @@ export default function AutoCache() {
                         />
                         <span style={{ fontSize: 11, color: genBorderWidth > 0 ? "#f26522" : "var(--c-444)", fontFamily: "var(--font-apple)", minWidth: 20, textAlign: "right" }}>
                           {genBorderWidth === 0 ? "Off" : genBorderWidth}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Trait sous le texte (filet de concession) */}
+                    <div>
+                      <div style={{ fontSize: 10, color: "var(--c-ddd)", letterSpacing: 2, fontFamily: "var(--font-apple)", marginBottom: 7, textTransform: "uppercase" }}>Trait sous le texte</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div
+                          onClick={() => setGenUnderline(genUnderline > 0 ? 0 : 2)}
+                          title={genUnderline > 0 ? "Retirer le trait" : "Ajouter un trait discret sous le texte"}
+                          style={{ width: 46, height: 26, background: "var(--c-1a1a1a)", border: `1px solid ${genUnderline > 0 ? "#f26522" : "var(--c-2a2a2a)"}`, borderRadius: 3, cursor: "pointer", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}
+                        >
+                          <span style={{ fontSize: 9, lineHeight: 1, color: genUnderline > 0 ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)", fontWeight: 700 }}>ABC</span>
+                          <span style={{ width: 26, height: 2, background: genUnderline > 0 ? "#f26522" : "var(--c-444)" }} />
+                        </div>
+                        <input
+                          type="range" min="0" max="10" step="1"
+                          value={genUnderline}
+                          onChange={e => setGenUnderline(parseInt(e.target.value))}
+                          style={{ flex: 1, accentColor: "#f26522", height: 3 }}
+                        />
+                        <span style={{ fontSize: 11, color: genUnderline > 0 ? "#f26522" : "var(--c-444)", fontFamily: "var(--font-apple)", minWidth: 20, textAlign: "right" }}>
+                          {genUnderline === 0 ? "Off" : genUnderline}
                         </span>
                       </div>
                     </div>
