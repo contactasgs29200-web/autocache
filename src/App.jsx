@@ -5036,16 +5036,18 @@ export default function AutoCache() {
 
   const onLbPanDown = (e) => {
     // Ne pas démarrer le pan si un drag rognage/ajustement est en cours
-    if (lbZoom > 1 && !cropDrag && !adjustDrag) {
+    if (lbZoom > 1 && !cropDrag && !adjustDragRef.current) {
       if (e.preventDefault) e.preventDefault();
       anchorLbPan(e.clientX, e.clientY);
     }
   };
 
   // ── Touch : pinch-to-zoom + pan sur l'image ───────────────────────────
-  // Le pinch-zoom 2 doigts est autorisé partout (y compris mode Ajuster pour
-  // affiner les coins). Le pan 1 doigt reste réservé au mode visu (les
-  // poignées des coins ont leur propre gestionnaire en mode Ajuster).
+  // Le pinch-zoom 2 doigts est autorisé partout. Le pan 1 doigt l'est aussi,
+  // y compris en mode Ajuster : les poignées arrêtent la propagation de leur
+  // touchstart, donc si l'événement arrive jusqu'ici c'est que le doigt s'est
+  // posé À CÔTÉ d'une poignée — il déplace alors la photo, ce qui permet
+  // d'atteindre une plaque hors cadre sans quitter l'ajustement.
   const onLbTouchStart = (e) => {
     if (cropMode) return;
     if (e.touches.length === 2) {
@@ -5060,7 +5062,7 @@ export default function AutoCache() {
         startZoom: lbZoom,
         startPan: { ...lbPan },
       };
-    } else if (e.touches.length === 1 && lbZoom > 1 && !adjustMode) {
+    } else if (e.touches.length === 1 && lbZoom > 1 && !adjustDragRef.current) {
       onLbPanDown({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY, preventDefault: () => e.preventDefault() });
     }
   };
@@ -5070,7 +5072,7 @@ export default function AutoCache() {
   // doigt restant, sinon le glissement suivant serait ignoré (aucun touchstart
   // n'est émis pour un doigt déjà posé).
   const onLbTouchEndEvt = (e) => {
-    if (e?.touches?.length === 1 && !cropMode && !adjustMode) {
+    if (e?.touches?.length === 1 && !cropMode && !adjustDragRef.current) {
       pinchRef.current = null;
       if (lbZoom > 1) { anchorLbPan(e.touches[0].clientX, e.touches[0].clientY); return; }
     }
@@ -5099,12 +5101,12 @@ export default function AutoCache() {
         x: Math.max(rect.width  * (1 - newZoom), Math.min(0, newX)),
         y: Math.max(rect.height * (1 - newZoom), Math.min(0, newY)),
       });
-    } else if (e.touches.length === 1 && !adjustMode) {
+    } else if (e.touches.length === 1 && !adjustDragRef.current) {
       const t = e.touches[0];
       // Photo zoomée : le doigt la déplace. Si aucun pan n'est armé (doigt
       // resté posé à la fin d'un pinch, ou geste démarré hors de l'image), on
       // l'arme ici plutôt que d'ignorer le glissement.
-      if (lbZoom > 1 && !lbPanDragRef.current && !cropDrag && !adjustDrag && !signDragRef.current) {
+      if (lbZoom > 1 && !lbPanDragRef.current && !cropDrag && !signDragRef.current) {
         anchorLbPan(t.clientX, t.clientY);
         e.preventDefault();
         return;
@@ -6255,8 +6257,9 @@ export default function AutoCache() {
           onTouchMove={e => {
             // 2 doigts = pinch-zoom dans tous les modes (sauf rogner où le cadre gère)
             if (e.touches.length === 2) { onLbTouchMove(e); return; }
-            // 1 doigt : route vers le bon mode
-            if (adjustMode) onAdjustTouchMove(e);
+            // 1 doigt : route vers le bon mode. En ajustement, seul un doigt
+            // parti d'une poignée déplace un coin ; sinon il déplace la photo.
+            if (adjustDragRef.current) onAdjustTouchMove(e);
             else if (cropMode) onCropTouchMove(e);
             else onLbTouchMove(e);
           }}
@@ -7204,7 +7207,9 @@ export default function AutoCache() {
           {/* ── Pied ── */}
           <div style={{ marginTop: 8, fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", textAlign: "center" }}>
             {adjustMode
-              ? "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel"
+              ? (isMobile
+                ? "Poignées oranges pour les coins · Pincer pour zoomer · Un doigt à côté des poignées pour déplacer la photo"
+                : "Glisser un point orange pour repositionner le coin · Le résultat s'applique en temps réel")
               : cropMode
               ? "Inclinaison · Glisser la zone · Coins oranges pour redimensionner · 💾 Sauvegarder"
               : lightbox.showroomDataURL
