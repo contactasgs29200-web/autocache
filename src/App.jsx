@@ -8,6 +8,7 @@ import ProcessingIndicator, { ProcessingLabel, PROCESSING_MOTION_CSS, PROCESSING
 import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
 import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
 import { plateList, plateFields, defaultPlateQuad } from "./plateCaches.js";
+import { dataURLToBlob, withImageExt } from "./imageFile.js";
 import ShowroomCapture from "./components/ShowroomCapture.jsx";
 import Spin360 from "./components/Spin360.jsx";
 import { isSpinUsable } from "./showroomInteractif.js";
@@ -1039,6 +1040,56 @@ function isMobileDevice() {
 
 function freeCanvas(...cs) {
   for (const c of cs) { if (c) { c.width = 0; c.height = 0; } }
+}
+
+// ── Enregistrement des photos produites ───────────────────────────────────
+// Sur iPhone, `<a download href="data:...">` n'enregistre rien : Safari ouvre
+// une page « document » avec une icône de fichier générique — on ne voit même
+// pas la photo qu'on télécharge. Deux corrections, dans l'ordre :
+//   1. le partage natif quand le navigateur accepte les fichiers : la feuille
+//      iOS affiche la photo en grand et propose « Enregistrer dans Photos »
+//      comme « Enregistrer dans Fichiers » ;
+//   2. sinon une URL blob au lieu de la data URL — la visionneuse de Safari
+//      affiche alors l'image elle-même, et non l'icône générique.
+// Le desktop garde le téléchargement classique : un fichier dans le dossier
+// Téléchargements est ce qu'on y attend.
+// items : [{ dataURL, filename }]. Le partage natif exige un geste
+// utilisateur : tout ce qui précède l'appel est SYNCHRONE (pas de fetch ni
+// d'await), sinon iOS considère le geste expiré et refuse la feuille.
+async function saveImages(items) {
+  const files = [];
+  for (const it of items) {
+    if (!it?.dataURL) continue;
+    try {
+      const blob = dataURLToBlob(it.dataURL);
+      files.push({ blob, name: withImageExt(it.filename, blob.type) });
+    } catch (_) { /* data URL illisible : ignorée */ }
+  }
+  if (!files.length) return;
+
+  if (isMobileDevice() && typeof navigator !== 'undefined' && navigator.canShare) {
+    try {
+      const shared = files.map(f => new File([f.blob], f.name, { type: f.blob.type }));
+      if (navigator.canShare({ files: shared })) {
+        await navigator.share({ files: shared });
+        return;
+      }
+    } catch (e) {
+      // Feuille de partage refermée par l'utilisateur : ne pas enchaîner sur
+      // un téléchargement qu'il vient justement de décliner.
+      if (e?.name === 'AbortError') return;
+    }
+  }
+
+  for (const f of files) {
+    const href = URL.createObjectURL(f.blob);
+    const a = document.createElement('a');
+    a.href = href; a.download = f.name; a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 60000);
+  }
 }
 
 // Redimensionne un dataUrl à maxPx max (côté le plus long) pour alléger l'envoi API
@@ -4050,11 +4101,14 @@ export default function AutoCache() {
 
   const start = () => startAfterInfo();
 
-  const downloadOne = async r => {
-    const href = r.showroomDataURL || r.processed;
-    const a = document.createElement("a"); a.href = href; a.download = `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`; a.click();
-  };
-  const downloadAll = async () => { for (const r of results) await downloadOne(r); };
+  const exportItem = r => ({
+    dataURL: r.showroomDataURL || r.processed,
+    filename: `${r.showroomDataURL ? "showroom_" : "autocache_"}${r.name}`,
+  });
+  const downloadOne = async r => { await saveImages([exportItem(r)]); };
+  // Un seul partage pour tout le lot sur mobile (« Enregistrer N images »),
+  // au lieu d'une feuille de partage par photo.
+  const downloadAll = async () => { await saveImages(results.map(exportItem)); };
 
   // Ouvre la modale d'envoi par email en pré-remplissant l'adresse :
   // adresse sauvegardée sur le compte, sinon l'email du compte.
@@ -4543,10 +4597,9 @@ export default function AutoCache() {
     const c = document.createElement('canvas');
     c.width = sw; c.height = sh;
     c.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
-    const a = document.createElement('a');
-    a.href = c.toDataURL('image/jpeg', 0.97);
-    a.download = `autocache_rogné_${lightbox.name}`;
-    a.click();
+    const dataURL = c.toDataURL('image/jpeg', 0.97);
+    freeCanvas(c);
+    saveImages([{ dataURL, filename: `autocache_rogné_${lightbox.name}` }]);
   };
 
   // Tourne + rogne un dataURL (deg = offset depuis 180, soit degrés réels)
