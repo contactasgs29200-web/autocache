@@ -10,6 +10,7 @@ import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js
 import { plateList, plateFields, defaultPlateQuad } from "./plateCaches.js";
 import { dataURLToBlob, withImageExt } from "./imageFile.js";
 import ShowroomCapture from "./components/ShowroomCapture.jsx";
+import GuidedTour from "./components/GuidedTour.jsx";
 import Spin360 from "./components/Spin360.jsx";
 import { isSpinUsable } from "./showroomInteractif.js";
 // @imgly background removal — chargé dynamiquement
@@ -26,6 +27,12 @@ function useIsMobile() {
   }, []);
   return isMobile;
 }
+
+// Caméra accessible depuis la page ? getUserMedia n'existe qu'en contexte
+// sécurisé (https ou localhost) et manque sur les postes sans webcam : le
+// parcours photo guidé n'a alors rien à proposer.
+const hasCamera = typeof navigator !== "undefined"
+  && typeof navigator.mediaDevices?.getUserMedia === "function";
 
 // ── Installation de l'app (PWA) sur l'écran d'accueil ────────────────────
 function isStandaloneDisplay() {
@@ -2354,12 +2361,35 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
   }
 }
 
+// Cache posé sur la position visée par l'utilisateur pendant le parcours photo
+// guidé : le gabarit était affiché au milieu de son viseur et il a cadré sa
+// plaque dedans. Ce n'est pas une détection, c'est une consigne suivie — d'où
+// une confiance affichée modeste, mais une position bien plus fiable qu'un
+// cache absent.
+function plateFromGuidedHint(hintQuad) {
+  const pts = hintQuad ? [hintQuad.tl, hintQuad.tr, hintQuad.br, hintQuad.bl] : [];
+  if (pts.length !== 4 || pts.some(p => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return null;
+  const corners = pts.map(p => ({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) }));
+  const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
+  return {
+    found: true, conf: 0.5, corners, source: 'guided',
+    bbox: { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) },
+  };
+}
+
 // Ordre de bataille :
 //  1. Plate Recognizer Blur : polygone exact → cache posé, aucun appel Claude.
 //  2. Plate Recognizer Snapshot : boîte serrée → localisation garantie, Claude
 //     n'affine que les 4 coins sur le crop (1 appel Sonnet).
 //  3. Claude seul (locate + refine) si Plate Recognizer est indisponible.
-async function detectPlate(imageFile, regions = 'fr') {
+//
+// `hintQuad` (parcours photo guidé) ne court-circuite AUCUNE détection : les
+// détecteurs restent plus précis que le cadrage à main levée. Il sert de
+// localisation sûre pour Claude (une passe économisée) et de filet quand toute
+// la chaîne rend « aucune plaque » alors que l'utilisateur en a visé une.
+async function detectPlate(imageFile, regions = 'fr', hintQuad = null) {
+  const hint = plateFromGuidedHint(hintQuad);
+
   // ── Source principale : modèle maison keypoints (navigateur, 0 € / photo) ──
   // Entraîné sur les photos réelles de la concession, il pose les 4 coins en
   // perspective à tous les angles (y compris 3/4). S'il trouve une plaque, on
@@ -2373,12 +2403,19 @@ async function detectPlate(imageFile, regions = 'fr') {
   // Repartir sur Claude ici produirait des caches fantômes (le locate
   // hallucine volontiers une zone sur un flanc ou une calandre).
   if (pr?.noPlate) {
+    if (hint) {
+      console.log('[plate] aucune plaque détectée, cache posé sur la visée du parcours guidé');
+      return hint;
+    }
     console.log('[plate] aucune plaque sur la photo — aucun cache posé');
     return null;
   }
   if (pr && !pr.boxOnly) return pr;
   if (!pr) console.warn('[plate] Plate Recognizer indisponible, bascule sur Claude Vision');
-  return detectPlateFable(imageFile, pr?.box ?? null);
+  const fable = await detectPlateFable(imageFile, pr?.box ?? hint?.bbox ?? null);
+  if (fable) return fable;
+  if (hint) console.log('[plate] Claude muet, cache posé sur la visée du parcours guidé');
+  return hint;
 }
 
 // ── Vehicle detection + main vehicle selection ──
@@ -3293,6 +3330,8 @@ export default function AutoCache() {
   const [emailStatus,      setEmailStatus]      = useState(null); // { type: "ok"|"err"|"progress", msg }
   const [showMiniGame,     setShowMiniGame]     = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  // ── Parcours photo guidé ──
+  const [showGuidedTour, setShowGuidedTour] = useState(false);
   // ── Showroom interactif ──
   const [showCapture360, setShowCapture360] = useState(false);
   // Vrai quand le lot courant vient d'une capture guidée : les résultats sont
@@ -3791,6 +3830,24 @@ export default function AutoCache() {
     setSpin360Mode(false);
   };
 
+  // Photos du parcours guidé. Contrairement au scan 360°, elles s'AJOUTENT au
+  // lot : le parcours ne décrit pas un ordre circulaire à préserver, et on peut
+  // enchaîner plusieurs véhicules ou compléter avec des photos importées.
+  // Chaque vue du parcours emporte la position du cache plaque visée à l'écran
+  // (`plateHint`), transmise telle quelle à la détection.
+  const handleGuidedPhotos = items => {
+    const entries = (items || []).filter(it => it?.file?.type?.startsWith("image/"));
+    if (!entries.length) return;
+    const stamp = Date.now();
+    setPhotos(prev => [...prev, ...entries.map((it, i) => ({
+      file: it.file,
+      preview: URL.createObjectURL(it.file),
+      id: `guide-${stamp}-${i}`,
+      plateHint: it.plateHint ?? null,
+    }))]);
+    setSpin360Mode(false);
+  };
+
   // Vues issues de la capture guidée. Un tour 360° décrit UN véhicule dans un
   // ordre circulaire : la capture remplace donc le lot au lieu de s'y ajouter,
   // sinon l'ordre des vues (et le tour) n'aurait plus de sens.
@@ -3862,7 +3919,8 @@ export default function AutoCache() {
     const startPlateJob = (idx) => {
       if (idx >= 0 && idx < photosToProcess.length && plateJobs[idx] === undefined) {
         plateJobs[idx] = autoPlate
-          ? detectPlate(photosToProcess[idx].file).catch(e => { console.warn('[plate] préfetch échoué:', e?.message); return null; })
+          ? detectPlate(photosToProcess[idx].file, 'fr', photosToProcess[idx].plateHint ?? null)
+              .catch(e => { console.warn('[plate] préfetch échoué:', e?.message); return null; })
           : Promise.resolve(null);
       }
     };
@@ -5875,6 +5933,23 @@ export default function AutoCache() {
                 </div>
                 <input ref={photosRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => handlePhotoFiles(e.target.files)} />
 
+                {/* ── Parcours photo guidé ──
+                    Le cache plaque est affiché dans le viseur : l'utilisateur
+                    cadre pour que la plaque tombe dedans, et la position visée
+                    part avec la photo. Sans caméra (poste fixe sans webcam),
+                    le bouton ne sert à rien : il n'apparaît pas. */}
+                {hasCamera && (
+                  <div style={{ marginBottom: 12 }}>
+                    <button onClick={() => setShowGuidedTour(true)}
+                      style={{ width: "100%", background: "#f26522", border: "1px solid #f26522", color: "#090909", padding: "11px 0", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
+                      ◎ Parcours photo guidé
+                    </button>
+                    <div style={{ fontSize: 10, color: "var(--c-aaa)", marginTop: 5, textAlign: "center", fontFamily: "var(--font-apple)" }}>
+                      4 vues (3/4 avant gauche, face, 3/4 avant droit, arrière) + photos bonus · cache plaque affiché dans le viseur
+                    </div>
+                  </div>
+                )}
+
                 {/* ── Showroom interactif (accès code administrateur) ── */}
                 {canUseShowroomInteractif && (
                   <div style={{ marginBottom: 12 }}>
@@ -7464,6 +7539,18 @@ export default function AutoCache() {
           </div>
         );
       })()}
+
+      {/* ── Parcours photo guidé : prise de vue avec le cache dans le viseur ── */}
+      {showGuidedTour && (
+        <GuidedTour
+          logoPreview={logo?.preview ?? null}
+          onClose={() => setShowGuidedTour(false)}
+          onDone={items => {
+            handleGuidedPhotos(items);
+            setShowGuidedTour(false);
+          }}
+        />
+      )}
 
       {/* ── Showroom interactif : capture guidée ── */}
       {showCapture360 && canUseShowroomInteractif && (
