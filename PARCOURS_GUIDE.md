@@ -62,23 +62,50 @@ Points d'accroche dans `App.jsx` :
 | `detectPlate(file, regions, hintQuad)` | 3ᵉ paramètre : la visée |
 | `startPlateJob` | transmet le `plateHint` de chaque photo au préfetch |
 
-### Le gabarit du cache
+### Le gabarit du cache — mesuré, pas calculé
 
 `plateQuadForStep(stepId, aspect)` rend un quadrilatère normalisé (0–1) sur la
-zone visible du viseur. Trois choses s'y jouent :
+zone visible du viseur.
 
-- **Le rapport 520/110** d'une plaque française est tenu **en pixels**, donc
-  `aspect` (largeur/hauteur du viseur) est obligatoire : les coordonnées
-  normalisées x et y n'ont pas la même échelle.
-- **La taille suit l'encombrement apparent du véhicule** (`plateWidthForYaw`).
-  De face, une plaque fait ~26 % de la largeur du cadre. De 3/4, la *longueur*
-  du véhicule entre aussi dans le cadre : il paraît deux fois plus large et
-  tout rapetisse. Un simple `cos(angle)` donnerait un gabarit deux fois trop
-  grand — l'utilisateur devrait coller le pare-chocs pour l'y faire entrer. Un
-  plancher à 16 % garde malgré tout une cible visable.
-- **Les vues 3/4 sont des trapèzes** : bord proche plus haut que bord lointain.
-  Un rectangle parfait sur une vue de biais ne ressemblerait à aucune plaque
-  réelle.
+La première version calculait ce gabarit : rapport 520/110 d'une plaque
+française, largeur réduite par l'encombrement apparent du véhicule. C'était
+plausible et faux. Un cache réellement posé par l'app est **plus plat** qu'une
+plaque nue (l'appareil est au-dessus du niveau de la plaque, qui se comprime),
+et surtout il est **franchement incliné** sur les vues 3/4 — or c'est cette
+inclinaison qui dit à l'utilisateur qu'il est bien placé, bien plus que la
+taille.
+
+Les valeurs viennent donc de **quatre photos de référence déjà traitées par
+l'app**, relevées par segmentation du cache puis rectangle d'aire minimale :
+
+| Vue | Largeur (% largeur photo) | L/H | Inclinaison | Véhicule (% largeur) |
+|---|---|---|---|---|
+| 3/4 avant gauche | 12,30 % | 3,56 | **+14,1°** | 72 % |
+| Face avant | 23,04 % | 5,49 | 0° | 59 % |
+| 3/4 avant droit | 12,43 % | 3,39 | **−18,2°** | 79 % |
+| Arrière | 22,72 % | 5,06 | −1,2° | 66 % |
+
+Deux relevés sont arrondis volontairement : l'arrière passe à 0° (−1,2° est un
+tremblement de main, pas une propriété de la vue), et l'écart d'épaisseur entre
+bord proche et bord lointain — mesuré entre +5 % et +11 % selon la photo — est
+fixé à +8 %, le bord proche étant déduit de la géométrie. La mesure était dans
+le bruit, et une asymétrie entre les deux vues 3/4 se verrait à l'écran.
+
+Trois conséquences dans le code :
+
+- **`ratio` désigne la boîte englobante**, pas une hauteur moyenne : c'est ainsi
+  qu'il a été mesuré. Le définir autrement sortait les vues 3/4 4 % trop plates.
+- **Le quadrilatère est construit et tourné dans une unité commune** — la largeur
+  du viseur — puis converti en y à la toute fin. Tourner directement en
+  coordonnées normalisées déformerait l'angle avec le rapport de l'écran.
+- **La largeur est une fraction de la largeur du viseur.** Elle se transporte
+  d'une orientation d'écran à l'autre tant que le véhicule occupe la même part
+  de la largeur du cadre. Les tests le vérifient en portrait, en paysage et sur
+  un écran très allongé.
+
+Les tests rejouent la mesure des photos (même rectangle d'aire minimale) sur le
+gabarit produit et la comparent au tableau ci-dessus : ils testent ce que voit
+l'utilisateur, pas les constantes d'entrée.
 
 Le cache reste **centré horizontalement** sur toutes les vues, y compris les
 3/4 où la plaque d'une voiture centrée serait un peu décalée. C'est un choix

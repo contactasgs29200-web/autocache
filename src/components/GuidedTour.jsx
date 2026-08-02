@@ -414,12 +414,22 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
 function PlateGuide({ quad, logoPreview, size }) {
   const W = Math.max(1, size?.w ?? 1), H = Math.max(1, size?.h ?? 1);
   const px = p => ({ x: p.x * W, y: p.y * H });
-  const pts = [quad.tl, quad.tr, quad.br, quad.bl].map(px);
-  const poly = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const [tl, tr, br, bl] = [quad.tl, quad.tr, quad.br, quad.bl].map(px);
+  const poly = [tl, tr, br, bl].map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
   const b = quadBBox(quad);
   const box = { x: b.x1 * W, y: b.y1 * H, w: (b.x2 - b.x1) * W, h: (b.y2 - b.y1) * H };
-  const cx = (pts[0].x + pts[2].x) / 2;
-  const cy = (pts[0].y + pts[2].y) / 2;
+  const cx = (tl.x + br.x) / 2;
+  const cy = (tl.y + br.y) / 2;
+
+  // Le cache est incliné sur les vues 3/4 : le logo doit suivre. Cette matrice
+  // envoie le carré unité sur le quadrilatère (via tl, tr, bl), donc rotation
+  // comprise ; le clip au quadrilatère absorbe le reste du trapèze.
+  const m = [tr.x - tl.x, tr.y - tl.y, bl.x - tl.x, bl.y - tl.y, tl.x, tl.y]
+    .map(v => v.toFixed(3)).join(",");
+  // Hauteur réelle du cache (pas celle de sa boîte englobante, qui enfle avec
+  // l'inclinaison) : elle dimensionne le texte de repli.
+  const plateH = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+  const angle = Math.atan2(tr.y - tl.y, tr.x - tl.x) * 180 / Math.PI;
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}
@@ -433,7 +443,7 @@ function PlateGuide({ quad, logoPreview, size }) {
       {logoPreview ? (
         <g clipPath="url(#plateGuideClip)">
           <image href={logoPreview} preserveAspectRatio="none"
-            x={box.x} y={box.y} width={box.w} height={box.h} opacity="0.92" />
+            x="0" y="0" width="1" height="1" transform={`matrix(${m})`} opacity="0.92" />
         </g>
       ) : (
         <polygon points={poly} fill="rgba(0,0,0,0.55)" />
@@ -442,9 +452,10 @@ function PlateGuide({ quad, logoPreview, size }) {
       <polygon points={poly} fill="none" stroke={ACCENT} strokeWidth="2" />
 
       {!logoPreview && (
-        <text x={cx} y={cy + box.h * 0.16} textAnchor="middle"
-          fill="rgba(255,255,255,0.9)" fontSize={Math.max(9, box.h * 0.42)}
-          letterSpacing="2" fontFamily="var(--font-apple)">
+        <text x={cx} y={cy + plateH * 0.16} textAnchor="middle"
+          transform={`rotate(${angle.toFixed(2)} ${cx.toFixed(1)} ${cy.toFixed(1)})`}
+          fill="rgba(255,255,255,0.9)" fontSize={Math.max(9, plateH * 0.5)}
+          letterSpacing="1" fontFamily="var(--font-apple)">
           PLAQUE
         </text>
       )}

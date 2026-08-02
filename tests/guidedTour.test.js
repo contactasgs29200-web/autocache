@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GUIDED_STEPS, BONUS_STEP, PLATE_ASPECT, PLATE_FRAME,
-  stepById, plateQuadForStep, plateWidthForYaw, quadBBox, coverSourceRect,
+  GUIDED_STEPS, BONUS_STEP, PLATE_FRAME,
+  stepById, plateQuadForStep, quadBBox, coverSourceRect,
   doneStepIds, nextPendingStepIndex, isTourComplete, bonusCount,
   tourFileName, orderedShots, tourProgress,
   blurScore, meanLuma, frameAdvice, QUALITY,
@@ -18,13 +18,15 @@ test('le parcours impose exactement les quatre vues demandées', () => {
   );
 });
 
-test('les vues 3/4 sont orientées de part et d’autre de la face avant', () => {
+test('les vues 3/4 s’inclinent en sens opposés, les vues droites pas du tout', () => {
   const [fl, f, fr, rear] = GUIDED_STEPS;
-  assert.ok(fl.yaw < 0 && fr.yaw > 0);
-  assert.equal(f.yaw, 0);
-  assert.equal(rear.yaw, 0);
-  assert.equal(fl.near, 'left');
-  assert.equal(fr.near, 'right');
+  assert.ok(fl.plate.rotation > 0 && fr.plate.rotation < 0);
+  assert.equal(f.plate.rotation, 0);
+  assert.equal(rear.plate.rotation, 0);
+  // Bord proche : côté où la face du véhicule se rapproche de l’appareil.
+  assert.equal(fl.plate.near, 'right');
+  assert.equal(fr.plate.near, 'left');
+  assert.equal(f.plate.near, null);
 });
 
 test('stepById retrouve les étapes, bonus compris', () => {
@@ -35,66 +37,103 @@ test('stepById retrouve les étapes, bonus compris', () => {
 
 // ── Gabarit du cache plaque ──────────────────────────────────────────────────
 
-test('le cache est centré horizontalement et proche du milieu de l’écran', () => {
-  const q = plateQuadForStep('front', 3 / 4);
-  const cx = (q.tl.x + q.tr.x) / 2;
-  const cy = (q.tl.y + q.bl.y) / 2;
-  assert.ok(Math.abs(cx - 0.5) < 1e-9, `cx = ${cx}`);
-  assert.equal(cy, PLATE_FRAME.cy);
+// Mesure identique à celle faite sur les photos de référence : rectangle
+// d'aire minimale autour du quadrilatère. C'est ce qui rend la comparaison
+// honnête — sans lui, on testerait les entrées, pas ce que voit l'utilisateur.
+function minAreaRect(pts) {
+  let best = null;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    const c = Math.cos(-ang), sn = Math.sin(-ang);
+    const us = pts.map(p => p.x * c - p.y * sn);
+    const vs = pts.map(p => p.x * sn + p.y * c);
+    const w = Math.max(...us) - Math.min(...us);
+    const h = Math.max(...vs) - Math.min(...vs);
+    if (!best || w * h < best.area) best = { area: w * h, w, h, ang };
+  }
+  let { w, h, ang } = best;
+  if (w < h) { [w, h] = [h, w]; ang += Math.PI / 2; }
+  let deg = ang * 180 / Math.PI;
+  while (deg > 90) deg -= 180;
+  while (deg < -90) deg += 180;
+  return { w, h, deg };
+}
+
+const measure = (stepId, W, H) => {
+  const q = plateQuadForStep(stepId, W / H);
+  return minAreaRect([q.tl, q.tr, q.br, q.bl].map(p => ({ x: p.x * W, y: p.y * H })));
+};
+
+// Relevé sur les quatre photos de référence traitées par l'app.
+// L'arrière y mesurait -1,19° : un tremblement de main, ramené à 0.
+const REFERENCE = {
+  front_left_34:  { widthPct: 12.30, ratio: 3.56, rotation: 14.1 },
+  front:          { widthPct: 23.00, ratio: 5.49, rotation: 0 },
+  front_right_34: { widthPct: 12.40, ratio: 3.39, rotation: -18.2 },
+  rear:           { widthPct: 22.70, ratio: 5.06, rotation: 0 },
+};
+
+test('le gabarit reproduit les mesures des photos de référence', () => {
+  const W = 390, H = 640;
+  for (const [id, ref] of Object.entries(REFERENCE)) {
+    const m = measure(id, W, H);
+    assert.ok(Math.abs(m.w / W * 100 - ref.widthPct) < 0.05,
+      `${id} : largeur ${(m.w / W * 100).toFixed(2)} % au lieu de ${ref.widthPct} %`);
+    assert.ok(Math.abs(m.w / m.h - ref.ratio) < 0.02,
+      `${id} : L/H ${(m.w / m.h).toFixed(2)} au lieu de ${ref.ratio}`);
+    assert.ok(Math.abs(m.deg - ref.rotation) < 0.05,
+      `${id} : inclinaison ${m.deg.toFixed(2)}° au lieu de ${ref.rotation}°`);
+  }
 });
 
-test('le cache garde le rapport d’une plaque française à l’écran', () => {
-  // Viseur 1080 × 1440 (portrait) : le rapport se mesure en PIXELS, pas en
-  // coordonnées normalisées.
-  const W = 1080, H = 1440;
-  const q = plateQuadForStep('front', W / H);
-  const wPx = (q.tr.x - q.tl.x) * W;
-  const hPx = (q.bl.y - q.tl.y) * H;
-  assert.ok(Math.abs(wPx / hPx - PLATE_ASPECT) < 1e-6, `rapport = ${wPx / hPx}`);
+test('le gabarit ne dépend pas de l’orientation de l’écran', () => {
+  // Portrait, paysage, écran très allongé : la forme et l'inclinaison à
+  // l'écran ne bougent pas, seule la conversion en coordonnées y change.
+  for (const id of Object.keys(REFERENCE)) {
+    const p = measure(id, 390, 640);
+    const l = measure(id, 1858, 1394);
+    const t = measure(id, 320, 900);
+    assert.ok(Math.abs(p.w / 390 - l.w / 1858) < 1e-6, `${id} largeur`);
+    assert.ok(Math.abs(p.w / p.h - l.w / l.h) < 1e-6, `${id} rapport`);
+    assert.ok(Math.abs(p.deg - l.deg) < 1e-6 && Math.abs(p.deg - t.deg) < 1e-6, `${id} inclinaison`);
+  }
 });
 
-test('le rapport tient aussi en paysage', () => {
-  const W = 1440, H = 1080;
-  const q = plateQuadForStep('rear', W / H);
-  const wPx = (q.tr.x - q.tl.x) * W;
-  const hPx = (q.bl.y - q.tl.y) * H;
-  assert.ok(Math.abs(wPx / hPx - PLATE_ASPECT) < 1e-6);
+test('le cache reste centré sur le milieu du viseur', () => {
+  for (const id of Object.keys(REFERENCE)) {
+    const q = plateQuadForStep(id, 3 / 4);
+    const cx = (q.tl.x + q.tr.x + q.br.x + q.bl.x) / 4;
+    const cy = (q.tl.y + q.tr.y + q.br.y + q.bl.y) / 4;
+    assert.ok(Math.abs(cx - PLATE_FRAME.cx) < 1e-9, `${id} cx = ${cx}`);
+    assert.ok(Math.abs(cy - PLATE_FRAME.cy) < 1e-9, `${id} cy = ${cy}`);
+  }
 });
 
-test('une vue de face donne un rectangle, une vue 3/4 un trapèze', () => {
+test('une vue de face donne un rectangle, une vue 3/4 un trapèze incliné', () => {
   const face = plateQuadForStep('front', 3 / 4);
   assert.equal(face.tl.y, face.tr.y);
   assert.equal(face.bl.y, face.br.y);
 
-  const troisQuarts = plateQuadForStep('front_left_34', 3 / 4);
-  const hLeft = troisQuarts.bl.y - troisQuarts.tl.y;
-  const hRight = troisQuarts.br.y - troisQuarts.tr.y;
-  // Bord gauche (proche) plus haut que le bord droit (lointain).
-  assert.ok(hLeft > hRight, `${hLeft} vs ${hRight}`);
+  // 3/4 avant gauche : le cache descend vers la droite…
+  const gauche = plateQuadForStep('front_left_34', 3 / 4);
+  assert.ok(gauche.tr.y > gauche.tl.y, 'le bord droit doit descendre');
+  // … et son bord droit, plus proche de l’appareil, est le plus épais.
+  const hDroite = gauche.br.y - gauche.tr.y;
+  const hGauche = gauche.bl.y - gauche.tl.y;
+  assert.ok(hDroite > hGauche, `${hDroite} vs ${hGauche}`);
+
+  // 3/4 avant droit : exactement l’inverse.
+  const droit = plateQuadForStep('front_right_34', 3 / 4);
+  assert.ok(droit.tr.y < droit.tl.y, 'le bord droit doit monter');
+  assert.ok((droit.bl.y - droit.tl.y) > (droit.br.y - droit.tr.y));
 });
 
-test('une plaque vue de biais est plus étroite qu’une plaque de face', () => {
-  const face = plateQuadForStep('front', 3 / 4);
-  const biais = plateQuadForStep('front_right_34', 3 / 4);
-  assert.ok((biais.tr.x - biais.tl.x) < (face.tr.x - face.tl.x));
-});
-
-test('la largeur du gabarit suit l’encombrement apparent du véhicule', () => {
-  // De face, une plaque fait environ un quart de la largeur du cadre.
-  assert.ok(Math.abs(plateWidthForYaw(0) - 0.257) < 0.005, `${plateWidthForYaw(0)}`);
-  // À 32°, la longueur du véhicule entre dans le cadre : tout rapetisse, bien
-  // plus que le simple cosinus (qui donnerait 0,218).
-  assert.ok(plateWidthForYaw(32) < 0.15, `${plateWidthForYaw(32)}`);
-  // Symétrique : viser à gauche ou à droite donne le même gabarit.
-  assert.ok(Math.abs(plateWidthForYaw(-32) - plateWidthForYaw(32)) < 1e-12);
-  // De profil, la plaque disparaît — le gabarit ne descend jamais à zéro.
-  assert.equal(plateQuadForStep('front', 3 / 4).tr.x > 0.5, true);
-});
-
-test('le gabarit garde une taille utilisable même très en biais', () => {
-  // Plancher : sous ce seuil, viser dans le cache devient impraticable.
-  const biais = plateQuadForStep('front_left_34', 3 / 4);
-  assert.ok((biais.tr.x - biais.tl.x) >= 0.16 - 1e-9);
+test('une plaque vue de biais est bien plus étroite qu’une plaque de face', () => {
+  // Mesuré sur les photos : ~12,3 % contre ~23 %, soit la moitié.
+  const face = measure('front', 390, 640).w;
+  const biais = measure('front_left_34', 390, 640).w;
+  assert.ok(biais / face > 0.5 && biais / face < 0.56, `rapport ${biais / face}`);
 });
 
 test('le gabarit reste dans le cadre et sa boîte englobante l’enveloppe', () => {
@@ -110,8 +149,10 @@ test('le gabarit reste dans le cadre et sa boîte englobante l’enveloppe', () 
 });
 
 test('plateQuadForStep encaisse un aspect absurde et une étape inconnue', () => {
+  // Étape inconnue → gabarit de la face avant, plutôt qu'un plantage.
   const q = plateQuadForStep('n’existe pas', NaN);
   assert.ok(Number.isFinite(q.tl.x) && Number.isFinite(q.tl.y));
+  assert.deepEqual(q, plateQuadForStep('front', 3 / 4));
   assert.ok(Number.isFinite(plateQuadForStep('front', 0).br.y));
 });
 

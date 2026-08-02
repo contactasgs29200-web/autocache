@@ -17,45 +17,58 @@
 //  React (GuidedTour) n'ajoute que la caméra et l'UI.
 // =============================================================================
 
-/** Rapport largeur/hauteur d'une plaque française (520 × 110 mm). */
-export const PLATE_ASPECT = 520 / 110;
-
 /**
  * Position du cache plaque dans le viseur, en coordonnées normalisées.
  * `cy` est légèrement sous le milieu : une plaque se trouve en bas de calandre,
  * et viser pile le centre obligerait à pointer l'appareil vers le sol.
- * `w` est la largeur MAXIMALE du gabarit (atteinte de face) ; les vues 3/4
- * la réduisent — voir plateWidthForYaw.
+ * La TAILLE, elle, dépend de la vue : voir `plate` sur chaque étape.
  */
-export const PLATE_FRAME = { cx: 0.5, cy: 0.56, w: 0.26 };
+export const PLATE_FRAME = { cx: 0.5, cy: 0.56 };
 
-// Basculement du cache sur les vues 3/4 : le bord proche paraît plus haut que
-// le bord lointain. Sans ça, le gabarit ne ressemblerait à aucune plaque réelle
-// vue de biais.
-const PERSPECTIVE_TILT = 0.15;
+// =============================================================================
+//  Géométrie du gabarit — mesurée, pas calculée.
+//
+//  Un modèle de perspective (cosinus de l'angle, encombrement apparent du
+//  véhicule) donnait un gabarit plausible mais faux : trop grand sur les vues
+//  3/4, et surtout parfaitement horizontal alors qu'un cache réel y est
+//  nettement INCLINÉ — c'est pourtant l'inclinaison qui dit à l'utilisateur
+//  qu'il est bien placé.
+//
+//  Les valeurs ci-dessous sont relevées sur quatre photos de référence déjà
+//  traitées par l'app, par segmentation du cache puis rectangle d'aire
+//  minimale :
+//
+//    vue                | largeur (% largeur photo) | L/H  | inclinaison
+//    3/4 avant gauche   | 12,30 %                   | 3,56 | +14,1°
+//    face avant         | 23,04 %                   | 5,49 |   0,0°
+//    3/4 avant droit    | 12,43 %                   | 3,39 | −18,2°
+//    arrière            | 22,72 %                   | 5,06 |  −1,2°
+//
+//  Deux relevés ont été arrondis volontairement :
+//  - l'arrière passe à 0° (−1,2° est un tremblement de main, pas une propriété
+//    de la vue) ;
+//  - l'écart d'épaisseur entre bord proche et bord lointain, mesuré entre +5 %
+//    et +11 % selon la photo, est fixé à +8 % et attribué au bord proche déduit
+//    de la géométrie : la mesure était dans le bruit, et une asymétrie entre
+//    les deux vues 3/4 se verrait à l'écran.
+//
+//  La largeur est une fraction de la LARGEUR du viseur. Elle se transporte
+//  d'une orientation à l'autre tant que le véhicule occupe la même part de la
+//  largeur du cadre — ~60 % de face, ~75 % en 3/4 sur les photos de référence.
+// =============================================================================
 
-// Véhicule de référence (mètres) pour dimensionner le gabarit. Une plaque ne
-// rétrécit pas seulement du cosinus de l'angle : sur une vue 3/4, la LONGUEUR
-// du véhicule entre dans le cadre, donc à cadrage constant tout le reste
-// rapetisse. Ignorer ce terme donnerait un cache deux fois trop grand sur les
-// vues 3/4 — l'utilisateur devrait coller le pare-chocs pour l'y faire entrer.
-const CAR = { width: 1.82, length: 4.5, plate: 0.52 };
-// Part de la largeur du viseur occupée par le véhicule sur une photo d'annonce.
-const CAR_FILL = 0.9;
-// Plancher : sous ~16 % de la largeur, viser dans le cache devient pénible et
-// la plaque sort trop petite dans le fichier. Mieux vaut un gabarit un peu
-// généreux — le cache de repli couvrira large, ce qui est le bon sens du
-// risque : un cache débordant sur le pare-chocs s'ajuste, une plaque lisible
-// non.
-const MIN_PLATE_W = 0.16;
+// Épaisseur du bord proche rapportée au bord lointain, sur une vue 3/4.
+const NEAR_FAR = 1.08;
 
 /**
  * Les quatre prises du parcours, dans l'ordre de marche autour du véhicule :
  * on commence à l'avant gauche, on passe devant, on continue vers l'avant
  * droit, puis on contourne jusqu'à l'arrière. Aucun aller-retour.
  *
- * `yaw` = angle de la face photographiée par rapport à l'axe de visée.
- * `near` = côté du cadre où le bord de la plaque est le plus proche.
+ * `plate` = gabarit du cache pour cette vue, relevé sur les photos de
+ * référence : `w` en fraction de la largeur du viseur, `ratio` = longueur /
+ * hauteur, `rotation` en degrés (positif = le cache descend vers la droite),
+ * `near` = côté dont le bord est le plus proche de l'appareil.
  */
 export const GUIDED_STEPS = [
   {
@@ -64,8 +77,7 @@ export const GUIDED_STEPS = [
     slug: 'avant-34-gauche',
     instruction: 'Placez-vous à l’avant gauche du véhicule',
     detail: 'On doit voir la calandre et le flanc conducteur.',
-    yaw: -32,
-    near: 'left',
+    plate: { w: 0.123, ratio: 3.56, rotation: 14.1, near: 'right' },
   },
   {
     id: 'front',
@@ -73,8 +85,7 @@ export const GUIDED_STEPS = [
     slug: 'avant',
     instruction: 'Placez-vous pile en face de l’avant',
     detail: 'Calandre bien parallèle à l’écran.',
-    yaw: 0,
-    near: null,
+    plate: { w: 0.230, ratio: 5.49, rotation: 0, near: null },
   },
   {
     id: 'front_right_34',
@@ -82,8 +93,7 @@ export const GUIDED_STEPS = [
     slug: 'avant-34-droit',
     instruction: 'Passez à l’avant droit du véhicule',
     detail: 'On doit voir la calandre et le flanc passager.',
-    yaw: 32,
-    near: 'right',
+    plate: { w: 0.124, ratio: 3.39, rotation: -18.2, near: 'left' },
   },
   {
     id: 'rear',
@@ -91,8 +101,7 @@ export const GUIDED_STEPS = [
     slug: 'arriere',
     instruction: 'Contournez le véhicule et placez-vous derrière',
     detail: 'Hayon bien parallèle à l’écran.',
-    yaw: 0,
-    near: null,
+    plate: { w: 0.227, ratio: 5.06, rotation: 0, near: null },
   },
 ];
 
@@ -112,53 +121,48 @@ export function stepById(id) {
 
 const clamp01 = v => Math.max(0, Math.min(1, v));
 
-/**
- * Largeur du cache dans le viseur, en fraction de la largeur d'écran, pour une
- * face vue sous l'angle `yaw` — véhicule cadré en pleine largeur.
- *
- * Vue de face (yaw = 0) : 0,52 m de plaque sur 1,82 m de largeur de véhicule,
- * lui-même occupant 90 % du cadre → ~26 %. Vue de 3/4, le véhicule présente sa
- * largeur ET sa longueur : il paraît deux fois plus large, tout rapetisse.
- */
-export function plateWidthForYaw(yaw) {
-  const rad = ((Number.isFinite(yaw) ? yaw : 0) * Math.PI) / 180;
-  const carApparent = CAR.width * Math.abs(Math.cos(rad)) + CAR.length * Math.abs(Math.sin(rad));
-  if (carApparent <= 0) return MIN_PLATE_W;
-  return CAR_FILL * (CAR.plate * Math.abs(Math.cos(rad))) / carApparent;
-}
+/** Gabarit par défaut : celui de la face avant. */
+const DEFAULT_PLATE = GUIDED_STEPS[1].plate;
 
 /**
  * Gabarit du cache plaque pour une étape, en coordonnées normalisées du
  * viseur (0–1 sur la largeur et la hauteur de la zone visible).
  *
- * `aspect` = largeur/hauteur de la zone visible. Il est indispensable : la
- * plaque doit garder son rapport 520/110 à l'écran, or les coordonnées
- * normalisées x et y n'ont pas la même échelle en pixels.
+ * `aspect` = largeur/hauteur de la zone visible. Il est indispensable : le
+ * gabarit doit garder sa forme et son inclinaison à l'écran, or les
+ * coordonnées normalisées x et y n'ont pas la même échelle en pixels. Le
+ * quadrilatère est donc construit et tourné dans une unité commune — la
+ * largeur du viseur — puis reconverti en y à la toute fin.
  */
 export function plateQuadForStep(stepId, aspect = 3 / 4, frame = PLATE_FRAME) {
-  const step = stepById(stepId) ?? GUIDED_STEPS[0];
+  const step = stepById(stepId);
   const a = Number.isFinite(aspect) && aspect > 0 ? aspect : 3 / 4;
-  const yaw = Number.isFinite(step.yaw) ? step.yaw : 0;
-  const rad = (yaw * Math.PI) / 180;
+  const g = step?.plate ?? DEFAULT_PLATE;
 
-  const w = Math.max(MIN_PLATE_W, Math.min(frame.w, plateWidthForYaw(yaw)));
-  const h = (w * a) / PLATE_ASPECT;
+  const w = g.w;                                  // en largeurs de viseur
+  // `ratio` a été relevé sur le rectangle englobant du cache : la hauteur qu'il
+  // décrit est donc celle du bord le PLUS épais, pas une moyenne. Le définir
+  // ainsi ici rend le gabarit mesurable exactement comme les photos de
+  // référence — sinon les vues 3/4 sortent 4 % trop plates.
+  const hNear = w / Math.max(0.01, g.ratio);
+  const hFar = g.near ? hNear / NEAR_FAR : hNear;
+  const hLeft = g.near === 'left' ? hNear : g.near === 'right' ? hFar : hNear;
+  const hRight = g.near === 'right' ? hNear : g.near === 'left' ? hFar : hNear;
 
-  // Bord proche plus haut que le bord lointain — sur une vue de face, tilt = 0
-  // et le gabarit redevient un rectangle.
-  const tilt = PERSPECTIVE_TILT * Math.abs(Math.sin(rad));
-  const hNear = h * (1 + tilt);
-  const hFar = h * (1 - tilt);
-  const hLeft = step.near === 'left' ? hNear : step.near === 'right' ? hFar : h;
-  const hRight = step.near === 'right' ? hNear : step.near === 'left' ? hFar : h;
+  const rad = ((g.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  // Rotation autour du centre, y vers le bas : un angle positif fait descendre
+  // le bord droit, comme sur une vue 3/4 avant gauche.
+  const place = (u, v) => ({
+    x: clamp01(frame.cx + (u * cos - v * sin)),
+    y: clamp01(frame.cy + (u * sin + v * cos) * a),
+  });
 
-  const x1 = frame.cx - w / 2;
-  const x2 = frame.cx + w / 2;
   return {
-    tl: { x: clamp01(x1), y: clamp01(frame.cy - hLeft / 2) },
-    tr: { x: clamp01(x2), y: clamp01(frame.cy - hRight / 2) },
-    br: { x: clamp01(x2), y: clamp01(frame.cy + hRight / 2) },
-    bl: { x: clamp01(x1), y: clamp01(frame.cy + hLeft / 2) },
+    tl: place(-w / 2, -hLeft / 2),
+    tr: place(+w / 2, -hRight / 2),
+    br: place(+w / 2, +hRight / 2),
+    bl: place(-w / 2, +hLeft / 2),
   };
 }
 
