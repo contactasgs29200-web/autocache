@@ -465,6 +465,12 @@ function cornersFromShowroom(sc, t) {
   return { tl: u(sc.tl), tr: u(sc.tr), br: u(sc.br), bl: u(sc.bl) };
 }
 
+// Source du cache déjà réduite, mémorisée par image. En mode Ajuster le cache
+// est reposé à chaque frame : refaire la cascade de réductions 60 fois par
+// seconde coûtait plus cher que la pose elle-même. WeakMap : la version réduite
+// disparaît avec l'image du logo.
+const plateSrcCache = new WeakMap(); // logoImg → { targetW, canvas }
+
 // Perspective-correct rendering via horizontal strip decomposition.
 // tl/tr/br/bl are canvas pixel coords of the plate's 4 corners.
 // Quality pipeline: multi-step halving → axis-aligned fast path or
@@ -495,36 +501,53 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
 
   // ── Step 1: réduction progressive de la source ──
   // drawImage réduit proprement d'un facteur 2 et se dégrade au-delà de 4.
-  // On amène donc la source à 2× la résolution d'arrivée : halvings successifs
+  // On amène donc la source à ~2× la résolution d'arrivée : halvings successifs
   // puis un dernier pas à la taille exacte. Sans cela, un cache généré de
   // 3120 px atterrissait en UN seul drawImage sur une plaque de ~150 px
   // (réduction ×20) — d'où le texte crénelé, très visible en zoomant.
   // La source ne descend jamais sous la résolution d'arrivée : elle serait
   // sinon ré-agrandie en aval (cache flou).
-  const targetW = Math.min(iw, Math.max(2, Math.round(consumerW * 2)));
+  // La cible est arrondie au palier √2 supérieur : pendant un ajustement la
+  // plaque change de quelques pixels à chaque frame, et sans ces paliers le
+  // cache ci-dessous raterait à tous les coups. Le rapport source/arrivée
+  // reste dans [2 ; 2,83], toujours dans la plage propre de drawImage.
+  const targetW = Math.min(iw, Math.max(2,
+    Math.ceil(Math.pow(2, Math.ceil(Math.log2(Math.max(1, consumerW * 2)) * 2) / 2))));
   let src = img, sw = iw, sh = ih;
-  const dropSrc = () => { if (src !== img) freeCanvas(src); };
-  while (sw > targetW * 2 && sw > 2) {
-    const half = document.createElement('canvas');
-    half.width = Math.max(1, Math.round(sw / 2));
-    half.height = Math.max(1, Math.round(sh / 2));
-    const hCtx = half.getContext('2d');
-    hCtx.imageSmoothingEnabled = true;
-    hCtx.imageSmoothingQuality = 'high';
-    hCtx.drawImage(src, 0, 0, half.width, half.height);
-    dropSrc();
-    src = half; sw = half.width; sh = half.height;
-  }
-  if (sw > targetW * 1.05) {
-    const fin = document.createElement('canvas');
-    fin.width = targetW;
-    fin.height = Math.max(1, Math.round(sh * targetW / sw));
-    const fCtx = fin.getContext('2d');
-    fCtx.imageSmoothingEnabled = true;
-    fCtx.imageSmoothingQuality = 'high';
-    fCtx.drawImage(src, 0, 0, fin.width, fin.height);
-    dropSrc();
-    src = fin; sw = fin.width; sh = fin.height;
+  const cached = plateSrcCache.get(img);
+  if (cached && cached.targetW === targetW && cached.canvas.width > 0) {
+    src = cached.canvas; sw = src.width; sh = src.height;
+  } else if (iw > targetW * 1.05) {
+    let cur = img, cw = iw, ch = ih;
+    const dropCur = () => { if (cur !== img) freeCanvas(cur); };
+    while (cw > targetW * 2 && cw > 2) {
+      const half = document.createElement('canvas');
+      half.width = Math.max(1, Math.round(cw / 2));
+      half.height = Math.max(1, Math.round(ch / 2));
+      const hCtx = half.getContext('2d');
+      hCtx.imageSmoothingEnabled = true;
+      hCtx.imageSmoothingQuality = 'high';
+      hCtx.drawImage(cur, 0, 0, half.width, half.height);
+      dropCur();
+      cur = half; cw = half.width; ch = half.height;
+    }
+    if (cw > targetW * 1.05) {
+      const fin = document.createElement('canvas');
+      fin.width = targetW;
+      fin.height = Math.max(1, Math.round(ch * targetW / cw));
+      const fCtx = fin.getContext('2d');
+      fCtx.imageSmoothingEnabled = true;
+      fCtx.imageSmoothingQuality = 'high';
+      fCtx.drawImage(cur, 0, 0, fin.width, fin.height);
+      dropCur();
+      cur = fin; cw = fin.width; ch = fin.height;
+    }
+    src = cur; sw = cw; sh = ch;
+    if (src !== img) {
+      const prev = plateSrcCache.get(img);
+      if (prev && prev.canvas !== src) freeCanvas(prev.canvas);
+      plateSrcCache.set(img, { targetW, canvas: src });
+    }
   }
 
   // ── Step 2: axis-aligned fast path ──
@@ -536,7 +559,6 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(src, tl.x, tl.y, tr.x - tl.x, bl.y - tl.y);
     ctx.restore();
-    dropSrc();
     return;
   }
 
@@ -604,7 +626,6 @@ function drawPerspective(ctx, img, tl, tr, br, bl) {
     ctx.restore();
     freeCanvas(offCanvas);
   }
-  dropSrc();
 }
 
 // ?plateDebug=raw : laisse la plaque VISIBLE et n'affiche que l'overlay des
@@ -708,20 +729,32 @@ function drawPlateOverlay(ctx, logoImg, ptl, ptr, pbr, pbl, bgColor, renderSourc
     return;
   }
 
-  // 4. Standard boost (non-front-plate) — saturate + contrast clipped to quad
+  // 4. Standard boost (non-front-plate) — saturate + contrast clipped to quad.
+  // saturate/contrast sont des filtres POINT À POINT : le résultat sur la
+  // plaque ne dépend que des pixels de la plaque. On ne recopie donc que sa
+  // boîte englobante, et non le canvas entier — en mode Ajuster ce filtre
+  // tournait à chaque frame et par cache, soit deux copies pleine résolution
+  // (~8 Mpx) 60 fois par seconde : c'était la latence des poignées.
+  const bx0 = Math.max(0, Math.floor(Math.min(ptl.x, ptr.x, pbr.x, pbl.x)));
+  const by0 = Math.max(0, Math.floor(Math.min(ptl.y, ptr.y, pbr.y, pbl.y)));
+  const bx1 = Math.min(W, Math.ceil(Math.max(ptl.x, ptr.x, pbr.x, pbl.x)));
+  const by1 = Math.min(H, Math.ceil(Math.max(ptl.y, ptr.y, pbr.y, pbl.y)));
+  const bw = bx1 - bx0, bh = by1 - by0;
+  if (bw < 1 || bh < 1) return;
   const tmp = document.createElement('canvas');
-  tmp.width = W; tmp.height = H;
+  tmp.width = bw; tmp.height = bh;
   const tCtx = tmp.getContext('2d');
   tCtx.filter = 'saturate(1.15) contrast(1.08)';
-  tCtx.drawImage(ctx.canvas, 0, 0);
+  tCtx.drawImage(ctx.canvas, bx0, by0, bw, bh, 0, 0, bw, bh);
   tCtx.filter = 'none';
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(ptl.x, ptl.y); ctx.lineTo(ptr.x, ptr.y);
   ctx.lineTo(pbr.x, pbr.y); ctx.lineTo(pbl.x, pbl.y);
   ctx.closePath(); ctx.clip();
-  ctx.drawImage(tmp, 0, 0);
+  ctx.drawImage(tmp, bx0, by0);
   ctx.restore();
+  freeCanvas(tmp);
 }
 
 
@@ -6807,7 +6840,19 @@ export default function AutoCache() {
             })()}
 
             {/* ── Overlay Ajuster : 4 points oranges draggables ── */}
-            {adjustMode && adjustCorners && (
+            {adjustMode && adjustCorners && (() => {
+              // Les poignées vivent DANS le calque zoomé : sans compensation,
+              // un point de 24 px en couvre 140 à ×6 et recouvre la plaque
+              // qu'on essaie d'ajuster. On annule le zoom sur chaque poignée
+              // pour qu'elle garde la même taille à l'écran, quel que soit le
+              // grossissement — c'est le zoom qui donne la précision.
+              const hz = 1 / Math.max(1, lbZoom);
+              const pin = (x, y) => ({
+                position: "absolute",
+                left: `${x * 100}%`, top: `${y * 100}%`,
+                transform: `translate(-50%,-50%) scale(${hz})`,
+              });
+              return (
               <div style={{ position: "absolute", inset: 0, cursor: adjustDrag ? "grabbing" : "crosshair", touchAction: "none" }}>
                 {!adjustDrag && (manualPlateMode || adjustPlates.length > 1) && (
                   <div style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.75)", color: "#f26522", fontSize: 11, fontFamily: "var(--font-apple)", padding: "5px 12px", borderRadius: 3, letterSpacing: 1, whiteSpace: "nowrap", pointerEvents: "none" }}>
@@ -6857,13 +6902,11 @@ export default function AutoCache() {
                       onTouchStart={e => { e.preventDefault(); e.stopPropagation(); selectPlate(i); }}
                       title={`Modifier le cache ${i + 1}`}
                       style={{
-                        position: "absolute",
-                        left: `${cx * 100}%`, top: `${cy * 100}%`,
+                        ...pin(cx, cy),
                         width: sz, height: sz,
                         background: "rgba(20,20,20,0.85)",
                         border: "2px solid rgba(255,255,255,0.75)",
                         borderRadius: "50%",
-                        transform: "translate(-50%,-50%)",
                         cursor: "pointer",
                         zIndex: 9,
                         touchAction: "none",
@@ -6884,14 +6927,13 @@ export default function AutoCache() {
                     onMouseDown={e => startAdjustDrag(e, corner)}
                     onTouchStart={e => { e.preventDefault(); e.stopPropagation(); if (e.touches[0]) startAdjustDragAt(e.touches[0].clientX, e.touches[0].clientY, corner); }}
                     style={{
-                      position: "absolute",
-                      left: `${adjustCorners[corner].x * 100}%`,
-                      top:  `${adjustCorners[corner].y * 100}%`,
+                      ...pin(adjustCorners[corner].x, adjustCorners[corner].y),
                       width: sz, height: sz,
-                      background: isDragging ? "transparent" : "#e8a020",
+                      // Anneau translucide plutôt que pastille pleine : le coin
+                      // de la plaque reste visible sous la poignée.
+                      background: isDragging ? "transparent" : "rgba(232,160,32,0.42)",
                       border: isDragging ? "2px solid rgba(255,255,255,0.25)" : "2px solid #fff",
                       borderRadius: "50%",
-                      transform: "translate(-50%,-50%)",
                       cursor: cur,
                       zIndex: 10,
                       touchAction: "none",
@@ -6912,26 +6954,28 @@ export default function AutoCache() {
                       onTouchStart={e => { e.preventDefault(); e.stopPropagation(); if (e.touches[0]) startAdjustDragAt(e.touches[0].clientX, e.touches[0].clientY, 'center'); }}
                       title="Déplacer la plaque"
                       style={{
-                        position: "absolute",
-                        left: `${cx * 100}%`, top: `${cy * 100}%`,
-                        width: isMobile ? 24 : 22, height: isMobile ? 24 : 22,
-                        background: isMoving ? "rgba(242,101,34,0.4)" : "rgba(242,101,34,0.85)",
+                        ...pin(cx, cy),
+                        width: isMobile ? 26 : 22, height: isMobile ? 26 : 22,
+                        // Disque translucide : la plaque reste lisible dessous,
+                        // alors qu'un aplat orange masquait ce qu'on positionne.
+                        background: isMoving ? "rgba(242,101,34,0.18)" : "rgba(242,101,34,0.3)",
                         border: "2px solid #fff",
                         borderRadius: "50%",
-                        transform: "translate(-50%,-50%)",
                         cursor: isMoving ? "grabbing" : "move",
                         zIndex: 11,
                         touchAction: "none",
                         boxShadow: "0 0 7px rgba(0,0,0,0.9)",
                         display: "flex", alignItems: "center", justifyContent: "center",
                         fontSize: isMobile ? 14 : 12, color: "#fff", fontWeight: 700, lineHeight: 1,
+                        textShadow: "0 1px 3px rgba(0,0,0,0.9)",
                         userSelect: "none",
                       }}
                     >✥</div>
                   );
                 })()}
               </div>
-            )}
+              );
+            })()}
 
             {cropMode && (
               <div style={{ position: "absolute", inset: 0, cursor: cropDrag?.type === "move" ? "grabbing" : "default", touchAction: "none" }}>
