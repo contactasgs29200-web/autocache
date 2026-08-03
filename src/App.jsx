@@ -7580,7 +7580,9 @@ export default function AutoCache() {
                 </div>
 
                 <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 16 }}>
-                  Pour changer de formule (hebdo / mensuel / annuel) ou mettre à jour votre paiement, ouvrez votre espace de facturation ci-dessous.
+                  {user?.user_metadata?.stripe_customer_id
+                    ? "Pour changer de formule (hebdo / mensuel / annuel) ou mettre à jour votre paiement, ouvrez votre espace de facturation ci-dessous."
+                    : "Votre accès a été ouvert par un code administrateur : aucun abonnement payant n'y est rattaché."}
                 </div>
 
                 {/* Bouton Factures */}
@@ -7610,28 +7612,21 @@ export default function AutoCache() {
                       setPortalLoading(null);
                     }
                   };
+                  // Un accès ouvert par code administrateur n'a pas de client
+                  // Stripe : ni facture, ni prélèvement, ni résiliation. On
+                  // masque ces commandes au lieu de les laisser répondre par
+                  // une erreur rouge que rien ne permet de résoudre.
+                  const hasBilling = !!user?.user_metadata?.stripe_customer_id;
                   return (
                     <>
-                      <button
-                        disabled={!!portalLoading}
-                        onClick={() => openPortal("invoices")}
-                        style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-333)", padding: "12px 0", fontFamily: "var(--font-apple)", fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: !!portalLoading ? "wait" : "pointer", marginBottom: 10 }}>
-                        {portalLoading === "invoices" ? "Ouverture..." : "Factures & Historique"}
-                      </button>
-
-                      {/* Résiliation — masquée si elle est déjà programmée */}
-                      {!subInfo?.cancelAtPeriodEnd && (
+                      {hasBilling && (
                         <button
                           disabled={!!portalLoading}
-                          onClick={() => openPortal("cancel")}
-                          style={{ width: "100%", background: "transparent", color: "var(--c-777)", border: "1px solid var(--c-1e1e1e)", padding: "10px 0", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: !!portalLoading ? "wait" : "pointer", marginBottom: 10 }}>
-                          {portalLoading === "cancel" ? "Ouverture..." : "Résilier mon abonnement"}
+                          onClick={() => openPortal("invoices")}
+                          style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-333)", padding: "12px 0", fontFamily: "var(--font-apple)", fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: !!portalLoading ? "wait" : "pointer", marginBottom: 10 }}>
+                          {portalLoading === "invoices" ? "Ouverture..." : "Factures & Historique"}
                         </button>
                       )}
-
-                      <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 10 }}>
-                        Sans engagement : vous pouvez résilier à tout moment. Votre accès reste ouvert jusqu'au terme de la période déjà réglée, et aucun nouveau prélèvement n'est effectué.
-                      </div>
 
                       {portalError && (
                         <div style={{ fontSize: 11, color: "#c0392b", fontFamily: "var(--font-apple)", marginBottom: 10, padding: "8px 12px", background: "rgba(192,57,43,0.08)", border: "1px solid rgba(192,57,43,0.2)", borderRadius: 3 }}>
@@ -7644,14 +7639,21 @@ export default function AutoCache() {
                         Fermer
                       </button>
 
-                      <div style={{ borderTop: "1px solid var(--c-1a1a1a)", paddingTop: 18, textAlign: "center" }}>
-                        <button
-                          disabled={!!portalLoading}
-                          onClick={() => openPortal("cancel")}
-                          style={{ background: "transparent", color: "var(--c-ddd)", border: "none", fontFamily: "var(--font-apple)", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", cursor: !!portalLoading ? "wait" : "pointer", textDecoration: "underline" }}>
-                          {portalLoading === "cancel" ? "Ouverture..." : "Résilier l'abonnement"}
-                        </button>
-                      </div>
+                      {/* Résiliation — sans objet sans abonnement payant, et
+                          masquée lorsqu'elle est déjà programmée. */}
+                      {hasBilling && !subInfo?.cancelAtPeriodEnd && (
+                        <div style={{ borderTop: "1px solid var(--c-1a1a1a)", paddingTop: 18, textAlign: "center" }}>
+                          <button
+                            disabled={!!portalLoading}
+                            onClick={() => openPortal("cancel")}
+                            style={{ background: "transparent", color: "var(--c-ddd)", border: "none", fontFamily: "var(--font-apple)", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", cursor: !!portalLoading ? "wait" : "pointer", textDecoration: "underline" }}>
+                            {portalLoading === "cancel" ? "Ouverture..." : "Résilier l'abonnement"}
+                          </button>
+                          <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.6, marginTop: 10 }}>
+                            Sans engagement : vous pouvez résilier à tout moment. Votre accès reste ouvert jusqu'au terme de la période déjà réglée, et aucun nouveau prélèvement n'est effectué.
+                          </div>
+                        </div>
+                      )}
                     </>
                   );
                 })()}
