@@ -4267,10 +4267,19 @@ export default function AutoCache() {
       });
       const d = await r.json();
       if (d.hasSubscription) {
-        const endDate = new Date(d.periodEnd * 1000);
-        const startDate = new Date(d.periodStart * 1000);
-        const now = new Date();
-        const daysLeft = Math.max(0, Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)));
+        // Une borne absente ne doit pas se transformer en « Invalid Date » :
+        // on ne retient une date que si elle est réellement exploitable, et
+        // l'affichage masque les lignes concernées le cas échéant.
+        const toDate = (s) => {
+          if (typeof s !== 'number' || !Number.isFinite(s)) return null;
+          const d2 = new Date(s * 1000);
+          return Number.isNaN(d2.getTime()) ? null : d2;
+        };
+        const startDate = toDate(d.periodStart);
+        const endDate = toDate(d.periodEnd);
+        const daysLeft = endDate
+          ? Math.max(0, Math.ceil((endDate - new Date()) / (1000 * 60 * 60 * 24)))
+          : null;
         setSubInfo({
           periodStart: startDate, periodEnd: endDate, plan: d.plan, formule: d.formule, daysLeft,
           status: d.status, cancelAtPeriodEnd: !!d.cancelAtPeriodEnd,
@@ -5468,12 +5477,12 @@ export default function AutoCache() {
                         <div style={{ padding: "12px 16px" }}>
                           {subInfoLoading ? (
                             <div style={{ fontSize: 13, color: "var(--c-ddd)", textAlign: "center", padding: "4px 0" }}>Chargement...</div>
-                          ) : subInfo?.periodEnd ? (
+                          ) : (subInfo && subInfo.hasSubscription !== false) ? (
                             <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                                 <span style={{ color: "var(--c-ddd)" }}>Debut du cycle</span>
                                 <span style={{ color: "var(--c-ddd)", fontFamily: "var(--font-apple)", fontSize: 12 }}>
-                                  {subInfo.periodStart.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
+                                  {subInfo.periodStart ? subInfo.periodStart.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
                                 </span>
                               </div>
                               {/* Résilié : plus de prélèvement à venir, on annonce
@@ -5483,7 +5492,7 @@ export default function AutoCache() {
                                   {subInfo.cancelAtPeriodEnd ? "Fin de l'accès" : "Prochain paiement"}
                                 </span>
                                 <span style={{ color: "var(--c-ddd)", fontFamily: "var(--font-apple)", fontSize: 12 }}>
-                                  {subInfo.periodEnd.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" })}
+                                  {subInfo.periodEnd ? subInfo.periodEnd.toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
                                 </span>
                               </div>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -5491,10 +5500,10 @@ export default function AutoCache() {
                                   {subInfo.cancelAtPeriodEnd ? "Temps restant" : "Renouvellement"}
                                 </span>
                                 <span style={{
-                                  color: subInfo.cancelAtPeriodEnd || subInfo.daysLeft <= 3 ? "#f26522" : "#22c55e",
+                                  color: subInfo.cancelAtPeriodEnd || (subInfo.daysLeft != null && subInfo.daysLeft <= 3) ? "#f26522" : "#22c55e",
                                   fontFamily: "var(--font-apple)", fontSize: 13, fontWeight: 700,
                                 }}>
-                                  {subInfo.daysLeft === 0 ? "Aujourd'hui" : `${subInfo.daysLeft} jour${subInfo.daysLeft > 1 ? "s" : ""}`}
+                                  {subInfo.daysLeft == null ? "—" : subInfo.daysLeft === 0 ? "Aujourd'hui" : `${subInfo.daysLeft} jour${subInfo.daysLeft > 1 ? "s" : ""}`}
                                 </span>
                               </div>
 
