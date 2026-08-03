@@ -1,6 +1,6 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
-import { periodsElapsed, advanceAnchor } from "../src/subscriptionQuota.js";
+import { periodsElapsed, advanceAnchor, formuleFromInterval } from "../src/subscriptionQuota.js";
 
 // Désactiver le body parser pour lire le raw body (requis pour la vérification Stripe)
 export const config = { api: { bodyParser: false } };
@@ -118,8 +118,22 @@ export default async function handler(req, res) {
       const session = event.data.object;
       const userId     = session.client_reference_id || session.metadata?.userId;
       const plan       = session.metadata?.plan || "premium";
-      const formule    = session.metadata?.formule || null;
       const customerId = typeof session.customer === "string" ? session.customer : null;
+      // La cadence réellement facturée prime sur la formule annoncée : cette
+      // dernière reflète le bouton cliqué et ment dès qu'un identifiant de
+      // tarif est mal renseigné, accordant alors un quota sans rapport avec
+      // ce qui est prélevé.
+      let formule = session.metadata?.formule || null;
+      if (session.subscription) {
+        const sub = await stripe.subscriptions.retrieve(
+          typeof session.subscription === "string" ? session.subscription : session.subscription.id
+        );
+        const reel = formuleFromInterval(sub.items?.data?.[0]?.price?.recurring?.interval);
+        if (reel && reel !== formule) {
+          console.warn(`[webhook] formule annoncée "${formule}" ≠ cadence facturée "${reel}" — la cadence l'emporte`);
+          formule = reel;
+        }
+      }
       if (userId) {
         await activateSubscription(userId, plan, formule, customerId);
         console.log(`Abonnement "${plan}" (formule: ${formule}) activé pour user ${userId} (customer: ${customerId})`);
@@ -174,7 +188,9 @@ export default async function handler(req, res) {
         const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
         const userId  = await resolveUserId(subscription);
         const plan    = subscription.metadata?.plan || "premium";
-        const formule = subscription.metadata?.formule || null;
+        const formule = formuleFromInterval(
+          subscription.items?.data?.[0]?.price?.recurring?.interval
+        ) || subscription.metadata?.formule || null;
 
         if (userId && ACTIVE_STATUSES.includes(subscription.status)) {
           const meta = { plan };

@@ -17,6 +17,7 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { requireUser } from "./_auth.js";
+import { formuleFromInterval } from "../src/subscriptionQuota.js";
 
 const ACTIVE_STATUSES = ["active", "trialing"];
 
@@ -73,7 +74,13 @@ export default async function handler(req, res) {
     //    pas déjà actif côté compte : une réconciliation répétée ne doit pas
     //    rouvrir un quota déjà consommé.
     const plan = sub.metadata?.plan || "premium";
-    const formule = sub.metadata?.formule || null;
+    // La cadence facturée fait foi : la métadonnée `formule` reflète le bouton
+    // cliqué, et diverge dès qu'un identifiant de tarif est mal renseigné.
+    const interval = sub.items?.data?.[0]?.price?.recurring?.interval;
+    const formule = formuleFromInterval(interval) || sub.metadata?.formule || null;
+    if (sub.metadata?.formule && formule !== sub.metadata.formule) {
+      console.warn(`[sync] formule annoncée "${sub.metadata.formule}" ≠ cadence facturée "${interval}" — la cadence l'emporte`);
+    }
     const wasActive = (user.user_metadata?.plan ?? "trial") !== "trial";
 
     const meta = { plan, stripe_customer_id: sub.customer };

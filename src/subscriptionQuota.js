@@ -29,6 +29,23 @@ export function quotaForFormule(formule) {
   return FORMULE_QUOTA[formule] ?? FORMULE_QUOTA[DEFAULT_FORMULE];
 }
 
+// Déduit la formule de la CADENCE RÉELLEMENT FACTURÉE par Stripe.
+//
+// La formule est aussi enregistrée en métadonnée au moment du paiement, mais
+// cette métadonnée reflète le bouton cliqué, pas le tarif appliqué : si un
+// identifiant de tarif est mal renseigné, elle annonce « mensuel » sur un
+// abonnement prélevé chaque semaine, et le quota accordé ne correspond plus à
+// ce que paie l'abonné. L'intervalle du prix, lui, ne peut pas mentir — c'est
+// littéralement ce qui est débité.
+export function formuleFromInterval(interval) {
+  switch (interval) {
+    case "week":  return "weekly";
+    case "month": return "monthly";
+    case "year":  return "annual";
+    default:      return null;
+  }
+}
+
 export function photosForFormule(formule) {
   return quotaForFormule(formule).photos;
 }
