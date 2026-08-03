@@ -36,10 +36,32 @@ export default async function handler(req, res) {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   const origin = req.headers.origin || "https://autocache.fr";
 
-  // Crée le coupon "première échéance -5€" s'il n'existe pas encore
+  // Garde-fou : une remise ne doit jamais atteindre le prix de la formule.
+  // Une remise fixe de 5 € appliquée à une échéance de 4,90 € ramène le dû à
+  // 0 € — l'abonnement est alors ouvert sans le moindre encaissement. La liste
+  // des formules éligibles ne suffit pas : elle ne protège de rien si la remise
+  // vient d'ailleurs (coupon rattaché au client, code promotionnel automatique
+  // configuré dans le tableau de bord Stripe). On vérifie donc le montant réel
+  // du prix avant de joindre quoi que ce soit.
   const COUPON_ID = "PREMIERE_ECHEANCE_5EUR";
+  const COUPON_AMOUNT = 500; // centimes
+
+  let priceAmount = null;
+  try {
+    const price = await stripe.prices.retrieve(priceId);
+    priceAmount = price.unit_amount;
+  } catch (e) {
+    console.error("Lecture du prix impossible:", e.message);
+    return res.status(500).json({ error: "Tarif indisponible, réessayez." });
+  }
+
+  const remiseAdmissible = priceAmount != null && priceAmount > COUPON_AMOUNT;
+  if (COUPON_FORMULES.includes(formule) && !remiseAdmissible) {
+    console.warn(`[checkout] remise écartée : ${formule} à ${priceAmount} c. ne peut absorber ${COUPON_AMOUNT} c.`);
+  }
+
   let discounts;
-  if (COUPON_FORMULES.includes(formule)) {
+  if (COUPON_FORMULES.includes(formule) && remiseAdmissible) {
     try {
       await stripe.coupons.retrieve(COUPON_ID);
     } catch {

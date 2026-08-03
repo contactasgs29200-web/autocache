@@ -3636,14 +3636,20 @@ export default function AutoCache() {
       setActivating(true);
       (async () => {
         for (let i = 0; i < ACTIVATION_TRIES; i++) {
-          const { data } = await supabase.auth.refreshSession();
-          if (data?.user) {
-            setUser(data.user);
-            if ((data.user.user_metadata?.plan ?? "trial") !== "trial") {
+          // On interroge Stripe directement au lieu d'attendre passivement que
+          // le webhook ait écrit : si la notification n'arrive jamais, cette
+          // route active quand même l'abonnement puisqu'elle lit la source de
+          // vérité du paiement.
+          try {
+            const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
+            const d = await r.json();
+            if (d.active) {
+              const { data } = await supabase.auth.refreshSession();
+              if (data?.user) setUser(data.user);
               setActivating(false);
               return;
             }
-          }
+          } catch { /* réseau instable : on retentera au tour suivant */ }
           await new Promise(r => setTimeout(r, ACTIVATION_DELAY_MS));
         }
         // Le paiement est encaissé — c'est la propagation qui traîne. On le dit
@@ -4286,6 +4292,30 @@ export default function AutoCache() {
     }
     setSubInfoLoading(false);
   }, [user?.id, subInfoLoading]);
+
+  // ── Rattrapage d'un abonnement payé mais non activé ──
+  // Un compte encore en essai alors qu'un abonnement a été réglé signale une
+  // notification Stripe perdue. On redemande à Stripe à chaque ouverture de
+  // session : l'abonné n'a rien à faire, et surtout rien à repayer. Sans ce
+  // filet, un webhook manqué laissait le compte en essai jusqu'à intervention
+  // manuelle — l'abonné voyant son paiement encaissé et aucun accès ouvert.
+  const syncedRef = useRef(null);
+  useEffect(() => {
+    if (!user?.id) return;
+    if ((user.user_metadata?.plan ?? "trial") !== "trial") return;
+    if (syncedRef.current === user.id) return; // une seule tentative par session
+    syncedRef.current = user.id;
+    (async () => {
+      try {
+        const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
+        const d = await r.json();
+        if (d.active) {
+          const { data } = await supabase.auth.refreshSession();
+          if (data?.user) setUser(data.user);
+        }
+      } catch { /* sans effet : le compte reste en essai, rien n'est dégradé */ }
+    })();
+  }, [user?.id, user?.user_metadata?.plan]);
 
   // ── Recopie du téléphone dans la colonne dédiée ──
   // Renseigné aux métadonnées à l'inscription, il ne peut être recopié dans la
@@ -7306,7 +7336,7 @@ export default function AutoCache() {
           <div style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid rgba(39,174,96,0.3)", borderTopColor: "#27ae60", animation: "ac-spin 0.8s linear infinite", flexShrink: 0 }} />
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#27ae60", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Paiement accepté — activation en cours</div>
-            <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 11, color: "#e6e1da", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
               Votre abonnement s'ouvre dans quelques secondes. Ne fermez pas cette page.
             </div>
           </div>
@@ -7319,11 +7349,30 @@ export default function AutoCache() {
           <div style={{ fontSize: 18 }}>⏳</div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#f26522", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Paiement bien reçu — activation en attente</div>
-            <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
-              Votre paiement est encaissé, mais l'activation n'est pas encore remontée jusqu'ici. Rechargez la page dans une minute. Si l'abonnement n'apparaît toujours pas, écrivez-nous : nous le débloquons manuellement.
+            <div style={{ fontSize: 11, color: "#e6e1da", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
+              Votre paiement est encaissé, mais l'activation n'est pas encore remontée jusqu'ici. Relancez la vérification ci-dessous — si elle échoue encore, écrivez-nous : rien n'est perdu, votre abonnement existe bien chez Stripe.
             </div>
+            <button
+              onClick={async () => {
+                setActivationFailed(false);
+                setActivating(true);
+                try {
+                  const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
+                  const d = await r.json();
+                  if (d.active) {
+                    const { data } = await supabase.auth.refreshSession();
+                    if (data?.user) setUser(data.user);
+                  } else {
+                    setActivationFailed(true);
+                  }
+                } catch { setActivationFailed(true); }
+                setActivating(false);
+              }}
+              style={{ marginTop: 8, background: "transparent", color: "#f26522", border: "1px solid #f26522", borderRadius: 3, padding: "6px 14px", fontFamily: "var(--font-apple)", fontSize: 10, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", cursor: "pointer" }}>
+              Vérifier mon abonnement
+            </button>
           </div>
-          <button onClick={() => setActivationFailed(false)} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>
+          <button onClick={() => setActivationFailed(false)} style={{ background: "none", border: "none", color: "#e6e1da", fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
       )}
 
