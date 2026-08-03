@@ -3301,6 +3301,8 @@ export default function AutoCache() {
   // Activation de l'abonnement au retour de Stripe Checkout
   const [activating, setActivating] = useState(false);
   const [activationFailed, setActivationFailed] = useState(false);
+  // null | "loading" | message affiché sous le lien de vérification manuelle
+  const [recheckState, setRecheckState] = useState(null);
   // ── Transition « connexion → application » ──
   // `authExit` efface la carte de connexion, puis `entering` fait apparaître
   // l'application pendant que le logo rejoint l'en-tête.
@@ -7596,6 +7598,41 @@ export default function AutoCache() {
                 </div>
 
                 {renderFormulesGrid()}
+
+                {/* Filet de rattrapage : un abonnement réglé dont l'activation
+                    n'est jamais remontée laisse le compte sur cet écran, avec
+                    pour seule issue apparente… un second paiement. */}
+                <div style={{ textAlign: "center", marginBottom: 16 }}>
+                  <button
+                    disabled={recheckState === "loading"}
+                    onClick={async () => {
+                      setRecheckState("loading");
+                      try {
+                        const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
+                        const d = await r.json();
+                        if (d.active) {
+                          const { data } = await supabase.auth.refreshSession();
+                          if (data?.user) setUser(data.user);
+                          setShowPlansModal(false);
+                          setRecheckState(null);
+                        } else {
+                          setRecheckState(d.reason === "no_customer"
+                            ? "Aucun paiement trouvé pour cette adresse email."
+                            : "Un compte de paiement existe, mais aucun abonnement actif.");
+                        }
+                      } catch {
+                        setRecheckState("Vérification impossible, réessayez.");
+                      }
+                    }}
+                    style={{ background: "transparent", color: "var(--c-888)", border: "none", fontFamily: "var(--font-apple)", fontSize: 10, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", textDecoration: "underline" }}>
+                    {recheckState === "loading" ? "Vérification..." : "Déjà payé ? Vérifier mon abonnement"}
+                  </button>
+                  {recheckState && recheckState !== "loading" && (
+                    <div style={{ fontSize: 10, color: "#f26522", fontFamily: "var(--font-apple)", marginTop: 8, lineHeight: 1.5 }}>
+                      {recheckState}
+                    </div>
+                  )}
+                </div>
 
                 <button onClick={() => setShowPlansModal(false)}
                   style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", padding: "9px 0", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
