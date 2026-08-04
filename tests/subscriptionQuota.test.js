@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  photosForFormule, periodsElapsed, advanceAnchor, quotaLabel,
+  photosForFormule, periodsElapsed, advanceAnchor, quotaLabel, limitFor, TRIAL_PHOTOS,
 } from '../src/subscriptionQuota.js';
 
 const at = iso => new Date(iso);
@@ -99,4 +99,33 @@ test('une ancre illisible ne réinitialise rien par accident', () => {
 test('une ancre dans le futur ne renvoie jamais un négatif', () => {
   assert.equal(periodsElapsed('weekly', '2026-09-01T00:00:00.000Z', at('2026-05-01T00:00:00Z')), 0);
   assert.equal(periodsElapsed('monthly', '2026-09-01T00:00:00.000Z', at('2026-05-01T00:00:00Z')), 0);
+});
+
+// ── Quota applicable, essai compris ────────────────────────────────────────
+// `limitFor` est la reference commune : le serveur s'en sert pour refuser un
+// depassement, l'interface pour afficher le solde. Un ecart entre les deux
+// afficherait un solde que le serveur refuserait ensuite d'honorer.
+
+test('l\'essai gratuit vaut 30 photos, quelle que soit la formule', () => {
+  assert.equal(limitFor('trial', undefined), TRIAL_PHOTOS);
+  assert.equal(limitFor('trial', 'weekly'), 30);
+  assert.equal(limitFor('trial', 'annual'), 30);
+});
+
+test('un compte payant suit le quota de sa cadence', () => {
+  assert.equal(limitFor('premium', 'weekly'), 250);
+  assert.equal(limitFor('premium', 'monthly'), 1000);
+  assert.equal(limitFor('premium', 'annual'), 1000);
+});
+
+test('un plan absent est traite comme un essai', () => {
+  // Un compte neuf n'a aucun droit inscrit : il ne doit pas heriter du quota
+  // payant par defaut.
+  assert.equal(limitFor(undefined, undefined), TRIAL_PHOTOS);
+  assert.equal(limitFor(null, 'monthly'), TRIAL_PHOTOS);
+});
+
+test('un compte payant sans formule connue retombe sur le quota mensuel', () => {
+  // Cas des acces ouverts par code administrateur : aucune cadence facturee.
+  assert.equal(limitFor('premium', undefined), 1000);
 });

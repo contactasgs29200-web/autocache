@@ -15,19 +15,11 @@
 // les impayés et résiliations — mais il n'est plus le seul chemin d'activation.
 
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
 import { requireUser } from "./_auth.js";
 import { formuleFromInterval } from "../src/subscriptionQuota.js";
+import { writeEntitlements, entitlementsOf } from "./_entitlements.js";
 
 const ACTIVE_STATUSES = ["active", "trialing"];
-
-function supabaseAdmin() {
-  return createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
-}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -43,7 +35,7 @@ export default async function handler(req, res) {
     //    jamais tourné et ne l'a donc jamais enregistré — précisément la
     //    situation que cette route doit rattraper.
     const customerIds = [];
-    const known = user.user_metadata?.stripe_customer_id;
+    const known = entitlementsOf(user).stripeCustomerId;
     if (known) customerIds.push(known);
 
     if (user.email) {
@@ -81,7 +73,7 @@ export default async function handler(req, res) {
     if (sub.metadata?.formule && formule !== sub.metadata.formule) {
       console.warn(`[sync] formule annoncée "${sub.metadata.formule}" ≠ cadence facturée "${interval}" — la cadence l'emporte`);
     }
-    const wasActive = (user.user_metadata?.plan ?? "trial") !== "trial";
+    const wasActive = entitlementsOf(user).plan !== "trial";
 
     const meta = { plan, stripe_customer_id: sub.customer };
     if (formule) meta.formule = formule;
@@ -91,10 +83,7 @@ export default async function handler(req, res) {
       meta.photos_period_start = new Date().toISOString();
     }
 
-    const { error } = await supabaseAdmin().auth.admin.updateUserById(user.id, {
-      user_metadata: meta,
-    });
-    if (error) throw new Error(`Supabase update failed: ${error.message}`);
+    await writeEntitlements(user.id, meta);
 
     console.log(`[sync] user ${user.id} : abonnement ${sub.status} (${formule}) — compte aligné`);
     return res.status(200).json({

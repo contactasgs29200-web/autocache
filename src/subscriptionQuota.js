@@ -16,6 +16,15 @@
 
 export const DEFAULT_FORMULE = "monthly";
 
+// Volume de l'essai gratuit, offert une seule fois et jamais renouvelé.
+export const TRIAL_PHOTOS = 30;
+
+// Quota applicable à un compte, essai compris. Sert de référence commune au
+// serveur — qui décompte et refuse — et à l'interface, qui affiche le solde.
+export function limitFor(plan, formule) {
+  return (plan ?? "trial") === "trial" ? TRIAL_PHOTOS : photosForFormule(formule);
+}
+
 export const FORMULE_QUOTA = {
   weekly:  { photos: 250,  period: { unit: "week",  count: 1 } },
   monthly: { photos: 1000, period: { unit: "month", count: 1 } },

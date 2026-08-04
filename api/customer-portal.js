@@ -12,7 +12,7 @@ export default async function handler(req, res) {
   if (!user) return;
 
   const { action } = req.body || {};
-  const stripeCustomerId = user.user_metadata?.stripe_customer_id;
+  const stripeCustomerId = user.app_metadata?.stripe_customer_id;
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
   // Abonnement « en cours » au sens large : on inclut les statuts en défaut de

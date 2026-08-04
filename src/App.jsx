@@ -13,7 +13,7 @@ import GuidedTour from "./components/GuidedTour.jsx";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
-import { photosForFormule, periodsElapsed, advanceAnchor, quotaLabel } from "./subscriptionQuota.js";
+import { photosForFormule, quotaLabel, TRIAL_PHOTOS } from "./subscriptionQuota.js";
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 767);
@@ -3348,7 +3348,7 @@ export default function AutoCache() {
   // Sur mobile le raccourci est toujours proposé (instructions manuelles en secours) ;
   // sur desktop uniquement quand le navigateur sait déclencher l'invite native.
   const showInstallMenuItem = !appInstalled && (canInstall || isIOS || isMobile);
-  const TRIAL_LIMIT = 30;
+  const TRIAL_LIMIT = TRIAL_PHOTOS; // même valeur que celle appliquée par le serveur
   const [adj, setAdj] = useState({ brightness: 1.05, contrast: 1.1, saturation: 1.2 });
   const [adjEnabled, setAdjEnabled] = useState(false);
   const [enhance, setEnhance] = useState(false);
@@ -3839,7 +3839,7 @@ export default function AutoCache() {
 
   const startAfterInfo = async () => {
     if (!logo || !photos.length) return;
-    const photosUsed = user?.user_metadata?.photos_used ?? 0;
+    const photosUsed = user?.app_metadata?.photos_used ?? 0;
     if (photosUsed >= PLAN_LIMIT) { setShowUpgradeModal(true); return; }
     const remaining = PLAN_LIMIT - photosUsed;
     const maxPhotos = remaining;
@@ -4118,11 +4118,21 @@ export default function AutoCache() {
       setResults([...all]);
       setProgress({ n: i + 1, total: photos.length });
     }
-    // Mettre à jour le compteur de photos utilisées
-    const newCount = photosUsed + photosToProcess.length;
-    const updateData = { photos_used: newCount };
-    await supabase.auth.updateUser({ data: updateData });
-    setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...updateData } } : prev);
+    // Décompte des photos : écrit par le serveur, qui seul fait autorité sur
+    // le quota. Le navigateur ne fait que refléter la valeur renvoyée.
+    try {
+      const r = await fetch('/api/consume-photos', {
+        method: 'POST',
+        headers: await authHeaders(),
+        body: JSON.stringify({ count: photosToProcess.length }),
+      });
+      const d = await r.json();
+      if (typeof d.used === 'number') {
+        setUser(prev => prev ? { ...prev, app_metadata: { ...prev.app_metadata, photos_used: d.used } } : prev);
+      }
+    } catch (e) {
+      console.warn('[quota] décompte non enregistré :', e.message);
+    }
     setProcessing(false);
     setTab("results");
     // Des caches manquants + une erreur serveur pendant le lot → bandeau
@@ -4241,11 +4251,11 @@ export default function AutoCache() {
     const t = setTimeout(() => setProcVisible(false), PROCESSING_EXIT_MS);
     return () => clearTimeout(t);
   }, [processing]);
-  const userPlan = user?.user_metadata?.plan ?? "trial"; // "trial" | "premium" (ancien : "essential" | "pro")
+  const userPlan = user?.app_metadata?.plan ?? "trial"; // "trial" | "premium" — écrit uniquement côté serveur
   const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
   // Le quota dépend de la cadence de facturation : 250 photos par semaine en
   // hebdomadaire, 1 000 par mois sur les formules mensuelle et annuelle.
-  const userFormule = user?.user_metadata?.formule;
+  const userFormule = user?.app_metadata?.formule;
   const PLAN_LIMIT = isPaid ? photosForFormule(userFormule) : TRIAL_LIMIT;
   const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
   // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
@@ -4290,7 +4300,7 @@ export default function AutoCache() {
         // force le rafraîchissement : la coupure d'accès décidée par le webhook
         // prend effet tout de suite au lieu d'attendre l'expiration du jeton.
         const stripeGrantsAccess = d.status === 'active' || d.status === 'trialing';
-        if (!stripeGrantsAccess && (user.user_metadata?.plan ?? 'trial') !== 'trial') {
+        if (!stripeGrantsAccess && (user.app_metadata?.plan ?? 'trial') !== 'trial') {
           const { data: refreshed } = await supabase.auth.refreshSession();
           if (refreshed?.user) setUser(refreshed.user);
         }
@@ -4313,7 +4323,7 @@ export default function AutoCache() {
   const syncedRef = useRef(null);
   useEffect(() => {
     if (!user?.id) return;
-    if ((user.user_metadata?.plan ?? "trial") !== "trial") return;
+    if ((user.app_metadata?.plan ?? "trial") !== "trial") return;
     if (syncedRef.current === user.id) return; // une seule tentative par session
     syncedRef.current = user.id;
     (async () => {
@@ -4326,7 +4336,7 @@ export default function AutoCache() {
         }
       } catch { /* sans effet : le compte reste en essai, rien n'est dégradé */ }
     })();
-  }, [user?.id, user?.user_metadata?.plan]);
+  }, [user?.id, user?.app_metadata?.plan]);
 
   // ── Recopie du téléphone dans la colonne dédiée ──
   // Renseigné aux métadonnées à l'inscription, il ne peut être recopié dans la
@@ -4349,32 +4359,11 @@ export default function AutoCache() {
   }, [user?.id, user?.phone]);
 
   // ── Renouvellement du quota ──
-  // La fenêtre suit la cadence de facturation : 7 jours en hebdomadaire,
-  // un mois calendaire sur les formules mensuelle et annuelle. Les règles sont
-  // dans src/subscriptionQuota.js, partagées avec le webhook Stripe pour que
-  // les deux chemins ne puissent pas accorder deux quotas pour une même fenêtre.
-  useEffect(() => {
-    if (!user?.id) return;
-    const meta = user.user_metadata || {};
-    if ((meta.plan ?? "trial") === "trial") return; // l'essai n'a pas de renouvellement
-    const anchorStr = meta.photos_period_start;
-    if (!anchorStr) {
-      // Initialise la fenêtre (abonnement créé avant ce mécanisme)
-      const data = { photos_period_start: new Date().toISOString() };
-      supabase.auth.updateUser({ data });
-      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...data } } : prev);
-      return;
-    }
-    const periods = periodsElapsed(meta.formule, anchorStr);
-    if (periods >= 1) {
-      const data = {
-        photos_used: 0,
-        photos_period_start: advanceAnchor(meta.formule, anchorStr, periods),
-      };
-      supabase.auth.updateUser({ data });
-      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, ...data } } : prev);
-    }
-  }, [user?.id]);
+  // Tenu par le serveur : /api/consume-photos avance la fenêtre au moment du
+  // décompte, et le webhook comme la réconciliation la posent à l'activation.
+  // Le navigateur ne fait plus qu'AFFICHER le solde — il l'écrivait autrefois,
+  // ce qui permettait de remettre son propre compteur à zéro. Les règles de
+  // fenêtre restent dans src/subscriptionQuota.js, partagées avec le serveur.
 
   // Lance le paiement Stripe pour une formule donnée (weekly | monthly | annual)
   const startCheckout = async (formule) => {
@@ -4470,40 +4459,18 @@ export default function AutoCache() {
     if (!promoCode.trim() || promoStatus === "loading") return;
     setPromoStatus("loading");
     try {
+      // L'effet du code est appliqué PAR LE SERVEUR : cette route se contentait
+      // auparavant d'annoncer le plan obtenu, et le navigateur se l'attribuait
+      // lui-même — donc sans code, il suffisait d'écrire directement.
       const res = await fetch("/api/promo", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ code: promoCode.trim() }) });
       const data = await res.json();
       if (!data.valid) { setPromoStatus("error"); setPromoMsg(data.message); return; }
-      if (data.plan) {
-        await supabase.auth.updateUser({ data: { plan: data.plan } });
-        setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, plan: data.plan } } : prev);
-        setPromoStatus("success");
-        const planLabel = data.plan === "trial" ? "Essai gratuit" : "Abonnement";
-        setPromoMsg(`${planLabel} activé.`);
-        return;
-      }
-      // Déverrouillage d'une fonctionnalité en accès restreint. Le drapeau vit
-      // dans les métadonnées du compte, il survit donc au rechargement et suit
-      // l'utilisateur d'un appareil à l'autre. Aucun code n'utilise ce chemin
-      // aujourd'hui (le dernier, AURELE3D → Showroom interactif, est parti avec
-      // la fonctionnalité) ; le mécanisme reste pour le prochain accès sur
-      // invitation.
-      if (data.feature) {
-        await supabase.auth.updateUser({ data: { [data.feature]: true } });
-        setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, [data.feature]: true } } : prev);
-        setPromoStatus("success");
-        setPromoMsg(`${data.label || "Fonctionnalité"} déverrouillé.`);
-        return;
-      }
-      const currentUsed = user?.user_metadata?.photos_used ?? 0;
-      const newUsed = data.reset ? 0 : Math.max(0, currentUsed - data.photos);
-      await supabase.auth.updateUser({ data: { photos_used: newUsed } });
-      setUser(prev => prev ? { ...prev, user_metadata: { ...prev.user_metadata, photos_used: newUsed } } : prev);
+      // Les droits ont changé côté serveur : on rafraîchit le jeton pour que
+      // l'interface les reflète.
+      const { data: refreshed } = await supabase.auth.refreshSession();
+      if (refreshed?.user) setUser(refreshed.user);
       setPromoStatus("success");
-      const available = PLAN_LIMIT - newUsed;
-      setPromoMsg(data.reset
-        ? `Compteur réinitialisé — ${available} photo${available > 1 ? "s" : ""} disponible${available > 1 ? "s" : ""}.`
-        : `+${data.photos} crédits ajoutés — ${available} photo${available > 1 ? "s" : ""} disponible${available > 1 ? "s" : ""}.`
-      );
+      setPromoMsg(data.message);
     } catch (e) {
       setPromoStatus("error"); setPromoMsg("Erreur réseau, réessayez.");
     }
@@ -5417,7 +5384,7 @@ export default function AutoCache() {
             {!isMobile && <div style={{ width: 1, height: 20, background: "var(--c-252525)", margin: "0 4px" }} />}
             {/* ── Compteur crédits + popup abonnement ── */}
             {(() => {
-              const used = user?.user_metadata?.photos_used ?? 0;
+              const used = user?.app_metadata?.photos_used ?? 0;
               const left = Math.max(0, PLAN_LIMIT - used);
               const isExpired = left === 0;
               const isLow = left <= (PLAN_LIMIT <= 30 ? 5 : 20);
@@ -5451,7 +5418,7 @@ export default function AutoCache() {
                           <div style={{ fontSize: 11, letterSpacing: 2, color: "#f26522", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>
                             {(() => {
                               if (!isPaid) return "Essai gratuit";
-                              const fk = subInfo?.formule ?? user?.user_metadata?.formule;
+                              const fk = subInfo?.formule ?? user?.app_metadata?.formule;
                               return `Abonnement${fk && FORMULE_LABELS[fk] ? " · " + FORMULE_LABELS[fk] : ""}`;
                             })()}
                           </div>
@@ -7496,11 +7463,12 @@ export default function AutoCache() {
 
       {/* ── Modal Mes Informations ── */}
       {showProfileModal && (() => {
-        const meta = user?.user_metadata ?? {};
-        const planLabel = (meta.plan ?? "trial") === "trial"
+        const meta = user?.user_metadata ?? {};   // préférences (nom, téléphone…)
+        const droits = user?.app_metadata ?? {};  // droits (plan, quota…)
+        const planLabel = (droits.plan ?? "trial") === "trial"
           ? "Essai gratuit"
-          : `Abonnement${meta.formule ? " · " + (FORMULE_LABELS[meta.formule] ?? "") : ""}`;
-        const photosUsed = meta.photos_used ?? 0;
+          : `Abonnement${droits.formule ? " · " + (FORMULE_LABELS[droits.formule] ?? "") : ""}`;
+        const photosUsed = droits.photos_used ?? 0;
         const joined = user?.created_at ? new Date(user.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" }) : "—";
         const rows = [
           { label: "Nom / Entreprise",      value: meta.full_name ?? "—" },
@@ -7656,7 +7624,7 @@ export default function AutoCache() {
                   <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: 3, color: "var(--c-e0dbd4)", textTransform: "uppercase" }}>Mon Abonnement</div>
                   <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 6, letterSpacing: 1 }}>
                     Formule active : <span style={{ color: "#f26522", fontWeight: 700 }}>
-                      {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
+                      {FORMULE_LABELS[user?.app_metadata?.formule] ?? "Abonnement"}
                     </span>
                   </div>
                 </div>
@@ -7665,17 +7633,17 @@ export default function AutoCache() {
                 <div style={{ background: "rgba(242,101,34,0.08)", border: "1px solid #f26522", borderRadius: 6, padding: "20px 24px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <div>
                     <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: 2, color: "#f26522", textTransform: "uppercase" }}>
-                      {FORMULE_LABELS[user?.user_metadata?.formule] ?? "Abonnement"}
+                      {FORMULE_LABELS[user?.app_metadata?.formule] ?? "Abonnement"}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, letterSpacing: 1 }}>
-                      {quotaLabel(user?.user_metadata?.formule)} · Toutes les fonctionnalités incluses
+                      {quotaLabel(user?.app_metadata?.formule)} · Toutes les fonctionnalités incluses
                     </div>
                   </div>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#27ae60", boxShadow: "0 0 6px #27ae60" }} />
                 </div>
 
                 <div style={{ fontSize: 10, color: "var(--c-777)", fontFamily: "var(--font-apple)", letterSpacing: 0.5, lineHeight: 1.6, marginBottom: 16 }}>
-                  {user?.user_metadata?.stripe_customer_id
+                  {user?.app_metadata?.stripe_customer_id
                     ? "Pour changer de formule (hebdo / mensuel / annuel) ou mettre à jour votre paiement, ouvrez votre espace de facturation ci-dessous."
                     : "Votre accès a été ouvert par un code administrateur : aucun abonnement payant n'y est rattaché."}
                 </div>
@@ -7711,7 +7679,7 @@ export default function AutoCache() {
                   // Stripe : ni facture, ni prélèvement, ni résiliation. On
                   // masque ces commandes au lieu de les laisser répondre par
                   // une erreur rouge que rien ne permet de résoudre.
-                  const hasBilling = !!user?.user_metadata?.stripe_customer_id;
+                  const hasBilling = !!user?.app_metadata?.stripe_customer_id;
                   return (
                     <>
                       {hasBilling && (

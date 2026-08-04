@@ -1,6 +1,7 @@
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { periodsElapsed, advanceAnchor, formuleFromInterval } from "../src/subscriptionQuota.js";
+import { writeEntitlements, entitlementsOf, freshUser } from "./_entitlements.js";
 
 // Désactiver le body parser pour lire le raw body (requis pour la vérification Stripe)
 export const config = { api: { bodyParser: false } };
@@ -23,10 +24,7 @@ function supabaseAdmin() {
 }
 
 async function setUserPlan(userId, plan) {
-  const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
-    user_metadata: { plan },
-  });
-  if (error) throw new Error(`Supabase update failed: ${error.message}`);
+  await writeEntitlements(userId, { plan });
 }
 
 // ── Statuts Stripe et accès ────────────────────────────────────────────────
@@ -58,7 +56,7 @@ async function resolveUserId(subscription) {
   for (let page = 1; page <= 5; page++) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 1000 });
     if (error) throw new Error(`Supabase listUsers failed: ${error.message}`);
-    const match = data.users.find(u => u.user_metadata?.stripe_customer_id === customerId);
+    const match = data.users.find(u => u.app_metadata?.stripe_customer_id === customerId);
     if (match) {
       console.warn(`[webhook] userId absent des métadonnées — retrouvé via customer ${customerId}`);
       return match.id;
@@ -92,10 +90,7 @@ async function activateSubscription(userId, plan, formule, stripeCustomerId) {
   const meta = { plan, photos_used: 0, photos_period_start: new Date().toISOString() };
   if (formule) meta.formule = formule;
   if (stripeCustomerId) meta.stripe_customer_id = stripeCustomerId;
-  const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
-    user_metadata: meta,
-  });
-  if (error) throw new Error(`Supabase update failed: ${error.message}`);
+  await writeEntitlements(userId, meta);
 }
 
 export default async function handler(req, res) {
@@ -199,8 +194,8 @@ export default async function handler(req, res) {
           // hebdomadaire, un mois sinon). On ne réinitialise que si une fenêtre
           // entière s'est écoulée : un encaissement seul ne suffit pas, sans
           // quoi une relance aboutie rouvrirait un quota déjà consommé.
-          const { data: current } = await supabaseAdmin().auth.admin.getUserById(userId);
-          const anchor = current?.user?.user_metadata?.photos_period_start;
+          const current = await freshUser(userId);
+          const anchor = entitlementsOf(current).periodStart;
           const periods = anchor ? periodsElapsed(formule, anchor) : 0;
           if (!anchor) {
             meta.photos_used = 0;
@@ -211,10 +206,7 @@ export default async function handler(req, res) {
             meta.headlight_photos_used = 0;
             meta.photos_period_start = advanceAnchor(formule, anchor, periods);
           }
-          const { error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
-            user_metadata: meta,
-          });
-          if (error) throw new Error(`Supabase update failed: ${error.message}`);
+          await writeEntitlements(userId, meta);
           console.log(`[webhook] paiement encaissé (${invoice.billing_reason}) — user ${userId} : accès actif${isNewCycle ? ", quota remis à zéro" : ""}`);
         }
       }
