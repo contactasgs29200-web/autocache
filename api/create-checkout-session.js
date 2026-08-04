@@ -83,7 +83,12 @@ export default async function handler(req, res) {
       customer_email: userEmail,
       client_reference_id: userId,
       line_items: [{ price: priceId, quantity: 1 }],
-      ...(discounts ? { discounts } : {}),
+      // Stripe refuse `discounts` et `allow_promotion_codes` ensemble : quand
+      // la remise de lancement s'applique d'office, le champ de code est donc
+      // absent. Sinon on l'ouvre — il sert aux campagnes promotionnelles, et
+      // permet de souscrire à 0 € avec un code dédié pour éprouver le parcours
+      // complet sans mouvement d'argent réel.
+      ...(discounts ? { discounts } : { allow_promotion_codes: true }),
       metadata: { userId, plan: "premium", formule },
       subscription_data: { metadata: { userId, plan: "premium", formule } },
       success_url: `${origin}?payment=success&formule=${formule}`,
