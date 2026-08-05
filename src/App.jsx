@@ -7643,7 +7643,7 @@ export default function AutoCache() {
                 {hasBilling && (
                   <div style={{ border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: "14px 16px", marginBottom: 16 }}>
                     <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", lineHeight: 1.6, marginBottom: 10 }}>
-                      Un abonnement est rattaché à votre compte alors que votre accès est en essai. Cela arrive après un prélèvement refusé, ou pendant une résiliation en cours. Vous pouvez le gérer ou le résilier ici.
+                      Votre compte est rattaché à un dossier de facturation : moyen de paiement, factures, et l'abonnement s'il en reste un en cours. Vous pouvez y consulter votre historique, mettre votre carte à jour ou résilier.
                     </div>
                     <button
                       disabled={!!portalLoading}
@@ -7659,7 +7659,7 @@ export default function AutoCache() {
                         setPortalLoading(null);
                       }}
                       style={{ width: "100%", background: "transparent", color: "#f26522", border: "1px solid #f26522", borderRadius: 3, padding: "9px 0", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", cursor: !!portalLoading ? "wait" : "pointer" }}>
-                      {portalLoading === "invoices" ? "Ouverture..." : "Gérer ou résilier mon abonnement"}
+                      {portalLoading === "invoices" ? "Ouverture..." : "Mon espace de facturation"}
                     </button>
                     {portalError && (
                       <div style={{ fontSize: 10, color: "#e07a6a", fontFamily: "var(--font-apple)", marginTop: 8, lineHeight: 1.5 }}>⚠ {portalError}</div>
