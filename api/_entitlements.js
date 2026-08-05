@@ -46,16 +46,6 @@ export function entitlementsOf(user) {
   };
 }
 
-// Écrit un correctif de droits. Supabase fusionne les clés fournies : les
-// champs absents du correctif sont préservés.
-export async function writeEntitlements(userId, patch) {
-  const { data, error } = await supabaseAdmin().auth.admin.updateUserById(userId, {
-    app_metadata: patch,
-  });
-  if (error) throw new Error(`Écriture des droits impossible : ${error.message}`);
-  return data?.user ?? null;
-}
-
 // Relit un compte depuis la base — nécessaire avant tout calcul de quota, le
 // jeton présenté par l'appelant pouvant porter des valeurs périmées.
 export async function freshUser(userId) {
@@ -63,3 +53,25 @@ export async function freshUser(userId) {
   if (error) throw new Error(`Lecture du compte impossible : ${error.message}`);
   return data?.user ?? null;
 }
+
+// Écrit un correctif de droits, en préservant explicitement les champs absents
+// du correctif.
+//
+// Supabase fusionne déjà les clés fournies, mais on ne s'en remet pas à ce
+// comportement : si l'écriture remplaçait le bloc au lieu de le compléter, un
+// simple décompte de photos — qui n'envoie que `photos_used` — effacerait le
+// plan, la formule et le rattachement Stripe de l'abonné, le renvoyant en essai
+// à chaque lot traité. La relecture préalable coûte un appel et supprime ce
+// risque.
+export async function writeEntitlements(userId, patch) {
+  const admin = supabaseAdmin();
+  const current = await freshUser(userId);
+  const fusion = { ...(current?.app_metadata ?? {}), ...patch };
+
+  const { data, error } = await admin.auth.admin.updateUserById(userId, {
+    app_metadata: fusion,
+  });
+  if (error) throw new Error(`Écriture des droits impossible : ${error.message}`);
+  return data?.user ?? null;
+}
+

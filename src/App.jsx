@@ -4127,9 +4127,19 @@ export default function AutoCache() {
         body: JSON.stringify({ count: photosToProcess.length }),
       });
       const d = await r.json();
-      if (typeof d.used === 'number') {
+      // Les droits voyagent dans le jeton de session, valable une heure. Le
+      // serveur vient d'écrire en base, mais le jeton déjà présent ici porte
+      // encore l'ancien compteur : sans renouvellement, l'affichage se corrige
+      // en apparence puis retombe à la valeur d'avant au rechargement suivant.
+      // On renouvelle donc le jeton, et l'écriture optimiste ne sert plus que
+      // de repli si ce renouvellement échoue.
+      const { data: refreshed } = await supabase.auth.refreshSession();
+      if (refreshed?.user) {
+        setUser(refreshed.user);
+      } else if (typeof d.used === 'number') {
         setUser(prev => prev ? { ...prev, app_metadata: { ...prev.app_metadata, photos_used: d.used } } : prev);
       }
+      if (!r.ok) console.warn('[quota] décompte refusé :', d.error, d);
     } catch (e) {
       console.warn('[quota] décompte non enregistré :', e.message);
     }
