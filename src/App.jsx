@@ -4253,6 +4253,12 @@ export default function AutoCache() {
   }, [processing]);
   const userPlan = user?.app_metadata?.plan ?? "trial"; // "trial" | "premium" — écrit uniquement côté serveur
   const isPaid = userPlan !== "trial"; // abonnement unique : toute valeur ≠ trial donne l'accès complet
+  // Présence d'un dossier de facturation Stripe. Volontairement indépendant du
+  // plan : un abonné dont l'accès est suspendu — impayé, ou désynchronisation —
+  // continue d'être facturé et doit garder le moyen de résilier, comme le
+  // prévoit l'article 8 des CGV. Le champ survit à la coupure d'accès, seul
+  // `plan` est ramené à "trial".
+  const hasBilling = !!user?.app_metadata?.stripe_customer_id;
   // Le quota dépend de la cadence de facturation : 250 photos par semaine en
   // hebdomadaire, 1 000 par mois sur les formules mensuelle et annuelle.
   const userFormule = user?.app_metadata?.formule;
@@ -7611,6 +7617,38 @@ export default function AutoCache() {
                   )}
                 </div>
 
+                {/* Un abonnement Stripe existe alors que l'accès est en essai :
+                    impayé, résiliation en cours, ou désynchronisation. Il est
+                    toujours facturé — l'espace de facturation doit donc rester
+                    atteignable, sans quoi le seul recours serait de nous
+                    écrire. */}
+                {hasBilling && (
+                  <div style={{ border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: "14px 16px", marginBottom: 16 }}>
+                    <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", lineHeight: 1.6, marginBottom: 10 }}>
+                      Un abonnement est rattaché à votre compte alors que votre accès est en essai. Cela arrive après un prélèvement refusé, ou pendant une résiliation en cours. Vous pouvez le gérer ou le résilier ici.
+                    </div>
+                    <button
+                      disabled={!!portalLoading}
+                      onClick={async () => {
+                        setPortalError("");
+                        setPortalLoading("invoices");
+                        try {
+                          const res = await fetch("/api/customer-portal", { method: "POST", headers: await authHeaders(), body: JSON.stringify({}) });
+                          const data = await res.json();
+                          if (data.url) window.location.href = data.url;
+                          else setPortalError(data.error || "Impossible d'accéder au portail.");
+                        } catch { setPortalError("Erreur réseau, réessayez."); }
+                        setPortalLoading(null);
+                      }}
+                      style={{ width: "100%", background: "transparent", color: "#f26522", border: "1px solid #f26522", borderRadius: 3, padding: "9px 0", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", cursor: !!portalLoading ? "wait" : "pointer" }}>
+                      {portalLoading === "invoices" ? "Ouverture..." : "Gérer ou résilier mon abonnement"}
+                    </button>
+                    {portalError && (
+                      <div style={{ fontSize: 10, color: "#e07a6a", fontFamily: "var(--font-apple)", marginTop: 8, lineHeight: 1.5 }}>⚠ {portalError}</div>
+                    )}
+                  </div>
+                )}
+
                 <button onClick={() => setShowPlansModal(false)}
                   style={{ width: "100%", background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", padding: "9px 0", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: "pointer" }}>
                   Fermer
@@ -7676,10 +7714,10 @@ export default function AutoCache() {
                     }
                   };
                   // Un accès ouvert par code administrateur n'a pas de client
-                  // Stripe : ni facture, ni prélèvement, ni résiliation. On
-                  // masque ces commandes au lieu de les laisser répondre par
-                  // une erreur rouge que rien ne permet de résoudre.
-                  const hasBilling = !!user?.app_metadata?.stripe_customer_id;
+                  // Stripe : ni facture, ni prélèvement, ni résiliation. Ces
+                  // commandes sont masquées plutôt que de répondre par une
+                  // erreur rouge que rien ne permet de résoudre. `hasBilling`
+                  // est calculé au niveau du composant.
                   return (
                     <>
                       {hasBilling && (
