@@ -66,7 +66,13 @@ export default async function handler(req, res) {
       // que le webhook ne passait pas — la réconciliation ne savait
       // qu'accorder, jamais retirer.
       const ent = entitlementsOf(user);
-      const ouvertParStripe = ent.plan !== "trial" && user.app_metadata?.plan_source !== "promo";
+      // Un accès ouvert autrement que par Stripe — code administrateur, ou
+      // octroi manuel depuis le panneau — n'a rien à voir avec l'état d'un
+      // abonnement chez Stripe. Le révoquer parce que Stripe ne connaît pas ce
+      // client reviendrait à défaire l'octroi à la première synchronisation, et
+      // donc à le rendre inutilisable.
+      const source = user.app_metadata?.plan_source;
+      const ouvertParStripe = ent.plan !== "trial" && source !== "promo" && source !== "admin";
       if (ouvertParStripe) {
         await writeEntitlements(user.id, { plan: "trial" });
         console.log(`[sync] user ${user.id} : aucun abonnement actif chez Stripe — accès coupé`);

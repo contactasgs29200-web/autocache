@@ -10,6 +10,7 @@
 // Le jeton, lui, est signé par Supabase et ne peut pas être fabriqué.
 
 import { createClient } from "@supabase/supabase-js";
+import { sanctionState, sanctionMessage } from "../src/moderation.js";
 
 let cached = null;
 
@@ -29,7 +30,18 @@ function supabaseAdmin() {
 //     const user = await requireUser(req, res);
 //     if (!user) return;            // la réponse est déjà partie
 //     // ... n'utiliser que user.id / user.email à partir d'ici
-export async function requireUser(req, res) {
+//
+// Les comptes sous sanction sont écartés ici, une fois pour toutes. Le
+// bannissement prononcé côté Supabase invalide déjà les sessions, mais un jeton
+// déjà émis reste valable jusqu'à son expiration : sans ce contrôle, un onglet
+// resté ouvert continuerait de consommer le service pendant une heure après la
+// suspension.
+//
+// `allowSuspended: true` est réservé aux routes qu'un compte suspendu doit
+// conserver — au premier rang desquelles la résiliation de son abonnement.
+// Couper l'accès à quelqu'un tout en continuant de le prélever, sans lui
+// laisser le moyen d'arrêter, ne se défend pas.
+export async function requireUser(req, res, { allowSuspended = false } = {}) {
   const header = req.headers.authorization || req.headers.Authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 
@@ -44,7 +56,21 @@ export async function requireUser(req, res) {
     return null;
   }
 
-  return data.user;
+  const user = data.user;
+
+  if (!allowSuspended) {
+    const etat = sanctionState(user.app_metadata);
+    if (etat.active) {
+      res.status(403).json({
+        error: sanctionMessage(etat),
+        suspended: true,
+        sanction: { type: etat.type, reason: etat.reason, until: etat.until },
+      });
+      return null;
+    }
+  }
+
+  return user;
 }
 
 // En-têtes CORS incluant Authorization : sans cette mention, le navigateur

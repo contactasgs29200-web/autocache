@@ -13,7 +13,11 @@ import GuidedTour from "./components/GuidedTour.jsx";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
-import { photosForFormule, quotaLabel, TRIAL_PHOTOS } from "./subscriptionQuota.js";
+import { photosForFormule, quotaLabel, TRIAL_PHOTOS, normalizeBonus } from "./subscriptionQuota.js";
+import AdminPanel from "./components/AdminPanel.jsx";
+import { isAdminEmail } from "./admin.js";
+import { sanctionState, sanctionMessage, formatDateFr, formatRemaining } from "./moderation.js";
+import { acceptanceState, CHANGE_KINDS } from "./legalTerms.js";
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 767);
@@ -115,6 +119,24 @@ async function authHeaders(extra = {}) {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...extra,
+  };
+}
+
+// Une version de CGV telle que la base la renvoie (colonnes en snake_case)
+// n'a pas la forme attendue par `src/legalTerms.js`. La conversion est faite
+// ici, une fois, au lieu de laisser chaque lecteur deviner le nom des champs.
+function normalizeTermsDoc(row) {
+  if (!row) return null;
+  return {
+    version: Number(row.version),
+    title: row.title ?? "",
+    summary: row.summary ?? "",
+    kind: row.kind ?? "substantive",
+    contentHash: row.content_hash ?? null,
+    noticeDays: row.notice_days ?? null,
+    effectiveAt: row.effective_at ?? null,
+    publishedAt: row.published_at ?? null,
+    body: row.body ?? "",
   };
 }
 
@@ -3037,6 +3059,18 @@ const Slider = ({ label, value, min, max, step, onChange }) => (
   </div>
 );
 
+// Un compte sanctionné se voit refuser la connexion par Supabase lui-même, avec
+// un message en anglais (« User is banned »). Le laisser passer tel quel
+// donnerait à lire une panne là où il y a une décision : la suspension est
+// annoncée comme telle, avec la marche à suivre.
+function messageErreurAuth(e) {
+  const brut = String(e?.message ?? "");
+  if (/banned|user_banned/i.test(brut) || e?.code === "user_banned") {
+    return "L'accès à ce compte est suspendu. Vous avez reçu le motif de cette mesure ; pour la contester, écrivez à contact.asgs29200@gmail.com.";
+  }
+  return brut || "Une erreur est survenue";
+}
+
 function AuthScreen({ onAuth, exiting }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -3084,7 +3118,7 @@ function AuthScreen({ onAuth, exiting }) {
         setSuccess("Compte créé ! Vérifiez votre email puis connectez-vous.");
         setMode("login");
       }
-    } catch (e) { setError(e.message || "Une erreur est survenue"); }
+    } catch (e) { setError(messageErreurAuth(e)); }
     setLoading(false);
   };
 
@@ -3232,6 +3266,8 @@ function SettingsIcon({ name, size = 16 }) {
     strokeLinejoin: "round",
   };
   switch (name) {
+    case "admin": // Panneau d'administration (bouclier)
+      return (<svg {...common}><path d="M12 2l8 3.5v6c0 5-3.4 8.9-8 10.5-4.6-1.6-8-5.5-8-10.5v-6L12 2z" /><polyline points="9,12 11,14 15.5,9.5" /></svg>);
     case "profile": // Mes informations
       return (<svg {...common}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>);
     case "subscription": // Abonnement
@@ -3322,6 +3358,17 @@ export default function AutoCache() {
   const [showUpgradeProModal, setShowUpgradeProModal] = useState(false);
   const [showPlansModal, setShowPlansModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  // ── Conditions générales : version publiée et suivi de l'acceptation ──
+  // `termsDoc` est la version EN VIGUEUR telle que la sert /api/legal-terms ;
+  // `termsUpcoming` celle qui est publiée mais encore sous préavis. Les deux
+  // sont nécessaires : la première conditionne l'accès, la seconde n'est
+  // qu'une information — les confondre reviendrait à imposer une version qui
+  // ne s'applique pas encore.
+  const [termsDoc, setTermsDoc] = useState(null);
+  const [termsUpcoming, setTermsUpcoming] = useState(null);
+  const [termsBusy, setTermsBusy] = useState(false);
+  const [termsDismissed, setTermsDismissed] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
   const [showEmailModal,   setShowEmailModal]   = useState(false);
   const [emailTo,          setEmailTo]          = useState("");
@@ -4139,7 +4186,17 @@ export default function AutoCache() {
       } else if (typeof d.used === 'number') {
         setUser(prev => prev ? { ...prev, app_metadata: { ...prev.app_metadata, photos_used: d.used } } : prev);
       }
-      if (!r.ok) console.warn('[quota] décompte refusé :', d.error, d);
+      // Sanction prononcée pendant que l'onglet était ouvert. Le serveur vient
+      // de la refuser ; sans cette reprise, l'utilisateur continuerait de voir
+      // l'application fonctionner et ne comprendrait pas pourquoi ses photos ne
+      // se décomptent plus. On bascule sur l'écran qui explique la mesure.
+      if (r.status === 403 && d.suspended) {
+        if (!refreshed?.user) {
+          setUser(prev => prev ? { ...prev, app_metadata: { ...prev.app_metadata, sanction: d.sanction } } : prev);
+        }
+      } else if (!r.ok) {
+        console.warn('[quota] décompte refusé :', d.error, d);
+      }
     } catch (e) {
       console.warn('[quota] décompte non enregistré :', e.message);
     }
@@ -4272,8 +4329,65 @@ export default function AutoCache() {
   // Le quota dépend de la cadence de facturation : 250 photos par semaine en
   // hebdomadaire, 1 000 par mois sur les formules mensuelle et annuelle.
   const userFormule = user?.app_metadata?.formule;
-  const PLAN_LIMIT = isPaid ? photosForFormule(userFormule) : TRIAL_LIMIT;
+  // Les crédits accordés depuis le panneau d'administration s'ajoutent au quota
+  // de la formule. Le serveur applique exactement la même somme au décompte :
+  // l'affichage ne promet donc jamais des photos qui seraient ensuite refusées.
+  const bonusPhotos = normalizeBonus(user?.app_metadata?.bonus_photos);
+  const PLAN_LIMIT = (isPaid ? photosForFormule(userFormule) : TRIAL_LIMIT) + bonusPhotos;
   const PLAN_LABEL = isPaid ? "CRÉDIT" : "ESSAI";
+
+  // ── Administration ──
+  // Ne conditionne QUE l'affichage de l'entrée de menu. Chaque route
+  // d'administration revérifie l'email porté par le jeton de session : forcer
+  // cette variable dans la console ouvrirait un panneau qui ne recevrait que
+  // des 404.
+  const isAdmin = isAdminEmail(user?.email);
+
+  // ── Sanction éventuelle du compte ──
+  // Relue à chaque rendu depuis les droits portés par le jeton. Le serveur
+  // refuse déjà les routes d'un compte sanctionné ; cet écran évite que
+  // l'utilisateur découvre la sanction sous la forme d'une erreur technique au
+  // milieu d'un traitement.
+  const sanction = sanctionState(user?.app_metadata);
+
+  // ── Conditions générales : version en vigueur et acceptation ──
+  useEffect(() => {
+    if (!user?.id) return;
+    let annule = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/legal-terms');
+        const d = await r.json();
+        if (annule) return;
+        setTermsDoc(d.document ? normalizeTermsDoc(d.document) : null);
+        setTermsUpcoming(d.upcoming ? normalizeTermsDoc(d.upcoming) : null);
+      } catch { /* sans version publiée, la page statique fait foi */ }
+    })();
+    return () => { annule = true; };
+  }, [user?.id]);
+
+  const termsState = acceptanceState({ doc: termsDoc, accepted: user?.app_metadata?.cgv_accepted });
+
+  const acceptTerms = async () => {
+    if (!termsDoc || termsBusy) return;
+    setTermsBusy(true);
+    try {
+      const r = await fetch('/api/accept-terms', {
+        method: 'POST',
+        headers: await authHeaders(),
+        body: JSON.stringify({ version: termsDoc.version }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        // L'acceptation vient d'être écrite dans les droits du compte : sans
+        // renouvellement du jeton, l'interface continuerait de la réclamer.
+        const { data } = await supabase.auth.refreshSession();
+        if (data?.user) setUser(data.user);
+      }
+    } catch { /* réessai à la prochaine ouverture */ }
+    setTermsBusy(false);
+  };
+
   // L'abonnement unique inclut toutes les fonctionnalités. L'essai conserve l'accès au Showroom (vitrine).
   // Le Showroom reste verrouillé pour tout le monde tant qu'il est en développement.
   const canUseShowroom  = !SHOWROOM_COMING_SOON && (isPaid || userPlan === "trial");
@@ -4480,6 +4594,37 @@ export default function AutoCache() {
     // le faisait disparaître de l'écran à la reconnexion, alors qu'il était
     // toujours enregistré — il ne revenait qu'après un rechargement de page.
     setPhotos([]); setResults([]); setTab("setup");
+  };
+
+  // Ouverture du portail de facturation Stripe. Défini au niveau du composant
+  // et non plus dans le bloc « Abonnement » : la résiliation doit aussi être
+  // atteignable depuis l'écran d'un compte suspendu et depuis celui qui annonce
+  // de nouvelles conditions générales — deux écrans qui remplacent
+  // l'application entière et n'ont donc pas accès à ce bloc.
+  const openPortal = async (action) => {
+    setPortalError("");
+    setPortalLoading(action);
+    try {
+      const res = await fetch("/api/customer-portal", {
+        method: "POST",
+        headers: await authHeaders(),
+        // "cancel" ouvre directement le parcours de résiliation ;
+        // sans action, on ouvre l'accueil du portail.
+        body: JSON.stringify(action === "cancel" ? { action: "cancel" } : {}),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else if (data.alreadyCancelled) {
+        setPortalError("Votre abonnement est déjà résilié : il prendra fin à l'échéance en cours et ne sera plus prélevé.");
+      } else {
+        setPortalError(data.error || "Impossible d'accéder au portail.");
+      }
+    } catch (e) {
+      setPortalError("Erreur réseau, réessayez.");
+    } finally {
+      setPortalLoading(null);
+    }
   };
 
   const submitPromo = async () => {
@@ -5370,6 +5515,104 @@ export default function AutoCache() {
 
   if (!user) return <AuthScreen onAuth={applyUser} exiting={authExit} />;
 
+  // ── Compte sanctionné ──
+  // Le serveur refuse déjà toutes les routes de ce compte : cet écran ne
+  // protège rien, il EXPLIQUE. Le motif y figure, ainsi que l'échéance quand la
+  // sanction est temporaire, et la voie de contestation. Une coupure sans
+  // explication ni recours serait, elle, contestable.
+  if (sanction.active) {
+    const banni = sanction.type === "ban";
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--c-1c1c1c)", color: "var(--c-e0dbd4)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "var(--font-apple)" }}>
+        <div style={{ maxWidth: 520, width: "100%", background: "var(--c-141414)", border: `1px solid ${banni ? "#c0392b" : "#f26522"}`, borderRadius: 6, padding: 28 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+            <svg width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,6 21,16 11,21 1,16 1,6" fill="#f26522" /><polygon points="11,5 17,8 17,14 11,17 5,14 5,8" fill="#141414" /></svg>
+            <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase" }}>AutoCache</span>
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: banni ? "#c0392b" : "#f26522", marginBottom: 12 }}>
+            {banni ? "Compte fermé" : "Accès suspendu"}
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.8, color: "var(--c-ddd)" }}>
+            {sanctionMessage(sanction)}
+            {!banni && sanction.until && (
+              <><br /><br />Rétablissement automatique le <strong style={{ color: "var(--c-ddd5c8)" }}>{formatDateFr(sanction.until)}</strong>, soit dans {formatRemaining(sanction.remainingMs)}.</>
+            )}
+            <br /><br />
+            Cette mesure est prise au titre de l'article 8 des conditions générales de vente. Vous pouvez la
+            contester en répondant à cette adresse : <a href="mailto:contact.asgs29200@gmail.com" style={{ color: "#f26522", textDecoration: "none" }}>contact.asgs29200@gmail.com</a>.
+            {hasBilling && <><br /><br />Votre abonnement reste résiliable à tout moment depuis le portail de facturation ci-dessous, sans frais.</>}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 22, flexWrap: "wrap" }}>
+            {hasBilling && (
+              <button onClick={() => openPortal("cancel")} disabled={!!portalLoading}
+                style={{ background: "var(--c-1c1c1c)", color: "var(--c-ddd)", border: "1px solid var(--c-2f2f2f)", padding: "10px 16px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+                {portalLoading === "cancel" ? "…" : "Gérer mon abonnement"}
+              </button>
+            )}
+            <button onClick={logout}
+              style={{ background: "#f26522", color: "#090909", border: "none", padding: "10px 16px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+              Se déconnecter
+            </button>
+          </div>
+          {portalError && <div style={{ fontSize: 11, color: "#e55", marginTop: 12 }}>⚠ {portalError}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Nouvelles conditions générales entrées en vigueur ──
+  // Bloquant uniquement APRÈS la date d'effet, et seulement pour une
+  // modification substantielle. Pendant le préavis, la version précédente
+  // s'applique encore : réclamer une acceptation à ce moment-là reviendrait à
+  // faire entrer la nouvelle en vigueur avant l'heure. Le refus n'est pas une
+  // impasse — la résiliation sans frais est proposée sur le même écran.
+  if (termsState.blocking) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--c-1c1c1c)", color: "var(--c-e0dbd4)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "var(--font-apple)" }}>
+        <div style={{ maxWidth: 560, width: "100%", background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: 28 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", color: "#f26522", marginBottom: 14 }}>
+            Nouvelles conditions générales
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.8, color: "var(--c-ddd)" }}>
+            Une nouvelle version des conditions générales de vente (version {termsDoc?.version}) est entrée en
+            vigueur le {formatDateFr(termsDoc?.effectiveAt)}. Voici ce qui change :
+          </div>
+          <div style={{ background: "var(--c-0f0f0f)", border: "1px solid var(--c-222)", borderRadius: 4, padding: 14, margin: "14px 0", fontSize: 12, lineHeight: 1.7, color: "var(--c-ddd5c8)" }}>
+            {termsDoc?.summary}
+          </div>
+          <div style={{ fontSize: 12, lineHeight: 1.8, color: "var(--c-999)" }}>
+            <a href={`/cgv.html?version=${termsDoc?.version}`} target="_blank" rel="noreferrer" style={{ color: "#f26522", textDecoration: "none" }}>Lire le texte intégral</a>
+            {/* Le lien vers la version précédente n'a de sens qu'à partir de la
+                deuxième : la première n'a pas d'antérieure à comparer. */}
+            {(termsDoc?.version ?? 1) > 1 && (<>
+              {" · "}
+              <a href={`/cgv.html?version=${termsDoc.version - 1}`} target="_blank" rel="noreferrer" style={{ color: "var(--c-777)", textDecoration: "none" }}>Version précédente</a>
+            </>)}
+            <br /><br />
+            Si vous refusez ces conditions, vous pouvez résilier votre abonnement sans frais ni pénalité.
+            Votre accès reste ouvert jusqu'au terme de la période déjà réglée.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 22, flexWrap: "wrap" }}>
+            <button onClick={acceptTerms} disabled={termsBusy}
+              style={{ background: "#f26522", color: "#090909", border: "none", padding: "11px 20px", borderRadius: 3, cursor: termsBusy ? "wait" : "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+              {termsBusy ? "…" : "J'accepte les nouvelles conditions"}
+            </button>
+            {hasBilling && (
+              <button onClick={() => openPortal("cancel")} disabled={!!portalLoading}
+                style={{ background: "var(--c-1c1c1c)", color: "var(--c-ddd)", border: "1px solid var(--c-2f2f2f)", padding: "11px 20px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+                Résilier sans frais
+              </button>
+            )}
+            <button onClick={logout}
+              style={{ background: "transparent", color: "var(--c-777)", border: "1px solid var(--c-262626)", padding: "11px 16px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+              Se déconnecter
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <style>{`
@@ -5585,6 +5828,10 @@ export default function AutoCache() {
                   </div>
                   {/* Menu items */}
                   {[
+                    // L'entrée n'apparaît que pour le compte propriétaire. Ce
+                    // n'est qu'un affichage : les routes d'administration
+                    // revérifient l'identité portée par le jeton de session.
+                    ...(isAdmin ? [{ icon: "admin", label: "Administration", action: () => { setSettingsOpen(false); setShowAdminPanel(true); } }] : []),
                     { icon: "profile", label: "Mes informations", action: () => { setSettingsOpen(false); setShowProfileModal(true); } },
                     { icon: "subscription", label: "Abonnement", action: () => { setSettingsOpen(false); setShowPlansModal(true); } },
                     { icon: "promo", label: "Code Administrateur", action: () => { setSettingsOpen(false); setPromoCode(""); setPromoStatus(null); setPromoMsg(""); setShowPromoModal(true); } },
@@ -7716,31 +7963,6 @@ export default function AutoCache() {
 
                 {/* Bouton Factures */}
                 {(() => {
-                  const openPortal = async (action) => {
-                    setPortalError("");
-                    setPortalLoading(action);
-                    try {
-                      const res = await fetch("/api/customer-portal", {
-                        method: "POST",
-                        headers: await authHeaders(),
-                        // "cancel" ouvre directement le parcours de résiliation ;
-                        // sans action, on ouvre l'accueil du portail.
-                        body: JSON.stringify(action === "cancel" ? { action: "cancel" } : {}),
-                      });
-                      const data = await res.json();
-                      if (data.url) {
-                        window.location.href = data.url;
-                      } else if (data.alreadyCancelled) {
-                        setPortalError("Votre abonnement est déjà résilié : il prendra fin à l'échéance en cours et ne sera plus prélevé.");
-                      } else {
-                        setPortalError(data.error || "Impossible d'accéder au portail.");
-                      }
-                    } catch (e) {
-                      setPortalError("Erreur réseau, réessayez.");
-                    } finally {
-                      setPortalLoading(null);
-                    }
-                  };
                   // Un accès ouvert par code administrateur n'a pas de client
                   // Stripe : ni facture, ni prélèvement, ni résiliation. Ces
                   // commandes sont masquées plutôt que de répondre par une
@@ -7871,6 +8093,71 @@ export default function AutoCache() {
       {showTutorial && (
         <Tutorial onClose={closeTutorial} isMobile={isMobile} />
       )}
+
+      {/* ── Panneau d'administration ──
+          Monté uniquement pour le compte propriétaire, et de toute façon
+          inopérant pour un autre : ses routes répondent 404. */}
+      {showAdminPanel && isAdmin && (
+        <AdminPanel
+          onClose={() => setShowAdminPanel(false)}
+          authHeaders={authHeaders}
+          isMobile={isMobile}
+          adminEmail={user.email}
+        />
+      )}
+
+      {/* ── Information : nouvelles conditions générales ──
+          Bandeau NON bloquant. Deux cas l'affichent :
+            - une version publiée n'est pas encore entrée en vigueur (préavis
+              en cours) : le client en est informé et peut résilier d'ici là ;
+            - une version en vigueur attend une acceptation qui ne conditionne
+              pas l'accès (mise en conformité légale).
+          Il se referme, mais réapparaît à la session suivante tant que la
+          version n'est pas acceptée : l'information doit être reçue, pas
+          seulement affichée une fois. */}
+      {!termsDismissed && (termsUpcoming || termsState.mode === "info") && (() => {
+        const doc = termsState.mode === "info" ? termsDoc : termsUpcoming;
+        if (!doc) return null;
+        const aVenir = doc === termsUpcoming;
+        const nature = CHANGE_KINDS[doc.kind] ?? CHANGE_KINDS.substantive;
+        return (
+          <div style={{
+            position: "fixed", left: 12, right: 12, bottom: 12, zIndex: 3000,
+            maxWidth: 620, margin: "0 auto",
+            background: "var(--c-141414)", border: "1px solid #f26522", borderRadius: 5,
+            padding: 16, boxShadow: "0 10px 40px rgba(0,0,0,0.6)", fontFamily: "var(--font-apple)",
+          }}>
+            <div style={{ fontSize: 10, letterSpacing: 2, textTransform: "uppercase", color: "#f26522", marginBottom: 8 }}>
+              {aVenir ? "Évolution des conditions générales" : "Conditions générales mises à jour"}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--c-ddd)", lineHeight: 1.7 }}>
+              {doc.summary}
+              <br />
+              <span style={{ color: "var(--c-888)" }}>
+                {nature.label} · version {doc.version} · {aVenir ? "entrée en vigueur le " : "en vigueur depuis le "}
+                {formatDateFr(doc.effectiveAt)}.
+                {aVenir && " Jusqu'à cette date, la version que vous avez acceptée continue de s'appliquer, et vous pouvez résilier sans frais si vous la refusez."}
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+              <a href={`/cgv.html?version=${doc.version}`} target="_blank" rel="noreferrer"
+                style={{ background: "#f26522", color: "#090909", padding: "8px 14px", borderRadius: 3, textDecoration: "none", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+                Lire
+              </a>
+              {termsState.mode === "info" && termsState.required && (
+                <button onClick={acceptTerms} disabled={termsBusy}
+                  style={{ background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2f2f2f)", padding: "8px 14px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", minHeight: "unset" }}>
+                  {termsBusy ? "…" : "J'ai pris connaissance"}
+                </button>
+              )}
+              <button onClick={() => setTermsDismissed(true)}
+                style={{ background: "transparent", color: "var(--c-777)", border: "none", padding: "8px 10px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", minHeight: "unset" }}>
+                Fermer
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Bouton d'aide flottant (bas-gauche) ── */}
       <HelpWidget

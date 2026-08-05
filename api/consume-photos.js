@@ -14,7 +14,7 @@
 
 import { requireUser } from "./_auth.js";
 import { entitlementsOf, writeEntitlements, freshUser } from "./_entitlements.js";
-import { limitFor, periodsElapsed, advanceAnchor } from "../src/subscriptionQuota.js";
+import { quotaSnapshot, normalizeBonus, recordMonthly } from "../src/subscriptionQuota.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -33,45 +33,47 @@ export default async function handler(req, res) {
     const user = await freshUser(caller.id);
     if (!user) return res.status(404).json({ error: "Compte introuvable." });
 
+    const droits = user.app_metadata ?? {};
     const ent = entitlementsOf(user);
-    const limit = limitFor(ent.plan, ent.formule);
+    const now = new Date();
 
-    // Renouvellement de la fenêtre, s'il y a lieu. L'essai gratuit en est
-    // exclu : ses 30 photos sont offertes une fois et ne se rechargent jamais.
-    let used = ent.photosUsed;
-    let periodStart = ent.periodStart;
-    const patch = {};
+    // Renouvellement de la fenêtre, crédits accordés à la main, quota
+    // applicable : tout est calculé par `quotaSnapshot`, la même fonction que
+    // celle dont se sert le panneau d'administration pour afficher ce compte.
+    // Ce qui est décompté ici est donc exactement ce qui y est montré.
+    const q = quotaSnapshot(
+      { plan: ent.plan, formule: ent.formule, photosUsed: ent.photosUsed, periodStart: ent.periodStart, bonus: droits.bonus_photos },
+      now,
+    );
 
-    if (ent.plan !== "trial") {
-      if (!periodStart) {
-        periodStart = new Date().toISOString();
-        patch.photos_period_start = periodStart;
-      } else {
-        const periods = periodsElapsed(ent.formule, periodStart);
-        if (periods >= 1) {
-          used = 0;
-          periodStart = advanceAnchor(ent.formule, periodStart, periods);
-          patch.photos_period_start = periodStart;
-        }
-      }
-    }
-
-    const remaining = Math.max(0, limit - used);
-    if (count > remaining) {
+    if (count > q.remaining) {
       return res.status(402).json({
         error: "Quota dépassé.",
-        used, limit, remaining,
+        used: q.used, limit: q.limit, remaining: q.remaining,
       });
     }
 
-    patch.photos_used = used + count;
+    const patch = { photos_used: q.used + count };
+    if (q.periodStart !== ent.periodStart) patch.photos_period_start = q.periodStart;
+    // Le solde de crédits n'est réécrit qu'au passage d'une fenêtre à la
+    // suivante, où il perd la part consommée. En cours de période, il ne bouge
+    // pas : c'est `photos_used` qui monte, et l'écrire pour rien ferait courir
+    // le risque de l'écraser à partir d'une lecture périmée.
+    if (q.bonus !== normalizeBonus(droits.bonus_photos)) patch.bonus_photos = q.bonus;
+
+    // Historique mois par mois : le compteur d'usage repart de zéro à chaque
+    // fenêtre et ne peut donc rien dire du mois dernier. C'est cette ligne qui
+    // alimente la consommation mensuelle affichée dans le panneau.
+    patch.photos_monthly = recordMonthly(droits.photos_monthly, count, now);
+
     await writeEntitlements(user.id, patch);
 
     return res.status(200).json({
       used: patch.photos_used,
-      limit,
-      remaining: limit - patch.photos_used,
-      periodStart,
+      limit: q.limit,
+      remaining: q.limit - patch.photos_used,
+      bonus: q.bonus,
+      periodStart: q.periodStart,
     });
   } catch (e) {
     console.error("consume-photos error:", e);

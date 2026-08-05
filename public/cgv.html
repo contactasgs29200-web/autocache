@@ -75,6 +75,25 @@
     }
     .back-link:hover { border-color: #f26522; }
     .separator { border: none; border-top: 1px solid #1a1a1a; margin: 52px 0; }
+    /* Bandeau de version et sélecteur d'archives — affichés uniquement
+       lorsqu'une version a été publiée depuis le panneau d'administration. */
+    .version-bar {
+      border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px 16px;
+      margin-bottom: 36px; font-size: 11px; line-height: 1.8; color: #888;
+    }
+    .version-bar strong { color: #ddd5c8; }
+    .version-bar.pending { border-color: #f26522; }
+    .version-bar a { color: #f26522; text-decoration: none; }
+    .version-bar select {
+      background: #141414; color: #c8c0b8; border: 1px solid #2a2a2a;
+      border-radius: 3px; padding: 5px 8px; font-size: 11px; margin-left: 6px;
+      font-family: inherit;
+    }
+    .hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: #555; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #f26522; }
+    #dynamique h1 { margin-top: 40px; }
+    #dynamique h1:first-child { margin-top: 0; }
+    #dynamique a { color: #f26522; text-decoration: none; }
   </style>
 </head>
 <body>
@@ -92,6 +111,24 @@
       </div>
     </div>
   </header>
+
+  <!-- Bandeau de version : rempli par le script en bas de page dès qu'une
+       version a été publiée depuis le panneau d'administration. -->
+  <div id="bandeau"></div>
+
+  <!-- Version publiée, rendue à partir du Markdown archivé en base. -->
+  <div id="dynamique" hidden></div>
+
+  <!-- ══════════════════════════════════════════════
+       TEXTE DE REPLI
+       Ce bloc est le texte EN VIGUEUR tant qu'aucune version n'a été publiée
+       depuis le panneau d'administration. Il reste également affiché si le
+       chargement de la version publiée échoue — panne réseau, script bloqué,
+       navigateur sans JavaScript. Une page de conditions générales qui
+       s'afficherait vide ne serait opposable à personne : le repli n'est pas
+       une commodité, c'est la garantie que le document est toujours lisible.
+  ══════════════════════════════════════════════ -->
+  <div id="statique">
 
   <!-- ══════════════════════════════════════════════
        MENTIONS LÉGALES
@@ -197,7 +234,7 @@
     <li>à cette échéance, le compte revient automatiquement à l'accès limité de l'essai gratuit, sans autre démarche.</li>
   </ul>
   <p>Aucun remboursement au prorata de la période en cours n'est effectué, celle-ci restant intégralement utilisable. Le Client peut souscrire à nouveau à tout moment.</p>
-  <p>Le Prestataire se réserve le droit de résilier sans préavis tout compte en cas de violation des présentes CGV, d'usage frauduleux ou abusif du service.</p>
+  <p>Le Prestataire se réserve le droit de suspendre ou de résilier sans préavis tout compte en cas de violation des présentes CGV, d'usage frauduleux ou abusif du service. Toute suspension ou résiliation à l'initiative du Prestataire est <strong>motivée et notifiée au Client</strong>, qui dispose de la faculté de la contester par écrit à l'adresse de contact indiquée en fin de document. Lorsque la suspension est temporaire, sa durée est indiquée au Client. La suspension ne fait pas obstacle à la résiliation de l'abonnement par le Client, qui reste accessible pendant toute sa durée.</p>
 
   <h2>Article 9 — Utilisation du service</h2>
   <p>Le Client s'engage à utiliser AutoCache Pro exclusivement à des fins professionnelles légitimes. Il lui est notamment interdit de :</p>
@@ -214,19 +251,110 @@
   <h2>Article 11 — Responsabilité</h2>
   <p>AutoCache Pro est une obligation de moyens. La responsabilité du Prestataire est limitée au montant des sommes effectivement payées par le Client au cours du mois précédant le litige. En aucun cas le Prestataire ne saurait être tenu responsable de tout préjudice indirect (manque à gagner, perte de clientèle, etc.).</p>
 
-  <h2>Article 12 — Droit applicable et litiges</h2>
+  <h2>Article 12 — Modification des présentes conditions</h2>
+  <p>Le Prestataire peut faire évoluer les présentes CGV. Toute modification substantielle — portant notamment sur les tarifs, les quotas, la durée, la résiliation ou la responsabilité — est portée à la connaissance du Client par tout moyen, accompagnée d'un <strong class="highlight">résumé des changements</strong>, et n'entre en vigueur qu'au terme d'un préavis de <strong class="highlight">30 jours</strong>.</p>
+  <p>Pendant ce préavis, le Client demeure régi par la version qu'il a acceptée. S'il refuse la nouvelle version, il peut résilier son abonnement <strong>sans frais ni pénalité</strong> avant son entrée en vigueur, dans les conditions de l'article 8. La poursuite de l'utilisation du service après l'entrée en vigueur vaut acceptation.</p>
+  <p>Les corrections de forme et les mises en conformité imposées par une évolution légale ou réglementaire peuvent entrer en vigueur immédiatement ; le Client en est informé.</p>
+  <p>Chaque version des présentes conditions est numérotée, horodatée et archivée. Les versions antérieures restent consultables et la version applicable à un Client est celle qui était en vigueur à la date des faits considérés.</p>
+
+  <h2>Article 13 — Droit applicable et litiges</h2>
   <p>Les présentes CGV sont soumises au droit français. En cas de litige, les parties s'efforceront de trouver une solution amiable. À défaut, le litige sera soumis aux tribunaux compétents du ressort du siège social du Prestataire.</p>
   <p>Conformément à l'article L.616-1 du Code de la consommation, le Client professionnel peut recourir à un médiateur de la consommation en cas de litige non résolu.</p>
 
-  <h2>Article 13 — Contact</h2>
+  <h2>Article 14 — Contact</h2>
   <p>
     Pour toute question relative aux présentes CGV :<br>
     Email : <a href="mailto:contact.asgs29200@gmail.com" style="color:#f26522;">contact.asgs29200@gmail.com</a><br>
     Téléphone : <a href="tel:+33783578870" style="color:#f26522;">07 83 57 88 70</a>
   </p>
 
+  </div><!-- /#statique -->
+
   <a href="/" class="back-link">← Retour à l'application</a>
 
 </div>
+
+<script>
+// Affichage de la version publiée des conditions générales.
+//
+// Le texte ci-dessus reste la référence tant qu'aucune version n'a été publiée
+// depuis le panneau d'administration — et il reste également affiché si cette
+// requête échoue. Aucun scénario ne conduit à une page de conditions vide.
+//
+// Le HTML est rendu par le serveur, à partir du Markdown archivé, avec le même
+// convertisseur que l'aperçu du panneau. Ce convertisseur échappe la totalité
+// du texte : rien de ce qui a été saisi ne peut devenir du balisage.
+(function () {
+  var params = new URLSearchParams(location.search);
+  var demandee = params.get('version');
+  var url = '/api/legal-terms' + (demandee ? '?version=' + encodeURIComponent(demandee) : '');
+
+  function dateFr(iso) {
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
+  }
+
+  function echapper(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  fetch(url)
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      if (!d || !d.document) return; // aucune version publiée : le texte statique fait foi
+      var doc = d.document;
+
+      document.getElementById('statique').hidden = true;
+      var cible = document.getElementById('dynamique');
+      cible.innerHTML = doc.html || '';
+      cible.hidden = false;
+
+      var lignes = [];
+      if (d.archived) {
+        lignes.push('<strong>Version ' + doc.version + ' — archivée.</strong> Ce texte a été en vigueur à compter du '
+          + dateFr(doc.effective_at) + '. <a href="/cgv.html">Voir la version en vigueur</a>.');
+      } else {
+        lignes.push('<strong>Version ' + doc.version + '</strong>, en vigueur depuis le ' + dateFr(doc.effective_at)
+          + ' · publiée le ' + dateFr(doc.published_at));
+        if (doc.summary) lignes.push('Résumé des dernières modifications : ' + echapper(doc.summary));
+      }
+      lignes.push('<span class="hash">empreinte ' + echapper(doc.content_hash) + '</span>');
+
+      var versions = d.versions || [];
+      if (versions.length > 1) {
+        var options = versions.map(function (v) {
+          return '<option value="' + v.version + '"' + (v.version === doc.version ? ' selected' : '') + '>'
+            + 'Version ' + v.version + ' — ' + dateFr(v.effective_at) + '</option>';
+        }).join('');
+        lignes.push('Consulter une version antérieure :<select id="choix-version">' + options + '</select>');
+      }
+
+      var bandeau = document.getElementById('bandeau');
+      bandeau.innerHTML = '<div class="version-bar">' + lignes.join('<br>') + '</div>';
+
+      // Version publiée mais pas encore applicable : elle est annoncée, sans
+      // remplacer le texte affiché. C'est exactement ce qu'est un préavis.
+      if (d.upcoming) {
+        var a = document.createElement('div');
+        a.className = 'version-bar pending';
+        a.innerHTML = '<strong>Évolution à venir — version ' + d.upcoming.version + '</strong>, applicable le '
+          + dateFr(d.upcoming.effective_at) + '.<br>' + echapper(d.upcoming.summary || '')
+          + '<br><a href="/cgv.html?version=' + d.upcoming.version + '">Lire le texte à venir</a>'
+          + ' · Vous pouvez résilier sans frais avant cette date si vous refusez ces conditions.';
+        bandeau.appendChild(a);
+      }
+
+      var choix = document.getElementById('choix-version');
+      if (choix) {
+        choix.addEventListener('change', function () {
+          location.search = '?version=' + choix.value;
+        });
+      }
+    })
+    .catch(function () { /* le texte statique reste affiché */ });
+})();
+</script>
 </body>
 </html>

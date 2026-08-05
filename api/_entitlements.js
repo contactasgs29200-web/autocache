@@ -63,13 +63,20 @@ export async function freshUser(userId) {
 // plan, la formule et le rattachement Stripe de l'abonné, le renvoyant en essai
 // à chaque lot traité. La relecture préalable coûte un appel et supprime ce
 // risque.
-export async function writeEntitlements(userId, patch) {
+//
+// `attributes` transmet des champs du compte lui-même — aujourd'hui
+// `ban_duration`, seul moyen d'invalider réellement les sessions ouvertes d'un
+// compte sanctionné. Les écrire dans le MÊME appel que les droits garantit qu'on
+// ne se retrouve jamais avec la sanction inscrite mais non appliquée, ou
+// l'inverse.
+export async function writeEntitlements(userId, patch, attributes = {}) {
   const admin = supabaseAdmin();
   const current = await freshUser(userId);
   const fusion = { ...(current?.app_metadata ?? {}), ...patch };
 
   const { data, error } = await admin.auth.admin.updateUserById(userId, {
     app_metadata: fusion,
+    ...attributes,
   });
   if (error) throw new Error(`Écriture des droits impossible : ${error.message}`);
   return data?.user ?? null;

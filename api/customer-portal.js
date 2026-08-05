@@ -8,7 +8,12 @@ export default async function handler(req, res) {
   // L'identité vient du jeton, plus du corps de la requête. Auparavant, poster
   // un `userId` quelconque suffisait à obtenir une session du portail de
   // facturation de ce client — factures, moyen de paiement, résiliation.
-  const user = await requireUser(req, res);
+  //
+  // `allowSuspended` : un compte suspendu ou banni continue d'être prélevé par
+  // Stripe tant qu'il n'a pas résilié. Lui fermer cette porte reviendrait à
+  // couper le service tout en encaissant, sans issue — c'est le seul accès que
+  // la sanction ne retire pas, comme le prévoit l'article 8 des CGV.
+  const user = await requireUser(req, res, { allowSuspended: true });
   if (!user) return;
 
   const { action } = req.body || {};
