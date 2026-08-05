@@ -59,6 +59,19 @@ export default async function handler(req, res) {
     }
 
     if (!sub) {
+      // Stripe a répondu, le client existe, et aucun abonnement n'y est actif.
+      // C'est un verdict, pas une absence d'information : si le compte jouit
+      // encore d'un accès payant, il faut le couper. Sans cette révocation, une
+      // résiliation ou un impayé laissait l'accès ouvert indéfiniment dès lors
+      // que le webhook ne passait pas — la réconciliation ne savait
+      // qu'accorder, jamais retirer.
+      const ent = entitlementsOf(user);
+      const ouvertParStripe = ent.plan !== "trial" && user.app_metadata?.plan_source !== "promo";
+      if (ouvertParStripe) {
+        await writeEntitlements(user.id, { plan: "trial" });
+        console.log(`[sync] user ${user.id} : aucun abonnement actif chez Stripe — accès coupé`);
+        return res.status(200).json({ active: false, reason: "no_active_subscription", revoked: true });
+      }
       return res.status(200).json({ active: false, reason: "no_active_subscription" });
     }
 
@@ -75,7 +88,7 @@ export default async function handler(req, res) {
     }
     const wasActive = entitlementsOf(user).plan !== "trial";
 
-    const meta = { plan, stripe_customer_id: sub.customer };
+    const meta = { plan, stripe_customer_id: sub.customer, plan_source: "stripe" };
     if (formule) meta.formule = formule;
     if (!wasActive) {
       meta.photos_used = 0;

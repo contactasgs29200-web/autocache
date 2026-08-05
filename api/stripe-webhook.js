@@ -87,7 +87,7 @@ async function activateSubscription(userId, plan, formule, stripeCustomerId) {
   // Active l'abonnement et démarre une fenêtre mensuelle de crédits.
   // Le quota (1 000 photos/mois) est remis à zéro chaque mois côté application,
   // indépendamment de la cadence de facturation (hebdo / mensuel / annuel).
-  const meta = { plan, photos_used: 0, photos_period_start: new Date().toISOString() };
+  const meta = { plan, photos_used: 0, photos_period_start: new Date().toISOString(), plan_source: "stripe" };
   if (formule) meta.formule = formule;
   if (stripeCustomerId) meta.stripe_customer_id = stripeCustomerId;
   await writeEntitlements(userId, meta);

@@ -4320,27 +4320,38 @@ export default function AutoCache() {
     setSubInfoLoading(false);
   }, [user?.id, subInfoLoading]);
 
-  // ── Rattrapage d'un abonnement payé mais non activé ──
-  // Un compte encore en essai alors qu'un abonnement a été réglé signale une
-  // notification Stripe perdue. On redemande à Stripe à chaque ouverture de
-  // session : l'abonné n'a rien à faire, et surtout rien à repayer. Sans ce
-  // filet, un webhook manqué laissait le compte en essai jusqu'à intervention
-  // manuelle — l'abonné voyant son paiement encaissé et aucun accès ouvert.
+  // ── Réconciliation avec Stripe à l'ouverture de session ──
+  // Vérifie DANS LES DEUX SENS que l'accès du compte correspond à ce que Stripe
+  // facture réellement :
+  //   - abonnement réglé mais compte resté en essai → accès ouvert ;
+  //   - abonnement résilié ou impayé mais compte resté payant → accès coupé.
+  //
+  // Le second sens manquait, et c'est le plus grave : une résiliation dont la
+  // notification ne parvenait pas laissait l'accès ouvert indéfiniment. Ne rien
+  // vérifier tant que le compte est payant revenait à ne relever que les
+  // erreurs en notre défaveur.
+  //
+  // Un seul appel par ouverture de session, et uniquement pour les comptes
+  // concernés : un compte en essai sans dossier Stripe n'a rien à réconcilier.
   const syncedRef = useRef(null);
   useEffect(() => {
     if (!user?.id) return;
-    if ((user.app_metadata?.plan ?? "trial") !== "trial") return;
-    if (syncedRef.current === user.id) return; // une seule tentative par session
+    const plan = user.app_metadata?.plan ?? "trial";
+    const aUnDossierStripe = !!user.app_metadata?.stripe_customer_id;
+    if (plan === "trial" && !aUnDossierStripe) return;
+    if (syncedRef.current === user.id) return;
     syncedRef.current = user.id;
     (async () => {
       try {
         const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
         const d = await r.json();
-        if (d.active) {
+        // On ne rafraîchit que si les droits ont réellement changé, pour ne pas
+        // renouveler le jeton à chaque ouverture sans raison.
+        if (d.active || d.revoked) {
           const { data } = await supabase.auth.refreshSession();
           if (data?.user) setUser(data.user);
         }
-      } catch { /* sans effet : le compte reste en essai, rien n'est dégradé */ }
+      } catch { /* sans effet : l'état du compte reste inchangé */ }
     })();
   }, [user?.id, user?.app_metadata?.plan]);
 
@@ -5493,7 +5504,14 @@ export default function AutoCache() {
                               )}
                             </div>
                           ) : subInfo?.hasSubscription === false ? (
-                            <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Credits via code administrateur.</div>
+                            <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>
+                              {/* Un dossier Stripe sans abonnement actif signale une
+                                  résiliation ou un impayé : le dire, plutôt que
+                                  d'attribuer l'accès à un code administrateur. */}
+                              {hasBilling
+                                ? "Aucun abonnement actif — votre accès va être mis à jour."
+                                : "Crédits via code administrateur."}
+                            </div>
                           ) : (
                             <div style={{ fontSize: 13, color: "var(--c-ddd)" }}>Informations indisponibles.</div>
                           )}

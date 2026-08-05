@@ -41,7 +41,7 @@ export default async function handler(req, res) {
     const ent = entitlementsOf(fresh);
 
     if (promo.plan) {
-      const patch = { plan: promo.plan };
+      const patch = { plan: promo.plan, plan_source: "promo" };
       // Un plan ouvert par code n'a pas de facturation derrière : on repart
       // d'un quota neuf et d'une fenêtre qui démarre maintenant.
       if (promo.plan !== "trial") {
