@@ -254,79 +254,6 @@ const WALL_FONTS = [
   { key: "playfair",    family: "'Playfair Display', serif",           label: "Playfair",   weight: "700" },
 ];
 
-// Compose une enseigne (logo + titre + sous-titre) sur un PNG transparent.
-// Renvoie { url, ratio } (ratio = hauteur/largeur de la zone réellement occupée).
-function makeSignDataURL({ logoImg = null, title = "", titleColor = "#ffffff", fontKey = "rajdhani", subtitle = "", subtitleColor = "#ffffff" }) {
-  const f = WALL_FONTS.find(x => x.key === fontKey) ?? WALL_FONTS[0];
-  const meas = document.createElement("canvas").getContext("2d");
-  meas.textBaseline = "middle";
-
-  const hasTitle = !!title.trim();
-  const hasSub   = !!subtitle.trim();
-  const titleSize = 200;
-  const subSize   = 84;
-  const PAD = 40;
-
-  meas.font = `${f.weight} ${titleSize}px ${f.family}`;
-  const titleW = hasTitle ? meas.measureText(title).width : 0;
-  meas.font = `${f.weight} ${subSize}px ${f.family}`;
-  const subW = hasSub ? meas.measureText(subtitle).width : 0;
-
-  let logoW = 0, logoH = 0;
-  if (logoImg) {
-    logoH = hasTitle ? titleSize * 1.15 : 230;
-    const ar = (logoImg.naturalWidth || logoImg.width) / (logoImg.naturalHeight || logoImg.height);
-    logoW = logoH * ar;
-  }
-  const gap = (logoImg && hasTitle) ? 60 : 0;
-  const rowW = logoW + gap + titleW;
-  const rowH = Math.max(logoH, hasTitle ? titleSize : 0);
-  const subGap = (hasSub && rowH) ? 50 : 0;
-  const contentW = Math.max(rowW, subW);
-  const contentH = rowH + subGap + (hasSub ? subSize : 0);
-  if (contentW < 1 || contentH < 1) return { url: null, ratio: 0.4 };
-
-  const c = document.createElement("canvas");
-  c.width = Math.ceil(contentW + PAD * 2);
-  c.height = Math.ceil(contentH + PAD * 2);
-  const ctx = c.getContext("2d");
-  ctx.textBaseline = "middle";
-
-  const rowCY = PAD + rowH / 2;
-  let x = (c.width - rowW) / 2;
-  if (logoImg) { ctx.drawImage(logoImg, x, rowCY - logoH / 2, logoW, logoH); x += logoW + gap; }
-  if (hasTitle) {
-    ctx.font = `${f.weight} ${titleSize}px ${f.family}`;
-    ctx.fillStyle = titleColor;
-    ctx.textAlign = "left";
-    ctx.fillText(title, x, rowCY);
-  }
-  if (hasSub) {
-    ctx.font = `${f.weight} ${subSize}px ${f.family}`;
-    ctx.fillStyle = subtitleColor;
-    ctx.textAlign = "center";
-    ctx.fillText(subtitle, c.width / 2, PAD + rowH + subGap + subSize / 2);
-  }
-  return { url: c.toDataURL("image/png"), ratio: c.height / c.width };
-}
-
-// Superpose une enseigne (PNG transparent) sur une image, centrée sur `pos`
-// (coords normalisées 0..1) et large de `scale` × la largeur de l'image.
-async function overlaySignOnImage(baseUrl, signUrl, pos = { x: 0.5, y: 0.16 }, scale = 0.64) {
-  if (!signUrl) return baseUrl;
-  const [base, sign] = await Promise.all([loadImg(baseUrl), loadImg(signUrl)]);
-  const W = base.naturalWidth || base.width, H = base.naturalHeight || base.height;
-  const c = document.createElement("canvas");
-  c.width = W; c.height = H;
-  const ctx = c.getContext("2d");
-  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(base, 0, 0, W, H);
-  const sw = W * scale;
-  const sh = sw * ((sign.naturalHeight || sign.height) / (sign.naturalWidth || sign.width));
-  ctx.drawImage(sign, pos.x * W - sw / 2, pos.y * H - sh / 2, sw, sh);
-  return c.toDataURL("image/jpeg", 0.95);
-}
-
 // ── Bandeau : bande de couleur posée en haut de la photo ──────────────────
 // Configuration, géométrie et dessin dans photoBand.js ; ici, uniquement le
 // raccordement à l'application (police et encodage de l'image).
@@ -335,6 +262,62 @@ async function overlaySignOnImage(baseUrl, signUrl, pos = { x: 0.5, y: 0.16 }, s
 function drawBandOnCtx(ctx, W, cfg, logoImg) {
   const f = WALL_FONTS.find(x => x.key === cfg?.font) ?? WALL_FONTS[0];
   drawBand(ctx, W, cfg, logoImg, f);
+}
+
+// Fond de l'aperçu : le haut d'une vraie photo du lot quand il y en a une,
+// sinon un damier. Le damier n'est pas décoratif — c'est lui qui rend visible
+// l'absence de fond : sur un aplat gris, une bande réglée sur « aucun fond »
+// se confond avec un fond gris et laisse croire qu'elle est toujours là.
+function drawPreviewBackdrop(ctx, W, H, photoImg) {
+  if (photoImg) {
+    const pw = photoImg.naturalWidth || photoImg.width;
+    const ph = photoImg.naturalHeight || photoImg.height;
+    // La photo est mise à la largeur de l'aperçu ; le canvas ne fait que la
+    // hauteur de la bande, on en voit donc exactement la zone recouverte.
+    ctx.drawImage(photoImg, 0, 0, W, Math.max(1, Math.round(W * ph / pw)));
+    return;
+  }
+  // Gris moyen plutôt que clair : les écritures sont blanches par défaut et
+  // disparaîtraient sur un damier pâle, ce qui ferait croire à un réglage
+  // perdu là où il n'y a qu'un fond d'aperçu.
+  const S = 14;
+  for (let y = 0; y < H; y += S) {
+    for (let x = 0; x < W; x += S) {
+      ctx.fillStyle = ((x / S + y / S) % 2 < 1) ? "#9c9c9c" : "#888888";
+      ctx.fillRect(x, y, S, S);
+    }
+  }
+}
+
+// Aperçu du bandeau, dessiné par la fonction même qui produit les photos : un
+// aperçu reconstruit en CSS finirait par mentir (sur le rétrécissement d'un
+// titre trop long, notamment).
+// Composant à part, et non effet dans AutoCache : le panneau n'apparaît
+// qu'une fois la session restaurée, après le premier passage des effets. Un
+// effet placé plus haut ne se rejouerait pas à ce moment-là et l'aperçu
+// resterait vide jusqu'à la première modification d'un réglage.
+function BandPreview({ band, logoUrl, photoUrl }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    let cancelled = false;
+    (async () => {
+      const W = 900;
+      const H = Math.max(1, computeBandLayout({ cfg: band, width: W }).H);
+      const [logoImg, photoImg] = await Promise.all([
+        (logoUrl && band.logoPos !== "none") ? loadImg(logoUrl).catch(() => null) : null,
+        photoUrl ? loadImg(photoUrl).catch(() => null) : null,
+      ]);
+      if (cancelled) return;
+      cv.width = W; cv.height = H;
+      const ctx = cv.getContext("2d");
+      drawPreviewBackdrop(ctx, W, H, photoImg);
+      drawBandOnCtx(ctx, W, band, logoImg);
+    })();
+    return () => { cancelled = true; };
+  }, [band, logoUrl, photoUrl]);
+  return <canvas ref={ref} style={{ display: "block", width: "100%", height: "auto" }} />;
 }
 
 // Applique la bande sur une image. `band` embarque sa propre copie du logo
@@ -377,24 +360,6 @@ function readStoredBand() {
   // « Sélection » vise des photos du lot précédent : la portée retombe sur
   // « toutes », les deux autres valeurs se conservent telles quelles.
   return cfg.scope === "selected" ? { ...cfg, scope: "all" } : cfg;
-}
-
-function readStoredSign() {
-  const s = readStoredJSON("ac_sign");
-  return (s && typeof s === "object") ? s : {};
-}
-
-// Recompose les deux calques d'habillage sur une image propre.
-// La bande passe en premier — elle est collée en haut — puis l'enseigne, qui
-// se déplace à la souris et doit donc pouvoir la recouvrir.
-// Renvoie aussi l'étape intermédiaire : c'est elle que l'enseigne reprendra
-// comme base au prochain déplacement, sans quoi la bande disparaîtrait.
-async function bakeOverlays(cleanUrl, o) {
-  const banded = o?.band ? await overlayBandOnImage(cleanUrl, o.band) : cleanUrl;
-  const final = o?.signImageUrl
-    ? await overlaySignOnImage(banded, o.signImageUrl, o.signPos, o.signScale)
-    : banded;
-  return { banded, final };
 }
 
 // Génère un PNG transparent avec le texte mural (haute résolution)
@@ -3404,7 +3369,7 @@ const SUBSCRIPTION_FEATURES = [
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
-  "Bandeau et enseigne personnalisés",
+  "Bandeau personnalisé sur vos photos",
 ];
 // Ligne de clôture de la liste : annonce les évolutions à venir sans promettre
 // une fonctionnalité précise ni date.
@@ -3582,20 +3547,6 @@ export default function AutoCache() {
   const [wallTextStrokeColor, setWallTextStrokeColor] = useState("#000000");
   const [wallTextStrokeWidth, setWallTextStrokeWidth] = useState(0); // 0 = désactivé
   const [wallTextUnderline, setWallTextUnderline]     = useState(false);
-  // ── Enseigne murale (option indépendante du showroom) ────────────────────
-  // Valeurs initiales relues des réglages enregistrés (voir readStoredSign).
-  const [signEnabled,       setSignEnabled]       = useState(() => readStoredSign().enabled === true);
-  const [signTitle,         setSignTitle]         = useState(() => readStoredSign().title ?? "");
-  const [signTitleColor,    setSignTitleColor]    = useState(() => readStoredSign().titleColor ?? "#ffffff");
-  const [signFont,          setSignFont]          = useState(() => readStoredSign().font ?? "rajdhani");
-  const [signSubtitle,      setSignSubtitle]      = useState(() => readStoredSign().subtitle ?? "");
-  const [signSubtitleColor, setSignSubtitleColor] = useState(() => readStoredSign().subtitleColor ?? "#ffffff");
-  // La portée n'est pas restaurée : « sélection » désigne des photos du lot en
-  // cours, qui ne sont plus là au démarrage suivant.
-  const [signScope,         setSignScope]         = useState("all"); // "all" | "selected"
-  const [signSelectedIds,   setSignSelectedIds]   = useState(() => new Set());
-  const [signLive, setSignLive] = useState(null); // { pos, scale } pendant le déplacement dans la lightbox
-  const signDragRef = useRef(null);
   // ── Bandeau (bande en haut de la photo) ──────────────────────────────────
   // Toute la configuration tient dans un seul objet : c'est lui qu'on
   // sauvegarde, qu'on relit et qu'on attache à chaque photo traitée.
@@ -3606,7 +3557,6 @@ export default function AutoCache() {
   const [bandLogoCropOpen, setBandLogoCropOpen] = useState(false);
   const [bandSelectedIds, setBandSelectedIds] = useState(() => new Set());
   const bandLogoUploadRef = useRef(null);
-  const bandPreviewRef = useRef(null);
   // Configuration prête à être attachée à une photo, ou null s'il n'y a rien
   // à dessiner (case décochée, ou bande vide sans fond ni texte ni logo).
   const activeBand = band.enabled && bandHasContent(band, !!bandLogo)
@@ -3679,15 +3629,6 @@ export default function AutoCache() {
     try { localStorage.setItem('ac_band', JSON.stringify(band)); } catch (e) {}
   }, [band]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('ac_sign', JSON.stringify({
-        enabled: signEnabled, title: signTitle, titleColor: signTitleColor,
-        subtitle: signSubtitle, subtitleColor: signSubtitleColor, font: signFont,
-      }));
-    } catch (e) {}
-  }, [signEnabled, signTitle, signTitleColor, signSubtitle, signSubtitleColor, signFont]);
-
   // Logo du bandeau → localStorage, avec le même repli progressif que le logo
   // du cache plaque : un logo photographié au téléphone dépasse le quota, et
   // une écriture qui échoue en silence perdrait le logo au redémarrage.
@@ -3721,33 +3662,6 @@ export default function AutoCache() {
       else localStorage.removeItem('ac_band_logo_original');
     } catch (e) {}
   }, [bandLogoOriginal]);
-
-  // Aperçu du bandeau — dessiné par la fonction qui produit les vraies photos,
-  // sur un fond gris qui tient lieu de photo. Un aperçu reconstruit en CSS
-  // finirait par mentir (le rétrécissement d'un titre trop long, notamment) ;
-  // celui-ci ne peut pas diverger du rendu final.
-  useEffect(() => {
-    const cv = bandPreviewRef.current;
-    if (!cv || !band.enabled) return;
-    let cancelled = false;
-    (async () => {
-      const W = 900;
-      const L = computeBandLayout({ cfg: band, width: W });
-      let logoImg = null;
-      if (bandLogo && band.logoPos !== "none") {
-        try { logoImg = await loadImg(bandLogo); } catch { /* logo illisible */ }
-      }
-      if (cancelled) return;
-      cv.width = W; cv.height = Math.max(1, L.H);
-      const ctx = cv.getContext("2d");
-      const g = ctx.createLinearGradient(0, 0, W, L.H);
-      g.addColorStop(0, "#3a3a3a"); g.addColorStop(1, "#1d1d1d");
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, W, cv.height);
-      drawBandOnCtx(ctx, W, band, logoImg);
-    })();
-    return () => { cancelled = true; };
-  }, [band, bandLogo]);
 
   // Sauvegarder logo cache plaque → localStorage.
   // Un logo importé depuis un téléphone peut peser plusieurs Mo une fois en
@@ -4119,22 +4033,10 @@ export default function AutoCache() {
       logoImg = flatCanvas;
     }
     const bgColor = logo.bgColor || "#ffffff";
-    // L'enseigne murale a été déplacée dans son propre bloc (voir signImageUrl) :
-    // plus de logo mural dessiné sur le décor showroom.
+    // Plus de logo mural dessiné sur le décor showroom : la signature de la
+    // photo passe désormais par le bandeau, qui marche avec ou sans showroom.
     const resolvedWallLogo = null;
     const wallLogoRatio = 0.4;
-    // ── Enseigne murale : bannière (enseigne + sous-titre) ──
-    let signImageUrl = null, signRatio = 0.4;
-    if (signEnabled && (signTitle.trim() || signSubtitle.trim())) {
-      const sm = makeSignDataURL({
-        title: signTitle.trim(),
-        titleColor: signTitleColor,
-        fontKey: signFont,
-        subtitle: signSubtitle.trim(),
-        subtitleColor: signSubtitleColor,
-      });
-      signImageUrl = sm.url; signRatio = sm.ratio;
-    }
     const all = [];
     const showroomBgDataUrl = showroomActive
       ? (showroomSetupBg === 'custom' && showroomSetupCustomBg
@@ -4357,27 +4259,17 @@ export default function AutoCache() {
           setError('Showroom : ' + (e?.message || String(e)));
         }
       }
-      // ── Applique l'habillage sur la sortie finale (avec ou sans showroom) ──
-      const applySign = signImageUrl && (signScope === "all" || signSelectedIds.has(photosToProcess[i].id));
-      const applyBand = !!activeBand && bandAppliesTo(band, i, photosToProcess[i].id, bandSelectedIds);
-      if (applySign || applyBand) {
-        const pos = { x: 0.5, y: 0.16 }, scale = 0.64;
-        const clean = entry.showroomDataURL || entry.processed; // image sans habillage
-        // La configuration du bandeau voyage avec la photo : la recomposer
-        // plus tard (rognage, ajustement du cache, showroom) ne doit pas
-        // dépendre de ce que le panneau de réglages affiche à ce moment-là.
-        if (applyBand) entry.band = activeBand;
-        if (applySign) {
-          entry.signImageUrl = signImageUrl;
-          entry.signRatio    = signRatio;
-          entry.signPos      = pos;
-          entry.signScale    = scale;
-        }
+      // ── Pose la bande sur la sortie finale (avec ou sans showroom) ──
+      if (activeBand && bandAppliesTo(band, i, photosToProcess[i].id, bandSelectedIds)) {
+        const clean = entry.showroomDataURL || entry.processed; // image sans bande
+        // La configuration voyage avec la photo : la recomposer plus tard
+        // (rognage, ajustement du cache, showroom) ne doit pas dépendre de ce
+        // que le panneau de réglages affiche à ce moment-là.
+        entry.band = activeBand;
         try {
-          const { banded, final } = await bakeOverlays(clean, entry);
-          if (applySign) entry.signBaseUrl = banded; // base du déplacement de l'enseigne
-          if (entry.showroomDataURL) entry.showroomDataURL = final; else entry.processed = final;
-        } catch (e) { console.error('Overlay error:', e); }
+          const banded = await overlayBandOnImage(clean, activeBand);
+          if (entry.showroomDataURL) entry.showroomDataURL = banded; else entry.processed = banded;
+        } catch (e) { console.error('Bandeau :', e); }
       }
       all.push(entry);
       setResults([...all]);
@@ -4931,10 +4823,9 @@ export default function AutoCache() {
             nd.x, nd.y, zm, true, wOpts, bl,
             prev.carBoundsCache, prev.extraCorners
           );
-          // Ré-applique l'habillage (le compositing repart du décor sans lui)
-          const { banded, final: finalShowroom } = await bakeOverlays(sr.dataURL, prev);
-          const signExtra = prev.signImageUrl ? { signBaseUrl: banded } : {};
-          const updated = { ...prev, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl, ...signExtra };
+          // Ré-applique la bande (le compositing repart du décor sans elle)
+          const finalShowroom = await overlayBandOnImage(sr.dataURL, prev.band);
+          const updated = { ...prev, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
         }
@@ -5325,19 +5216,18 @@ export default function AutoCache() {
     const ov = adjustOverlayCanvasRef.current; if (ov) fctx.drawImage(ov, 0, 0);
     const flatURL = flat.toDataURL('image/jpeg', 0.97);
     freeCanvas(flat);
-    const sign = lightbox.signImageUrl || null; // ré-applique l'habillage s'il y en a
     if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
       // Mode showroom : fond+voiture+caches plaque aplatis à qualité native
       const t = adjustShowroomTransformRef.current;
       const photoPlates = list.map(q => cornersFromShowroom(q, t));
-      const { banded, final: url } = await bakeOverlays(flatURL, lightbox);
-      const updated = { ...lightbox, ...plateFields(photoPlates), showroomDataURL: url, ...(sign ? { signBaseUrl: banded } : {}) };
+      const url = await overlayBandOnImage(flatURL, lightbox.band); // la bande se repose par-dessus
+      const updated = { ...lightbox, ...plateFields(photoPlates), showroomDataURL: url };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
     } else {
       // Mode normal : sauvegarde la photo avec les caches plaque
-      const { banded, final: url } = await bakeOverlays(flatURL, lightbox);
-      const updated = { ...lightbox, processed: url, ...plateFields(list), ...(sign ? { signBaseUrl: banded } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
+      const url = await overlayBandOnImage(flatURL, lightbox.band); // la bande se repose par-dessus
+      const updated = { ...lightbox, processed: url, ...plateFields(list), ...(manualPlateMode ? { plateFound: true } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       // Régénère le showroom avec les nouveaux coins si showroom actif
@@ -5350,8 +5240,8 @@ export default function AutoCache() {
           const sr = await compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
             logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y, zoom, true, null, showroomBlend,
             null, snap.extraCorners);
-          const { banded: srBanded, final: finalShowroom } = await bakeOverlays(sr.dataURL, lightbox);
-          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend, ...(sign ? { signBaseUrl: srBanded } : {}) };
+          const finalShowroom = await overlayBandOnImage(sr.dataURL, lightbox.band);
+          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
           setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
           setLightbox(prev => prev?.name === snap.name ? withSR : prev);
         } catch (e) { console.error('showroom regen (adjust):', e); }
@@ -5432,46 +5322,6 @@ export default function AutoCache() {
     // simple aller-retour dans le mode Ajuster ne doit pas relancer un rendu.
     if (adjustDirtyRef.current && list.length) await persistPlates(list);
     setAdjustMode(false); setAdjustDrag(null); setManualPlateMode(false);
-  };
-
-  // ── Déplacement / redimensionnement de l'enseigne dans la lightbox ────────
-  const onSignPointerDown = (e, mode = "move") => {
-    if (!lightbox?.signImageUrl) return;
-    e.stopPropagation(); e.preventDefault();
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
-    const pos = lightbox.signPos || { x: 0.5, y: 0.16 };
-    const scale = lightbox.signScale ?? 0.64;
-    signDragRef.current = { mode, startMx: e.clientX, startMy: e.clientY, startPos: { ...pos }, startScale: scale };
-    setSignLive({ pos, scale });
-  };
-  const onSignPointerMove = (e) => {
-    const d = signDragRef.current; if (!d) return;
-    e.preventDefault();
-    const rect = cropImgRef.current?.getBoundingClientRect(); if (!rect || !rect.width) return;
-    if (d.mode === "resize") {
-      const dx = (e.clientX - d.startMx) / rect.width;
-      const ns = Math.max(0.15, Math.min(1.2, d.startScale + dx * 2));
-      setSignLive({ pos: d.startPos, scale: ns });
-    } else {
-      const dx = (e.clientX - d.startMx) / rect.width;
-      const dy = (e.clientY - d.startMy) / rect.height;
-      setSignLive({ pos: { x: Math.max(0, Math.min(1, d.startPos.x + dx)), y: Math.max(0, Math.min(1, d.startPos.y + dy)) }, scale: d.startScale });
-    }
-  };
-  const onSignPointerUp = async (e) => {
-    const d = signDragRef.current; if (!d) return;
-    signDragRef.current = null;
-    const live = signLive || { pos: lightbox.signPos, scale: lightbox.signScale };
-    setSignLive(null);
-    const snap = lightbox;
-    const baseClean = snap.signBaseUrl || snap.showroomDataURL || snap.processed;
-    const updated = { ...snap, signPos: live.pos, signScale: live.scale };
-    try {
-      const baked = await overlaySignOnImage(baseClean, snap.signImageUrl, live.pos, live.scale);
-      if (snap.showroomDataURL) updated.showroomDataURL = baked; else updated.processed = baked;
-    } catch (err) { console.error('sign rebake', err); }
-    setLightbox(prev => prev?.name === updated.name ? updated : prev);
-    setResults(prev => prev.map(r => r.name === updated.name ? updated : r));
   };
 
   // ── Zoom / Pan de la lightbox ─────────────────────────────────────────────
@@ -5577,7 +5427,7 @@ export default function AutoCache() {
       // Photo zoomée : le doigt la déplace. Si aucun pan n'est armé (doigt
       // resté posé à la fin d'un pinch, ou geste démarré hors de l'image), on
       // l'arme ici plutôt que d'ignorer le glissement.
-      if (lbZoom > 1 && !lbPanDragRef.current && !cropDrag && !signDragRef.current) {
+      if (lbZoom > 1 && !lbPanDragRef.current && !cropDrag) {
         anchorLbPan(t.clientX, t.clientY);
         e.preventDefault();
         return;
@@ -6447,14 +6297,13 @@ export default function AutoCache() {
                 )}
               </section>
 
-              {/* ── 03 — Habillage : bandeau + enseigne ── */}
+              {/* ── 03 — Habillage : bandeau ── */}
               <section>
                 <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 4, fontFamily: "var(--font-apple)" }}>03 — Habillage</div>
                 <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginBottom: 12, lineHeight: 1.5 }}>
-                  Deux façons de signer vos photos : une bande en haut, ou une enseigne posée sur l'image. Vos réglages sont conservés d'une session à l'autre.
+                  Signez vos photos d'une bande à votre marque. Vos réglages sont conservés d'une session à l'autre.
                 </div>
 
-                {/* ── Bandeau ── */}
                 <div onClick={() => setBandField({ enabled: !band.enabled })}
                   style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: band.enabled ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${band.enabled ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: band.enabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
                   <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${band.enabled ? "#f26522" : "#444"}`, background: band.enabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -6478,7 +6327,7 @@ export default function AutoCache() {
                     {/* Aperçu */}
                     <div style={{ ...LABEL }}>Aperçu</div>
                     <div style={{ border: "1px solid var(--c-222)", borderRadius: 3, overflow: "hidden", marginBottom: 14, background: "var(--c-111)" }}>
-                      <canvas ref={bandPreviewRef} style={{ display: "block", width: "100%", height: "auto" }} />
+                      <BandPreview band={band} logoUrl={bandLogo} photoUrl={photos[0]?.preview ?? null} />
                     </div>
                     {empty && (
                       <div style={{ fontSize: 10, color: "#f26522", fontFamily: "var(--font-apple)", lineHeight: 1.5, marginTop: -8, marginBottom: 14 }}>
@@ -6630,80 +6479,6 @@ export default function AutoCache() {
                   );
                 })()}
 
-                {/* ── Enseigne posée ── */}
-                <div onClick={() => setSignEnabled(v => !v)}
-                  style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: signEnabled ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${signEnabled ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: signEnabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
-                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${signEnabled ? "#f26522" : "#444"}`, background: signEnabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {signEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: signEnabled ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>Enseigne posée sur la photo</div>
-                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginTop: 2 }}>Enseigne + sous-titre · déplaçable après traitement</div>
-                  </div>
-                </div>
-                {signEnabled && (() => {
-                  const sf = WALL_FONTS.find(x => x.key === signFont) ?? WALL_FONTS[0];
-                  const hasContent = signTitle.trim() || signSubtitle.trim();
-                  return (
-                  <div style={{ border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px", padding: 14, background: "var(--c-0a0a0a)" }}>
-                    {/* Enseigne */}
-                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginBottom: 6 }}>ENSEIGNE</div>
-                    <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                      <input type="text" value={signTitle} onChange={e => setSignTitle(e.target.value)} placeholder="Ex : nom de l'enseigne"
-                        style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "var(--font-apple)", fontSize: 14 }} />
-                      <input type="color" value={signTitleColor} onChange={e => setSignTitleColor(e.target.value)}
-                        style={{ width: 34, height: 34, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer", flexShrink: 0 }} />
-                    </div>
-                    {/* Sous-titre */}
-                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginBottom: 6 }}>SOUS-TITRE</div>
-                    <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                      <input type="text" value={signSubtitle} onChange={e => setSignSubtitle(e.target.value)} placeholder="Ex : votre slogan, numéro de téléphone…"
-                        style={{ flex: 1, minWidth: 0, boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "var(--font-apple)", fontSize: 14 }} />
-                      <input type="color" value={signSubtitleColor} onChange={e => setSignSubtitleColor(e.target.value)}
-                        style={{ width: 34, height: 34, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer", flexShrink: 0 }} />
-                    </div>
-                    {/* Police */}
-                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginBottom: 6 }}>POLICE</div>
-                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
-                      {WALL_FONTS.map(f => (
-                        <button key={f.key} onClick={() => setSignFont(f.key)}
-                          style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", borderRadius: 2, fontFamily: f.family, fontWeight: f.weight, background: signFont === f.key ? "#f26522" : "var(--c-161616)", color: signFont === f.key ? "#090909" : "#999", border: `1px solid ${signFont === f.key ? "#f26522" : "var(--c-2a2a2a)"}` }}>{f.label}</button>
-                      ))}
-                    </div>
-                    {/* Aperçu */}
-                    {hasContent && (
-                      <div style={{ background: "var(--c-111)", border: "1px solid var(--c-222)", borderRadius: 3, padding: 14, marginBottom: 14, textAlign: "center" }}>
-                        {signTitle.trim() && <span style={{ fontFamily: sf.family, fontWeight: sf.weight, fontSize: 22, color: signTitleColor, letterSpacing: 1 }}>{signTitle}</span>}
-                        {signSubtitle.trim() && <div style={{ fontFamily: sf.family, fontWeight: sf.weight, fontSize: 12, color: signSubtitleColor, marginTop: 5 }}>{signSubtitle}</div>}
-                      </div>
-                    )}
-                    {/* Portée */}
-                    <div style={{ fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginBottom: 6 }}>APPLIQUER À</div>
-                    <div style={{ display: "flex", gap: 6, marginBottom: signScope === "selected" ? 10 : 0 }}>
-                      {[["all", "Toutes les photos"], ["selected", "Photos sélectionnées"]].map(([k, label]) => (
-                        <button key={k} onClick={() => setSignScope(k)}
-                          style={{ flex: 1, padding: "7px 0", fontSize: 10, fontFamily: "var(--font-apple)", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", borderRadius: 2, background: signScope === k ? "#f26522" : "var(--c-161616)", color: signScope === k ? "#090909" : "var(--c-777)", border: `1px solid ${signScope === k ? "#f26522" : "var(--c-2a2a2a)"}` }}>{label}</button>
-                      ))}
-                    </div>
-                    {signScope === "selected" && (
-                      photos.length === 0
-                        ? <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>Importez des photos pour les sélectionner.</div>
-                        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(60px, 1fr))", gap: 6 }}>
-                            {photos.map(p => {
-                              const sel = signSelectedIds.has(p.id);
-                              return (
-                                <div key={p.id} onClick={() => setSignSelectedIds(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
-                                  style={{ position: "relative", paddingTop: "70%", borderRadius: 3, overflow: "hidden", cursor: "pointer", border: `2px solid ${sel ? "#f26522" : "transparent"}` }}>
-                                  <img src={p.preview} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: sel ? 1 : 0.45 }} />
-                                  {sel && <div style={{ position: "absolute", top: 3, right: 3, width: 16, height: 16, borderRadius: "50%", background: "#f26522", color: "#090909", fontSize: 11, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>}
-                                </div>
-                              );
-                            })}
-                          </div>
-                    )}
-                  </div>
-                  );
-                })()}
               </section>
 
               {/* ── 04 — Showroom Virtuel ── */}
@@ -7234,34 +7009,10 @@ export default function AutoCache() {
             ) : (
               <img
                 ref={cropImgRef}
-                src={(lightbox.signImageUrl && lightbox.signBaseUrl) ? lightbox.signBaseUrl : (lightbox.showroomDataURL || lightbox.processed)}
+                src={lightbox.showroomDataURL || lightbox.processed}
                 style={{ display: "block", maxWidth: "min(1100px, 100vw - 32px)", maxHeight: "79vh", objectFit: "contain", pointerEvents: "none" }}
               />
             )}
-
-            {/* ── Enseigne déplaçable (calque par-dessus l'image) ── */}
-            {!cropMode && !adjustMode && lightbox.signImageUrl && (() => {
-              const live = signLive || { pos: lightbox.signPos || { x: 0.5, y: 0.16 }, scale: lightbox.signScale ?? 0.64 };
-              return (
-                <div
-                  onClick={e => e.stopPropagation()}
-                  onPointerDown={e => onSignPointerDown(e, "move")}
-                  onPointerMove={onSignPointerMove}
-                  onPointerUp={onSignPointerUp}
-                  style={{ position: "absolute", left: `${live.pos.x * 100}%`, top: `${live.pos.y * 100}%`, width: `${live.scale * 100}%`, transform: "translate(-50%,-50%)", cursor: signDragRef.current?.mode === "move" ? "grabbing" : "grab", touchAction: "none", pointerEvents: "all", zIndex: 6, userSelect: "none" }}
-                >
-                  <img src={lightbox.signImageUrl} draggable={false} style={{ width: "100%", display: "block", pointerEvents: "none", userSelect: "none" }} />
-                  <div style={{ position: "absolute", inset: 0, border: "1px dashed rgba(242,101,34,0.7)", pointerEvents: "none" }} />
-                  <div
-                    onClick={e => e.stopPropagation()}
-                    onPointerDown={e => onSignPointerDown(e, "resize")}
-                    onPointerMove={onSignPointerMove}
-                    onPointerUp={onSignPointerUp}
-                    style={{ position: "absolute", right: -11, bottom: -11, width: 22, height: 22, borderRadius: "50%", background: "#f26522", border: "2px solid #fff", boxShadow: "0 1px 5px rgba(0,0,0,0.7)", cursor: "nwse-resize", touchAction: "none" }}
-                  />
-                </div>
-              );
-            })()}
 
             {/* ── Debug YOLO bbox + corners overlay (only with ?plateDebug in URL) ── */}
             {!cropMode && !adjustMode && !lightbox.showroomDataURL && window.location.search.includes('plateDebug') && lightbox.yoloBbox && lightbox.imgW && (
