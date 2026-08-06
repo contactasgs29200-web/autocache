@@ -10,6 +10,11 @@ import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js
 import { plateList, plateFields, defaultPlateQuad } from "./plateCaches.js";
 import { dataURLToBlob, withImageExt } from "./imageFile.js";
 import GuidedTour from "./components/GuidedTour.jsx";
+import LogoCropper from "./components/LogoCropper.jsx";
+import {
+  DEFAULT_BAND, BAND_HEIGHT_MIN, BAND_HEIGHT_MAX, BAND_LOGO_SCALE_MIN, BAND_LOGO_SCALE_MAX,
+  normalizeBand, bandHasContent, bandAppliesTo, computeBandLayout, drawBand,
+} from "./photoBand.js";
 // @imgly background removal — chargé dynamiquement
 let removeBgImgly = null;
 import { createClient } from "@supabase/supabase-js";
@@ -320,6 +325,76 @@ async function overlaySignOnImage(baseUrl, signUrl, pos = { x: 0.5, y: 0.16 }, s
   const sh = sw * ((sign.naturalHeight || sign.height) / (sign.naturalWidth || sign.width));
   ctx.drawImage(sign, pos.x * W - sw / 2, pos.y * H - sh / 2, sw, sh);
   return c.toDataURL("image/jpeg", 0.95);
+}
+
+// ── Bandeau : bande de couleur posée en haut de la photo ──────────────────
+// Configuration, géométrie et dessin dans photoBand.js ; ici, uniquement le
+// raccordement à l'application (police et encodage de l'image).
+
+// Dessine la bande sur un contexte où la photo est déjà posée.
+function drawBandOnCtx(ctx, W, cfg, logoImg) {
+  const f = WALL_FONTS.find(x => x.key === cfg?.font) ?? WALL_FONTS[0];
+  drawBand(ctx, W, cfg, logoImg, f);
+}
+
+// Applique la bande sur une image. `band` embarque sa propre copie du logo
+// (`logoUrl`) : la photo doit pouvoir être recomposée plus tard sans dépendre
+// de l'état courant du panneau de réglages.
+async function overlayBandOnImage(baseUrl, band) {
+  if (!band) return baseUrl;
+  let logoImg = null;
+  if (band.logoUrl && band.logoPos !== "none") {
+    try { logoImg = await loadImg(band.logoUrl); }
+    catch { /* logo illisible : la bande sort sans lui plutôt que pas du tout */ }
+  }
+  if (!bandHasContent(band, !!logoImg)) return baseUrl;
+  const base = await loadImg(baseUrl);
+  const W = base.naturalWidth || base.width, H = base.naturalHeight || base.height;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(base, 0, 0, W, H);
+  drawBandOnCtx(ctx, W, band, logoImg);
+  return c.toDataURL("image/jpeg", 0.95);
+}
+
+// ── Réglages d'habillage enregistrés ──────────────────────────────────────
+// Relus en INITIALISATION d'état, et non dans un effet de restauration : les
+// effets de sauvegarde tournent dans le même commit, juste après, et
+// réécriraient les valeurs par défaut par-dessus la configuration enregistrée
+// avant que la restauration n'ait pu être rendue.
+function readStored(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function readStoredJSON(key) {
+  try { return JSON.parse(readStored(key) || "null"); } catch { return null; }
+}
+
+function readStoredBand() {
+  const cfg = normalizeBand(readStoredJSON("ac_band"));
+  // « Sélection » vise des photos du lot précédent : la portée retombe sur
+  // « toutes », les deux autres valeurs se conservent telles quelles.
+  return cfg.scope === "selected" ? { ...cfg, scope: "all" } : cfg;
+}
+
+function readStoredSign() {
+  const s = readStoredJSON("ac_sign");
+  return (s && typeof s === "object") ? s : {};
+}
+
+// Recompose les deux calques d'habillage sur une image propre.
+// La bande passe en premier — elle est collée en haut — puis l'enseigne, qui
+// se déplace à la souris et doit donc pouvoir la recouvrir.
+// Renvoie aussi l'étape intermédiaire : c'est elle que l'enseigne reprendra
+// comme base au prochain déplacement, sans quoi la bande disparaîtrait.
+async function bakeOverlays(cleanUrl, o) {
+  const banded = o?.band ? await overlayBandOnImage(cleanUrl, o.band) : cleanUrl;
+  const final = o?.signImageUrl
+    ? await overlaySignOnImage(banded, o.signImageUrl, o.signPos, o.signScale)
+    : banded;
+  return { banded, final };
 }
 
 // Génère un PNG transparent avec le texte mural (haute résolution)
@@ -3329,7 +3404,7 @@ const SUBSCRIPTION_FEATURES = [
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
-  "Enseigne murale",
+  "Bandeau et enseigne personnalisés",
 ];
 // Ligne de clôture de la liste : annonce les évolutions à venir sans promettre
 // une fonctionnalité précise ni date.
@@ -3508,16 +3583,35 @@ export default function AutoCache() {
   const [wallTextStrokeWidth, setWallTextStrokeWidth] = useState(0); // 0 = désactivé
   const [wallTextUnderline, setWallTextUnderline]     = useState(false);
   // ── Enseigne murale (option indépendante du showroom) ────────────────────
-  const [signEnabled,       setSignEnabled]       = useState(false);
-  const [signTitle,         setSignTitle]         = useState("");
-  const [signTitleColor,    setSignTitleColor]    = useState("#ffffff");
-  const [signFont,          setSignFont]          = useState("rajdhani");
-  const [signSubtitle,      setSignSubtitle]      = useState("");
-  const [signSubtitleColor, setSignSubtitleColor] = useState("#ffffff");
+  // Valeurs initiales relues des réglages enregistrés (voir readStoredSign).
+  const [signEnabled,       setSignEnabled]       = useState(() => readStoredSign().enabled === true);
+  const [signTitle,         setSignTitle]         = useState(() => readStoredSign().title ?? "");
+  const [signTitleColor,    setSignTitleColor]    = useState(() => readStoredSign().titleColor ?? "#ffffff");
+  const [signFont,          setSignFont]          = useState(() => readStoredSign().font ?? "rajdhani");
+  const [signSubtitle,      setSignSubtitle]      = useState(() => readStoredSign().subtitle ?? "");
+  const [signSubtitleColor, setSignSubtitleColor] = useState(() => readStoredSign().subtitleColor ?? "#ffffff");
+  // La portée n'est pas restaurée : « sélection » désigne des photos du lot en
+  // cours, qui ne sont plus là au démarrage suivant.
   const [signScope,         setSignScope]         = useState("all"); // "all" | "selected"
   const [signSelectedIds,   setSignSelectedIds]   = useState(() => new Set());
   const [signLive, setSignLive] = useState(null); // { pos, scale } pendant le déplacement dans la lightbox
   const signDragRef = useRef(null);
+  // ── Bandeau (bande en haut de la photo) ──────────────────────────────────
+  // Toute la configuration tient dans un seul objet : c'est lui qu'on
+  // sauvegarde, qu'on relit et qu'on attache à chaque photo traitée.
+  const [band, setBand] = useState(readStoredBand);
+  const setBandField = (patch) => setBand(b => normalizeBand({ ...b, ...patch }));
+  const [bandLogo, setBandLogo] = useState(() => readStored('ac_band_logo'));  // data URL du logo du bandeau
+  const [bandLogoOriginal, setBandLogoOriginal] = useState(() => readStored('ac_band_logo_original')); // avant recadrage, pour pouvoir y revenir
+  const [bandLogoCropOpen, setBandLogoCropOpen] = useState(false);
+  const [bandSelectedIds, setBandSelectedIds] = useState(() => new Set());
+  const bandLogoUploadRef = useRef(null);
+  const bandPreviewRef = useRef(null);
+  // Configuration prête à être attachée à une photo, ou null s'il n'y a rien
+  // à dessiner (case décochée, ou bande vide sans fond ni texte ni logo).
+  const activeBand = band.enabled && bandHasContent(band, !!bandLogo)
+    ? { ...band, logoUrl: band.logoPos === "none" ? null : bandLogo }
+    : null;
   // ── Showroom nudge + zoom (repositionnement / taille voiture) ────────────
   const [showroomNudge,   setShowroomNudge]   = useState({ x: 0, y: 0 });
   const [showroomZoom,    setShowroomZoom]    = useState(DEFAULT_SHOWROOM_ZOOM);
@@ -3575,6 +3669,85 @@ export default function AutoCache() {
       }
     } catch(e) {}
   }, []);
+
+  // ── Habillage : réglages conservés d'une session à l'autre ───────────────
+  // Un professionnel qui traite ses annonces chaque semaine ne doit pas
+  // retaper le nom de son garage et ses couleurs à chaque fois. Le logo est
+  // stocké à part : une image en base64 dans le même enregistrement ferait
+  // échouer l'écriture entière dès que le quota du navigateur est atteint.
+  useEffect(() => {
+    try { localStorage.setItem('ac_band', JSON.stringify(band)); } catch (e) {}
+  }, [band]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ac_sign', JSON.stringify({
+        enabled: signEnabled, title: signTitle, titleColor: signTitleColor,
+        subtitle: signSubtitle, subtitleColor: signSubtitleColor, font: signFont,
+      }));
+    } catch (e) {}
+  }, [signEnabled, signTitle, signTitleColor, signSubtitle, signSubtitleColor, signFont]);
+
+  // Logo du bandeau → localStorage, avec le même repli progressif que le logo
+  // du cache plaque : un logo photographié au téléphone dépasse le quota, et
+  // une écriture qui échoue en silence perdrait le logo au redémarrage.
+  useEffect(() => {
+    if (!bandLogo) { try { localStorage.removeItem('ac_band_logo'); } catch (e) {} return; }
+    if (!bandLogo.startsWith('data:')) return;
+    let cancelled = false;
+    (async () => {
+      try { localStorage.setItem('ac_band_logo', bandLogo); return; } catch (e) {}
+      // L'original de recadrage est le premier sacrifié : il n'est qu'un
+      // confort, le logo affiché ne l'est pas.
+      try { localStorage.removeItem('ac_band_logo_original'); } catch (e) {}
+      try { localStorage.setItem('ac_band_logo', bandLogo); return; } catch (e) {}
+      for (const side of LOGO_STORE_SIDES) {
+        const reduced = await shrinkDataURL(bandLogo, side);
+        if (cancelled) return;
+        if (!reduced) break;
+        try { localStorage.setItem('ac_band_logo', reduced); return; } catch (e) {}
+      }
+      console.warn('[Bandeau] quota localStorage insuffisant : logo non conservé');
+    })();
+    return () => { cancelled = true; };
+  }, [bandLogo]);
+
+  // Original du logo, conservé au mieux : sans lui, « Rogner » repartirait
+  // après un redémarrage du logo déjà rogné, sans moyen de revenir en arrière.
+  // Son absence n'empêche rien, on n'insiste donc pas si le quota manque.
+  useEffect(() => {
+    try {
+      if (bandLogoOriginal) localStorage.setItem('ac_band_logo_original', bandLogoOriginal);
+      else localStorage.removeItem('ac_band_logo_original');
+    } catch (e) {}
+  }, [bandLogoOriginal]);
+
+  // Aperçu du bandeau — dessiné par la fonction qui produit les vraies photos,
+  // sur un fond gris qui tient lieu de photo. Un aperçu reconstruit en CSS
+  // finirait par mentir (le rétrécissement d'un titre trop long, notamment) ;
+  // celui-ci ne peut pas diverger du rendu final.
+  useEffect(() => {
+    const cv = bandPreviewRef.current;
+    if (!cv || !band.enabled) return;
+    let cancelled = false;
+    (async () => {
+      const W = 900;
+      const L = computeBandLayout({ cfg: band, width: W });
+      let logoImg = null;
+      if (bandLogo && band.logoPos !== "none") {
+        try { logoImg = await loadImg(bandLogo); } catch { /* logo illisible */ }
+      }
+      if (cancelled) return;
+      cv.width = W; cv.height = Math.max(1, L.H);
+      const ctx = cv.getContext("2d");
+      const g = ctx.createLinearGradient(0, 0, W, L.H);
+      g.addColorStop(0, "#3a3a3a"); g.addColorStop(1, "#1d1d1d");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, cv.height);
+      drawBandOnCtx(ctx, W, band, logoImg);
+    })();
+    return () => { cancelled = true; };
+  }, [band, bandLogo]);
 
   // Sauvegarder logo cache plaque → localStorage.
   // Un logo importé depuis un téléphone peut peser plusieurs Mo une fois en
@@ -3872,6 +4045,24 @@ export default function AutoCache() {
     img.src = srcDataURL;
   };
 
+  // ── Logo du bandeau ──────────────────────────────────────────────────────
+  // Volontairement distinct du logo du cache plaque : celui-ci couvre une
+  // plaque d'immatriculation, celui-là signe la photo. Les deux peuvent être
+  // le même fichier, mais rien n'oblige à ce qu'ils le soient.
+  const handleBandLogoFile = (f) => {
+    if (!f || !f.type?.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      setBandLogo(ev.target.result);
+      setBandLogoOriginal(ev.target.result); // le recadrage repart toujours de l'original
+      setBandLogoCropOpen(false);
+      // Importer un logo sans le voir apparaître serait déroutant : on le
+      // pose à gauche par défaut, l'utilisateur peut le déplacer ou le retirer.
+      if (band.logoPos === "none") setBandField({ logoPos: "left" });
+    };
+    reader.readAsDataURL(f);
+  };
+
   const handlePhotoFiles = files => {
     const imgs = Array.from(files).filter(f => f.type.startsWith("image/"));
     setPhotos(prev => [...prev, ...imgs.map(f => ({ file: f, preview: URL.createObjectURL(f), id: `${f.name}-${Math.random()}` }))]);
@@ -4166,20 +4357,27 @@ export default function AutoCache() {
           setError('Showroom : ' + (e?.message || String(e)));
         }
       }
-      // ── Applique l'enseigne sur la sortie finale (avec ou sans showroom) ──
+      // ── Applique l'habillage sur la sortie finale (avec ou sans showroom) ──
       const applySign = signImageUrl && (signScope === "all" || signSelectedIds.has(photosToProcess[i].id));
-      if (applySign) {
+      const applyBand = !!activeBand && bandAppliesTo(band, i, photosToProcess[i].id, bandSelectedIds);
+      if (applySign || applyBand) {
         const pos = { x: 0.5, y: 0.16 }, scale = 0.64;
-        const base = entry.showroomDataURL || entry.processed; // image propre (sans enseigne)
-        entry.signImageUrl = signImageUrl;
-        entry.signRatio    = signRatio;
-        entry.signPos      = pos;
-        entry.signScale    = scale;
-        entry.signBaseUrl  = base; // conservée pour déplacer/redimensionner l'enseigne
+        const clean = entry.showroomDataURL || entry.processed; // image sans habillage
+        // La configuration du bandeau voyage avec la photo : la recomposer
+        // plus tard (rognage, ajustement du cache, showroom) ne doit pas
+        // dépendre de ce que le panneau de réglages affiche à ce moment-là.
+        if (applyBand) entry.band = activeBand;
+        if (applySign) {
+          entry.signImageUrl = signImageUrl;
+          entry.signRatio    = signRatio;
+          entry.signPos      = pos;
+          entry.signScale    = scale;
+        }
         try {
-          const baked = await overlaySignOnImage(base, signImageUrl, pos, scale);
-          if (entry.showroomDataURL) entry.showroomDataURL = baked; else entry.processed = baked;
-        } catch (e) { console.error('Sign overlay error:', e); }
+          const { banded, final } = await bakeOverlays(clean, entry);
+          if (applySign) entry.signBaseUrl = banded; // base du déplacement de l'enseigne
+          if (entry.showroomDataURL) entry.showroomDataURL = final; else entry.processed = final;
+        } catch (e) { console.error('Overlay error:', e); }
       }
       all.push(entry);
       setResults([...all]);
@@ -4733,13 +4931,9 @@ export default function AutoCache() {
             nd.x, nd.y, zm, true, wOpts, bl,
             prev.carBoundsCache, prev.extraCorners
           );
-          // Ré-applique l'enseigne (le compositing repart du décor sans elle)
-          let finalShowroom = sr.dataURL;
-          const signExtra = {};
-          if (prev.signImageUrl) {
-            signExtra.signBaseUrl = sr.dataURL; // base propre pour déplacer l'enseigne
-            finalShowroom = await overlaySignOnImage(sr.dataURL, prev.signImageUrl, prev.signPos, prev.signScale);
-          }
+          // Ré-applique l'habillage (le compositing repart du décor sans lui)
+          const { banded, final: finalShowroom } = await bakeOverlays(sr.dataURL, prev);
+          const signExtra = prev.signImageUrl ? { signBaseUrl: banded } : {};
           const updated = { ...prev, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl, ...signExtra };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
@@ -5131,20 +5325,19 @@ export default function AutoCache() {
     const ov = adjustOverlayCanvasRef.current; if (ov) fctx.drawImage(ov, 0, 0);
     const flatURL = flat.toDataURL('image/jpeg', 0.97);
     freeCanvas(flat);
-    const sign = lightbox.signImageUrl || null; // ré-applique l'enseigne si présente
-    const sPos = lightbox.signPos, sScale = lightbox.signScale;
+    const sign = lightbox.signImageUrl || null; // ré-applique l'habillage s'il y en a
     if (adjustIsShowroomRef.current && adjustShowroomTransformRef.current) {
       // Mode showroom : fond+voiture+caches plaque aplatis à qualité native
       const t = adjustShowroomTransformRef.current;
       const photoPlates = list.map(q => cornersFromShowroom(q, t));
-      const url = sign ? await overlaySignOnImage(flatURL, sign, sPos, sScale) : flatURL;
-      const updated = { ...lightbox, ...plateFields(photoPlates), showroomDataURL: url, ...(sign ? { signBaseUrl: flatURL } : {}) };
+      const { banded, final: url } = await bakeOverlays(flatURL, lightbox);
+      const updated = { ...lightbox, ...plateFields(photoPlates), showroomDataURL: url, ...(sign ? { signBaseUrl: banded } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
     } else {
       // Mode normal : sauvegarde la photo avec les caches plaque
-      const url = sign ? await overlaySignOnImage(flatURL, sign, sPos, sScale) : flatURL;
-      const updated = { ...lightbox, processed: url, ...plateFields(list), ...(sign ? { signBaseUrl: flatURL } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
+      const { banded, final: url } = await bakeOverlays(flatURL, lightbox);
+      const updated = { ...lightbox, processed: url, ...plateFields(list), ...(sign ? { signBaseUrl: banded } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       // Régénère le showroom avec les nouveaux coins si showroom actif
@@ -5157,8 +5350,8 @@ export default function AutoCache() {
           const sr = await compositeCarOnBg(snap.cutoutDataURL, snap.showroomBgUrl, 2400, 1350,
             logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y, zoom, true, null, showroomBlend,
             null, snap.extraCorners);
-          const finalShowroom = sign ? await overlaySignOnImage(sr.dataURL, sign, sPos, sScale) : sr.dataURL;
-          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend, ...(sign ? { signBaseUrl: sr.dataURL } : {}) };
+          const { banded: srBanded, final: finalShowroom } = await bakeOverlays(sr.dataURL, lightbox);
+          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend, ...(sign ? { signBaseUrl: srBanded } : {}) };
           setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
           setLightbox(prev => prev?.name === snap.name ? withSR : prev);
         } catch (e) { console.error('showroom regen (adjust):', e); }
@@ -6254,17 +6447,198 @@ export default function AutoCache() {
                 )}
               </section>
 
-              {/* ── 03 — Enseigne murale ── */}
+              {/* ── 03 — Habillage : bandeau + enseigne ── */}
               <section>
-                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 12, fontFamily: "var(--font-apple)" }}>03 — Enseigne murale</div>
+                <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 4, fontFamily: "var(--font-apple)" }}>03 — Habillage</div>
+                <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginBottom: 12, lineHeight: 1.5 }}>
+                  Deux façons de signer vos photos : une bande en haut, ou une enseigne posée sur l'image. Vos réglages sont conservés d'une session à l'autre.
+                </div>
+
+                {/* ── Bandeau ── */}
+                <div onClick={() => setBandField({ enabled: !band.enabled })}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: band.enabled ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${band.enabled ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: band.enabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${band.enabled ? "#f26522" : "#444"}`, background: band.enabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {band.enabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: band.enabled ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>Bande en haut de la photo</div>
+                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginTop: 2 }}>Couleur ou dégradé · titre, sous-titre et logo</div>
+                  </div>
+                </div>
+                {band.enabled && (() => {
+                  const LABEL = { fontSize: 9, letterSpacing: 1, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginBottom: 6, textTransform: "uppercase" };
+                  const FIELD = { flex: 1, minWidth: 0, boxSizing: "border-box", padding: "8px 10px", background: "var(--c-161616)", border: "1px solid var(--c-2a2a2a)", borderRadius: 3, color: "var(--c-ddd5c8)", fontFamily: "var(--font-apple)", fontSize: 14 };
+                  const SWATCH = { width: 34, height: 34, border: "1px solid var(--c-2a2a2a)", borderRadius: 3, background: "transparent", cursor: "pointer", flexShrink: 0 };
+                  const RANGE = { flex: 1, accentColor: "#f26522", height: 3, cursor: "pointer" };
+                  const seg = (on) => ({ flex: 1, padding: "7px 0", fontSize: 10, fontFamily: "var(--font-apple)", letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", borderRadius: 2, background: on ? "#f26522" : "var(--c-161616)", color: on ? "#090909" : "var(--c-777)", border: `1px solid ${on ? "#f26522" : "var(--c-2a2a2a)"}` });
+                  const empty = !bandHasContent(band, !!bandLogo);
+                  return (
+                  <div style={{ border: "1px solid #f26522", borderTop: "none", borderRadius: "0 0 3px 3px", padding: 14, background: "var(--c-0a0a0a)" }}>
+
+                    {/* Aperçu */}
+                    <div style={{ ...LABEL }}>Aperçu</div>
+                    <div style={{ border: "1px solid var(--c-222)", borderRadius: 3, overflow: "hidden", marginBottom: 14, background: "var(--c-111)" }}>
+                      <canvas ref={bandPreviewRef} style={{ display: "block", width: "100%", height: "auto" }} />
+                    </div>
+                    {empty && (
+                      <div style={{ fontSize: 10, color: "#f26522", fontFamily: "var(--font-apple)", lineHeight: 1.5, marginTop: -8, marginBottom: 14 }}>
+                        Rien à dessiner pour l'instant : choisissez un fond, ou ajoutez un titre ou un logo.
+                      </div>
+                    )}
+
+                    {/* Fond */}
+                    <div style={LABEL}>Fond</div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                      {[["solid", "Uni"], ["gradient", "Dégradé"], ["none", "Aucun"]].map(([k, label]) => (
+                        <button key={k} onClick={() => setBandField({ fill: k })} style={seg(band.fill === k)}>{label}</button>
+                      ))}
+                    </div>
+                    {band.fill === "none" && (
+                      <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", lineHeight: 1.5, marginBottom: 14 }}>
+                        Sans fond : seuls le logo et les écritures se posent sur la photo.
+                      </div>
+                    )}
+                    {band.fill !== "none" && (<>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+                        <input type="color" value={band.color1} onChange={e => setBandField({ color1: e.target.value })} style={SWATCH} title="Couleur du fond" />
+                        {band.fill === "gradient" && <input type="color" value={band.color2} onChange={e => setBandField({ color2: e.target.value })} style={SWATCH} title="Seconde couleur" />}
+                        {band.fill === "gradient" && [["horizontal", "→"], ["vertical", "↓"]].map(([k, icon]) => (
+                          <button key={k} onClick={() => setBandField({ gradientDir: k })} title={k === "horizontal" ? "Dégradé horizontal" : "Dégradé vertical"}
+                            style={{ ...seg(band.gradientDir === k), flex: "0 0 auto", width: 34, height: 34, fontSize: 14 }}>{icon}</button>
+                        ))}
+                        <div style={{ flex: 1 }} />
+                      </div>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+                        <span style={{ ...LABEL, marginBottom: 0, flexShrink: 0 }}>Opacité</span>
+                        <input type="range" min={0.2} max={1} step={0.05} value={band.opacity}
+                          onChange={e => setBandField({ opacity: parseFloat(e.target.value) })} style={RANGE} />
+                        <span style={{ fontSize: 11, color: "#f26522", fontFamily: "var(--font-apple)", minWidth: 34, textAlign: "right" }}>{Math.round(band.opacity * 100)} %</span>
+                      </div>
+                    </>)}
+
+                    {/* Hauteur */}
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+                      <span style={{ ...LABEL, marginBottom: 0, flexShrink: 0 }}>Hauteur</span>
+                      <input type="range" min={BAND_HEIGHT_MIN} max={BAND_HEIGHT_MAX} step={0.005} value={band.height}
+                        onChange={e => setBandField({ height: parseFloat(e.target.value) })} style={RANGE} />
+                      <span style={{ fontSize: 11, color: "#f26522", fontFamily: "var(--font-apple)", minWidth: 34, textAlign: "right" }}>{Math.round(band.height * 100)} %</span>
+                    </div>
+
+                    {/* Titre */}
+                    <div style={LABEL}>Titre</div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                      <input type="text" value={band.title} onChange={e => setBandField({ title: e.target.value })} placeholder="Ex : nom de votre garage" style={FIELD} />
+                      <input type="color" value={band.titleColor} onChange={e => setBandField({ titleColor: e.target.value })} style={SWATCH} />
+                    </div>
+
+                    {/* Sous-titre */}
+                    <div style={LABEL}>Sous-titre</div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                      <input type="text" value={band.subtitle} onChange={e => setBandField({ subtitle: e.target.value })} placeholder="Ex : votre slogan, numéro de téléphone…" style={FIELD} />
+                      <input type="color" value={band.subtitleColor} onChange={e => setBandField({ subtitleColor: e.target.value })} style={SWATCH} />
+                    </div>
+
+                    {/* Police */}
+                    <div style={LABEL}>Police</div>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
+                      {WALL_FONTS.map(f => (
+                        <button key={f.key} onClick={() => setBandField({ font: f.key })}
+                          style={{ padding: "4px 8px", fontSize: 11, cursor: "pointer", borderRadius: 2, fontFamily: f.family, fontWeight: f.weight, background: band.font === f.key ? "#f26522" : "var(--c-161616)", color: band.font === f.key ? "#090909" : "#999", border: `1px solid ${band.font === f.key ? "#f26522" : "var(--c-2a2a2a)"}` }}>{f.label}</button>
+                      ))}
+                    </div>
+
+                    {/* Logo */}
+                    <div style={LABEL}>Logo</div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                      {[["none", "Aucun"], ["left", "◧ À gauche"], ["right", "◨ À droite"]].map(([k, label]) => (
+                        <button key={k} onClick={() => setBandField({ logoPos: k })} style={seg(band.logoPos === k)}>{label}</button>
+                      ))}
+                    </div>
+                    {band.logoPos !== "none" && (bandLogoCropOpen && (bandLogoOriginal || bandLogo)
+                      ? <div style={{ marginBottom: 14 }}>
+                          <LogoCropper src={bandLogoOriginal || bandLogo}
+                            onApply={url => { setBandLogo(url); setBandLogoCropOpen(false); }}
+                            onCancel={() => setBandLogoCropOpen(false)} />
+                        </div>
+                      : <div style={{ marginBottom: 14 }}>
+                          <div onDragOver={e => { e.preventDefault(); setDragOver("bandLogo"); }} onDragLeave={() => setDragOver(null)}
+                            onDrop={e => { e.preventDefault(); setDragOver(null); handleBandLogoFile(e.dataTransfer.files?.[0]); }}
+                            onClick={() => bandLogoUploadRef.current?.click()}
+                            style={{ border: `1px solid ${dragOver === "bandLogo" ? "#f26522" : "var(--c-222)"}`, borderRadius: 3, padding: 16, cursor: "pointer", minHeight: 76, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--c-161616)" }}>
+                            {bandLogo
+                              ? <img src={bandLogo} style={{ maxHeight: 56, maxWidth: "100%", objectFit: "contain" }} />
+                              : <div style={{ textAlign: "center", color: "var(--c-ddd)", fontFamily: "var(--font-apple)" }}>
+                                  <div style={{ fontSize: 22, marginBottom: 4 }}>⬡</div>
+                                  <div style={{ fontSize: 12 }}>Glisser votre logo ici</div>
+                                  <div style={{ fontSize: 10, color: "var(--c-aaa)", marginTop: 3 }}>PNG transparent recommandé</div>
+                                </div>}
+                          </div>
+                          <input ref={bandLogoUploadRef} type="file" accept="image/*" style={{ display: "none" }}
+                            onChange={e => { handleBandLogoFile(e.target.files?.[0]); e.target.value = ''; }} />
+                          {bandLogo && (
+                            <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 8 }}>
+                              <button onClick={() => setBandLogoCropOpen(true)}
+                                style={{ background: "var(--c-181818)", color: "#f26522", border: "1px solid var(--c-3a1400)", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                                ✂ Rogner
+                              </button>
+                              <button onClick={() => { setBandLogo(null); setBandLogoOriginal(null); setBandLogoCropOpen(false); }}
+                                style={{ background: "var(--c-181818)", color: "var(--c-ddd)", border: "1px solid var(--c-2a2a2a)", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", borderRadius: 2, padding: "6px 14px", cursor: "pointer" }}>
+                                Retirer
+                              </button>
+                            </div>
+                          )}
+                          {bandLogo && (
+                            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+                              <span style={{ ...LABEL, marginBottom: 0, flexShrink: 0 }}>Taille</span>
+                              <input type="range" min={BAND_LOGO_SCALE_MIN} max={BAND_LOGO_SCALE_MAX} step={0.05} value={band.logoScale}
+                                onChange={e => setBandField({ logoScale: parseFloat(e.target.value) })} style={RANGE} />
+                              <span style={{ fontSize: 11, color: "#f26522", fontFamily: "var(--font-apple)", minWidth: 34, textAlign: "right" }}>{Math.round(band.logoScale * 100)} %</span>
+                            </div>
+                          )}
+                        </div>
+                    )}
+
+                    {/* Portée */}
+                    <div style={LABEL}>Appliquer à</div>
+                    <div style={{ display: "flex", gap: 6, marginBottom: band.scope === "selected" ? 10 : 0 }}>
+                      {[["all", "Toutes"], ["first", "1re photo"], ["selected", "Sélection"]].map(([k, label]) => (
+                        <button key={k} onClick={() => setBandField({ scope: k })} style={seg(band.scope === k)}>{label}</button>
+                      ))}
+                    </div>
+                    {band.scope === "first" && (
+                      <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginTop: 8, lineHeight: 1.5 }}>
+                        Seule la première photo du lot portera la bande — celle qui sert de vignette à l'annonce.
+                      </div>
+                    )}
+                    {band.scope === "selected" && (
+                      photos.length === 0
+                        ? <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>Importez des photos pour les sélectionner.</div>
+                        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(60px, 1fr))", gap: 6 }}>
+                            {photos.map(p => {
+                              const sel = bandSelectedIds.has(p.id);
+                              return (
+                                <div key={p.id} onClick={() => setBandSelectedIds(prev => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
+                                  style={{ position: "relative", paddingTop: "70%", borderRadius: 3, overflow: "hidden", cursor: "pointer", border: `2px solid ${sel ? "#f26522" : "transparent"}` }}>
+                                  <img src={p.preview} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: sel ? 1 : 0.45 }} />
+                                  {sel && <div style={{ position: "absolute", top: 3, right: 3, width: 16, height: 16, borderRadius: "50%", background: "#f26522", color: "#090909", fontSize: 11, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                    )}
+                  </div>
+                  );
+                })()}
+
+                {/* ── Enseigne posée ── */}
                 <div onClick={() => setSignEnabled(v => !v)}
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: signEnabled ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${signEnabled ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: signEnabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
+                  style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", background: signEnabled ? "rgba(242,101,34,0.08)" : "var(--c-0a0a0a)", border: `1px solid ${signEnabled ? "#f26522" : "var(--c-1c1c1c)"}`, borderRadius: signEnabled ? "3px 3px 0 0" : 3, cursor: "pointer", userSelect: "none" }}>
                   <div style={{ width: 16, height: 16, borderRadius: 3, border: `2px solid ${signEnabled ? "#f26522" : "#444"}`, background: signEnabled ? "#f26522" : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {signEnabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: signEnabled ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>Ajouter une enseigne</div>
-                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginTop: 2 }}>Enseigne + sous-titre · avec ou sans showroom</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: signEnabled ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>Enseigne posée sur la photo</div>
+                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginTop: 2 }}>Enseigne + sous-titre · déplaçable après traitement</div>
                   </div>
                 </div>
                 {signEnabled && (() => {
