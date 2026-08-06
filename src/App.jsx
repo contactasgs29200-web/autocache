@@ -3337,6 +3337,8 @@ export default function AutoCache() {
   // Activation de l'abonnement au retour de Stripe Checkout
   const [activating, setActivating] = useState(false);
   const [activationFailed, setActivationFailed] = useState(false);
+  // Lot tronqué faute de crédits : { traitees, demandees }
+  const [quotaNotice, setQuotaNotice] = useState(null);
   // null | "loading" | message affiché sous le lien de vérification manuelle
   const [recheckState, setRecheckState] = useState(null);
   // ── Transition « connexion → application » ──
@@ -3891,6 +3893,12 @@ export default function AutoCache() {
     const remaining = PLAN_LIMIT - photosUsed;
     const maxPhotos = remaining;
     const photosToProcess = photos.slice(0, maxPhotos);
+    // Le lot dépasse les crédits restants : il est tronqué. Le dire, plutôt que
+    // de rendre dix photos sur dix-sept sans un mot — l'utilisateur croirait à
+    // un échec silencieux du traitement.
+    setQuotaNotice(photos.length > maxPhotos
+      ? { traitees: maxPhotos, demandees: photos.length }
+      : null);
     setProcessing(true);
     setPlateErrorBanner(null);
     resetPlateApiError();
@@ -6371,6 +6379,21 @@ export default function AutoCache() {
               </section>
 
               <section data-tutorial="process">
+                {/* Prévenir AVANT le traitement : découvrir après coup que
+                    seules 10 photos sur 17 sont sorties donne l'impression d'un
+                    échec, et fait perdre le temps du traitement. */}
+                {(() => {
+                  const restants = Math.max(0, PLAN_LIMIT - (user?.app_metadata?.photos_used ?? 0));
+                  if (!photos.length || photos.length <= restants) return null;
+                  return (
+                    <div style={{ marginBottom: 10, padding: "9px 12px", background: "rgba(242,101,34,0.08)", border: "1px solid rgba(242,101,34,0.3)", borderRadius: 4, fontSize: 11, lineHeight: 1.5, color: "var(--c-ddd)", fontFamily: "var(--font-apple)" }}>
+                      <strong style={{ color: "#f26522" }}>Crédits insuffisants.</strong>{" "}
+                      {restants === 0
+                        ? `Aucun crédit restant : les ${photos.length} photos sélectionnées ne seront pas traitées.`
+                        : `Il vous reste ${restants} crédit${restants > 1 ? "s" : ""} : seules les ${restants} premières des ${photos.length} photos sélectionnées seront traitées.`}
+                    </div>
+                  );
+                })()}
                 <button onClick={start} disabled={!canStart} style={{ width: "100%", background: canStart ? "#f26522" : "var(--c-1a1a1a)", color: canStart ? "#090909" : "var(--c-444)", border: "none", padding: "15px 24px", cursor: canStart ? "pointer" : "not-allowed", fontFamily: "var(--font-apple)", fontSize: 16, fontWeight: 700, letterSpacing: 4, textTransform: "uppercase", borderRadius: 3 }}>
                   {processing ? `Traitement... ${progress.n} / ${progress.total}` : `Lancer — ${photos.length} photo${photos.length > 1 ? "s" : ""}${showroomActive ? " + Showroom" : ""}`}
                 </button>
@@ -6403,6 +6426,13 @@ export default function AutoCache() {
                     <div style={{ marginTop: 4, fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)" }}>
                       {results.filter(r => r.plateFound).length} détectée{results.filter(r => r.plateFound).length > 1 ? "s" : ""} · {results.filter(r => !r.plateFound).length} non détectée{results.filter(r => !r.plateFound).length > 1 ? "s" : ""}
                     </div>
+                    {quotaNotice && (
+                      <div style={{ marginTop: 8, padding: "8px 12px", background: "rgba(242,101,34,0.08)", border: "1px solid rgba(242,101,34,0.3)", borderRadius: 4, fontSize: 11, lineHeight: 1.5, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", maxWidth: 560 }}>
+                        <strong style={{ color: "#f26522" }}>Crédits épuisés — lot incomplet.</strong>{" "}
+                        {quotaNotice.traitees} photo{quotaNotice.traitees > 1 ? "s" : ""} traitée{quotaNotice.traitees > 1 ? "s" : ""} sur les {quotaNotice.demandees} sélectionnées.
+                        Les {quotaNotice.demandees - quotaNotice.traitees} restantes n'ont pas été traitées faute de crédits.
+                      </div>
+                    )}
                   </div>
                   {!processing && (
                     <div style={{ display: "flex", gap: 8 }}>
