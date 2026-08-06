@@ -5553,7 +5553,7 @@ export default function AutoCache() {
           <div style={{ display: "flex", gap: 8, marginTop: 22, flexWrap: "wrap" }}>
             {hasBilling && (
               <button onClick={() => openPortal("cancel")} disabled={!!portalLoading}
-                style={{ background: "var(--c-1c1c1c)", color: "var(--c-ddd)", border: "1px solid var(--c-2f2f2f)", padding: "10px 16px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+                style={{ background: "var(--c-1c1c1c)", color: "var(--c-ddd)", border: "1px solid var(--c-333)", padding: "10px 16px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
                 {portalLoading === "cancel" ? "…" : "Gérer mon abonnement"}
               </button>
             )}
@@ -5562,7 +5562,7 @@ export default function AutoCache() {
               Se déconnecter
             </button>
           </div>
-          {portalError && <div style={{ fontSize: 11, color: "#e55", marginTop: 12 }}>⚠ {portalError}</div>}
+          {portalError && <div style={{ fontSize: 11, color: "#c0392b", marginTop: 12 }}>⚠ {portalError}</div>}
         </div>
       </div>
     );
@@ -5585,10 +5585,10 @@ export default function AutoCache() {
             Une nouvelle version des conditions générales de vente (version {termsDoc?.version}) est entrée en
             vigueur le {formatDateFr(termsDoc?.effectiveAt)}. Voici ce qui change :
           </div>
-          <div style={{ background: "var(--c-0f0f0f)", border: "1px solid var(--c-222)", borderRadius: 4, padding: 14, margin: "14px 0", fontSize: 12, lineHeight: 1.7, color: "var(--c-ddd5c8)" }}>
+          <div style={{ background: "var(--c-0e0e0e)", border: "1px solid var(--c-222)", borderRadius: 4, padding: 14, margin: "14px 0", fontSize: 12, lineHeight: 1.7, color: "var(--c-ddd5c8)" }}>
             {termsDoc?.summary}
           </div>
-          <div style={{ fontSize: 12, lineHeight: 1.8, color: "var(--c-999)" }}>
+          <div style={{ fontSize: 12, lineHeight: 1.8, color: "var(--c-9a9a9a)" }}>
             <a href={`/cgv.html?version=${termsDoc?.version}`} target="_blank" rel="noreferrer" style={{ color: "#f26522", textDecoration: "none" }}>Lire le texte intégral</a>
             {/* Le lien vers la version précédente n'a de sens qu'à partir de la
                 deuxième : la première n'a pas d'antérieure à comparer. */}
@@ -5607,12 +5607,12 @@ export default function AutoCache() {
             </button>
             {hasBilling && (
               <button onClick={() => openPortal("cancel")} disabled={!!portalLoading}
-                style={{ background: "var(--c-1c1c1c)", color: "var(--c-ddd)", border: "1px solid var(--c-2f2f2f)", padding: "11px 20px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+                style={{ background: "var(--c-1c1c1c)", color: "var(--c-ddd)", border: "1px solid var(--c-333)", padding: "11px 20px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
                 Résilier sans frais
               </button>
             )}
             <button onClick={logout}
-              style={{ background: "transparent", color: "var(--c-777)", border: "1px solid var(--c-262626)", padding: "11px 16px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+              style={{ background: "transparent", color: "var(--c-777)", border: "1px solid var(--c-252525)", padding: "11px 16px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
               Se déconnecter
             </button>
           </div>
@@ -8176,7 +8176,7 @@ export default function AutoCache() {
               </a>
               {termsState.mode === "info" && termsState.required && (
                 <button onClick={acceptTerms} disabled={termsBusy}
-                  style={{ background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-2f2f2f)", padding: "8px 14px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", minHeight: "unset" }}>
+                  style={{ background: "transparent", color: "var(--c-ddd)", border: "1px solid var(--c-333)", padding: "8px 14px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", minHeight: "unset" }}>
                   {termsBusy ? "…" : "J'ai pris connaissance"}
                 </button>
               )}

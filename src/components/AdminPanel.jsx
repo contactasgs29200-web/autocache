@@ -36,7 +36,7 @@ const S = {
     fontFamily: "var(--font-apple)", fontSize: 13, outline: "none", boxSizing: "border-box",
   },
   bouton: {
-    background: "var(--c-1c1c1c)", color: "var(--c-ddd)", border: "1px solid var(--c-2f2f2f)",
+    background: "var(--c-1c1c1c)", color: "var(--c-ddd)", border: "1px solid var(--c-333)",
     padding: "8px 13px", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)",
     fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", minHeight: "unset",
   },
@@ -89,7 +89,7 @@ function Jauge({ used, base, limit }) {
         <div style={{ width: `${partBase}%`, background: critique ? ROUGE : ORANGE }} />
         <div style={{ width: `${partBonus}%`, background: VERT }} />
       </div>
-      <div style={{ fontSize: 11, color: "var(--c-999)", marginTop: 6, fontFamily: "var(--font-apple)" }}>
+      <div style={{ fontSize: 11, color: "var(--c-9a9a9a)", marginTop: 6, fontFamily: "var(--font-apple)" }}>
         {formatPhotos(used)} / {formatPhotos(limit)} photos · <span style={{ color: critique ? ROUGE : "var(--c-ddd)" }}>{formatPhotos(restant)} restantes</span>
         {limit > base && <span style={{ color: VERT }}> · dont {formatPhotos(limit - base)} accordées</span>}
       </div>
@@ -110,7 +110,7 @@ function HistoriqueMensuel({ series }) {
             style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%" }}>
             <div style={{
               height: `${Math.max(m.photos > 0 ? 6 : 2, (m.photos / max) * 100)}%`,
-              background: m.photos > 0 ? ORANGE : "var(--c-262626)", borderRadius: "2px 2px 0 0",
+              background: m.photos > 0 ? ORANGE : "var(--c-252525)", borderRadius: "2px 2px 0 0",
             }} />
           </div>
         ))}
@@ -162,7 +162,7 @@ function FicheClient({ fiche, onAction, occupe, message }) {
       {message && (
         <div style={{
           ...S.carte, borderColor: message.type === "err" ? ROUGE : VERT,
-          color: message.type === "err" ? "#e88" : "#8d8",
+          color: message.type === "err" ? ROUGE : VERT,
           fontSize: 12, fontFamily: "var(--font-apple)",
         }}>{message.text}</div>
       )}
@@ -289,7 +289,7 @@ function FicheClient({ fiche, onAction, occupe, message }) {
       {/* ── Sanctions ── */}
       {bloc(sousSanction ? "Lever la sanction" : "Suspendre ou bannir", <>
         {fiche.isAdmin ? (
-          <div style={{ fontSize: 12, color: "var(--c-999)", fontFamily: "var(--font-apple)" }}>
+          <div style={{ fontSize: 12, color: "var(--c-9a9a9a)", fontFamily: "var(--font-apple)" }}>
             Ce compte est administrateur : il ne peut pas être sanctionné depuis le panneau.
           </div>
         ) : sousSanction ? (
@@ -352,7 +352,7 @@ function FicheClient({ fiche, onAction, occupe, message }) {
       {fiche.sanctionHistory.length > 0 && bloc("Historique des sanctions",
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {fiche.sanctionHistory.map((h, i) => (
-            <div key={i} style={{ borderLeft: `2px solid ${h.action === "lift" ? VERT : ROUGE}`, paddingLeft: 10, fontSize: 11, fontFamily: "var(--font-apple)", color: "var(--c-999)", lineHeight: 1.6 }}>
+            <div key={i} style={{ borderLeft: `2px solid ${h.action === "lift" ? VERT : ROUGE}`, paddingLeft: 10, fontSize: 11, fontFamily: "var(--font-apple)", color: "var(--c-9a9a9a)", lineHeight: 1.6 }}>
               <span style={{ color: "var(--c-ddd5c8)" }}>
                 {h.action === "ban" ? "Bannissement" : h.action === "suspension" ? "Suspension" : "Levée"}
               </span> · {dateHeure(h.at)}{h.by ? ` · ${h.by}` : ""}
@@ -463,7 +463,7 @@ function OngletCGV({ appeler, occupe }) {
     );
   }
 
-  if (!etat) return <div style={{ ...S.carte, fontSize: 12, color: "var(--c-999)" }}>Chargement…</div>;
+  if (!etat) return <div style={{ ...S.carte, fontSize: 12, color: "var(--c-9a9a9a)" }}>Chargement…</div>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -474,9 +474,9 @@ function OngletCGV({ appeler, occupe }) {
         ))}
       </div>
 
-      {erreur && <div style={{ ...S.carte, borderColor: ROUGE, color: "#e88", fontSize: 12 }}>{erreur}</div>}
+      {erreur && <div style={{ ...S.carte, borderColor: ROUGE, color: ROUGE, fontSize: 12 }}>{erreur}</div>}
       {message && (
-        <div style={{ ...S.carte, borderColor: message.type === "err" ? ROUGE : VERT, color: message.type === "err" ? "#e88" : "#8d8", fontSize: 12, fontFamily: "var(--font-apple)" }}>
+        <div style={{ ...S.carte, borderColor: message.type === "err" ? ROUGE : VERT, color: message.type === "err" ? ROUGE : VERT, fontSize: 12, fontFamily: "var(--font-apple)" }}>
           {message.text}
         </div>
       )}
@@ -484,7 +484,7 @@ function OngletCGV({ appeler, occupe }) {
       {vue === "versions" && (
         <>
           {etat.versions.length === 0 ? (
-            <div style={{ ...S.carte, fontSize: 12, color: "var(--c-999)", fontFamily: "var(--font-apple)", lineHeight: 1.7 }}>
+            <div style={{ ...S.carte, fontSize: 12, color: "var(--c-9a9a9a)", fontFamily: "var(--font-apple)", lineHeight: 1.7 }}>
               Aucune version publiée. La page <code>/cgv.html</code> affiche actuellement le texte statique du
               site. La première publication reprendra ce texte — préchargé dans l'éditeur — et prendra le relais.
             </div>
@@ -501,7 +501,7 @@ function OngletCGV({ appeler, occupe }) {
                   {!enVigueur && !aVenir && <Pastille couleur="var(--c-666)">Archivée</Pastille>}
                   <Pastille couleur="var(--c-888)">{k.label}</Pastille>
                 </div>
-                <div style={{ fontSize: 12, color: "var(--c-999)", fontFamily: "var(--font-apple)", lineHeight: 1.7 }}>
+                <div style={{ fontSize: 12, color: "var(--c-9a9a9a)", fontFamily: "var(--font-apple)", lineHeight: 1.7 }}>
                   {v.summary}
                   <br />
                   Publiée le {dateHeure(v.published_at)}{v.published_by ? ` par ${v.published_by}` : ""} ·
@@ -532,7 +532,7 @@ function OngletCGV({ appeler, occupe }) {
               </div>
             ))}
             {(acceptations.acceptances ?? []).length === 0 && (
-              <div style={{ fontSize: 12, color: "var(--c-999)" }}>Aucune acceptation enregistrée pour cette version.</div>
+              <div style={{ fontSize: 12, color: "var(--c-9a9a9a)" }}>Aucune acceptation enregistrée pour cette version.</div>
             )}
           </div>
         </div>
@@ -548,12 +548,12 @@ function OngletCGV({ appeler, occupe }) {
                   style={{
                     textAlign: "left", padding: 12, borderRadius: 3, cursor: "pointer",
                     background: nature === k.key ? "rgba(242,101,34,0.08)" : "var(--c-181818)",
-                    border: `1px solid ${nature === k.key ? ORANGE : "var(--c-262626)"}`,
+                    border: `1px solid ${nature === k.key ? ORANGE : "var(--c-252525)"}`,
                     fontFamily: "var(--font-apple)", minHeight: "unset",
                   }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: nature === k.key ? ORANGE : "var(--c-ddd5c8)", letterSpacing: 1, textTransform: "uppercase" }}>{k.label}</div>
                   <div style={{ fontSize: 11, color: "var(--c-888)", marginTop: 4, lineHeight: 1.5 }}>{k.hint}</div>
-                  <div style={{ fontSize: 11, color: "var(--c-999)", marginTop: 6, lineHeight: 1.5 }}>{k.consequence}</div>
+                  <div style={{ fontSize: 11, color: "var(--c-9a9a9a)", marginTop: 6, lineHeight: 1.5 }}>{k.consequence}</div>
                 </button>
               ))}
             </div>
@@ -595,7 +595,7 @@ function OngletCGV({ appeler, occupe }) {
             </div>
             {apercu ? (
               <div className="ac-cgv-apercu"
-                style={{ background: "var(--c-0f0f0f)", border: "1px solid var(--c-222)", borderRadius: 3, padding: 16, maxHeight: 460, overflowY: "auto", fontSize: 12, color: "var(--c-bbb)", lineHeight: 1.7 }}
+                style={{ background: "var(--c-0e0e0e)", border: "1px solid var(--c-222)", borderRadius: 3, padding: 16, maxHeight: 460, overflowY: "auto", fontSize: 12, color: "var(--c-bbb)", lineHeight: 1.7 }}
                 dangerouslySetInnerHTML={{ __html: renderMarkdown(texte) }} />
             ) : (
               <textarea value={texte} onChange={e => setTexte(e.target.value)} rows={20} spellCheck={false}
@@ -608,7 +608,7 @@ function OngletCGV({ appeler, occupe }) {
 
           <div style={{ ...S.carte, borderColor: "var(--c-2a2a2a)" }}>
             <div style={{ ...S.label, marginBottom: 10 }}>Ce que la publication garantit</div>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11, color: "var(--c-999)", fontFamily: "var(--font-apple)", lineHeight: 1.8 }}>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11, color: "var(--c-9a9a9a)", fontFamily: "var(--font-apple)", lineHeight: 1.8 }}>
               {LEGAL_GUARANTEES.map((g, i) => <li key={i}>{g}</li>)}
             </ul>
           </div>
@@ -624,7 +624,7 @@ function OngletCGV({ appeler, occupe }) {
             </div>
             <label style={{ display: "flex", alignItems: "flex-start", gap: 8, margin: "12px 0", cursor: "pointer" }}>
               <input type="checkbox" checked={confirme} onChange={e => setConfirme(e.target.checked)} style={{ marginTop: 3 }} />
-              <span style={{ fontSize: 11, color: "var(--c-999)", fontFamily: "var(--font-apple)", lineHeight: 1.5 }}>
+              <span style={{ fontSize: 11, color: "var(--c-9a9a9a)", fontFamily: "var(--font-apple)", lineHeight: 1.5 }}>
                 Je confirme avoir relu le texte, le résumé et la date d'entrée en vigueur. La version publiée
                 sera archivée définitivement et ne pourra plus être modifiée.
               </span>
@@ -654,6 +654,15 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
   const [selection, setSelection] = useState(null);
   const [occupe, setOccupe] = useState(false);
   const [messageFiche, setMessageFiche] = useState(null);
+
+  // Le panneau recouvre l'application : sans ce verrou, faire défiler la fiche
+  // d'un client jusqu'en bas continue le geste sur la page qui se trouve
+  // derrière, laquelle se retrouve à une position quelconque à la fermeture.
+  useEffect(() => {
+    const precedent = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = precedent; };
+  }, []);
 
   // Appel générique : jeton de session, JSON, et une erreur toujours
   // exploitable — un `fetch` qui échoue ne doit pas laisser le panneau muet.
@@ -706,7 +715,14 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
 
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "var(--c-0d0d0d)", zIndex: 4000,
+      position: "fixed", inset: 0, zIndex: 4000,
+      // Fond OPAQUE, et pris dans les variables réellement déclarées par
+      // index.html. Une couleur inventée — ce fut « --c-0d0d0d », nom
+      // plausible mais jamais déclaré — rend la déclaration invalide : le fond
+      // devient transparent et l'application se lit à travers le panneau. Le
+      // symptôme ne ressemble pas à sa cause, d'où ce rappel.
+      // `tests/themeVariables.test.js` refuse désormais toute variable inconnue.
+      background: "var(--c-1c1c1c)",
       display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
       {/* En-tête */}
@@ -714,18 +730,21 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
         display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
         padding: isMobile ? "0 12px" : "0 22px", height: 54, borderBottom: "1px solid var(--c-1e1e1e)", flexShrink: 0,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-          <span style={{ fontSize: isMobile ? 13 : 16, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", color: "var(--c-ddd5c8)", fontFamily: "var(--font-apple)", whiteSpace: "nowrap" }}>
+        {/* Le titre s'efface sur mobile : les trois commandes doivent tenir en
+            entier, un « FERMER » tronqué serait autrement plus gênant qu'un
+            titre absent — on sait où l'on se trouve. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, overflow: "hidden" }}>
+          <span style={{ fontSize: isMobile ? 12 : 16, fontWeight: 700, letterSpacing: isMobile ? 1 : 3, textTransform: "uppercase", color: "var(--c-ddd5c8)", fontFamily: "var(--font-apple)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             Administration
           </span>
           {!isMobile && <span style={{ fontSize: 10, color: "var(--c-666)", fontFamily: "var(--font-apple)", overflow: "hidden", textOverflow: "ellipsis" }}>{adminEmail}</span>}
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: isMobile ? 4 : 6, alignItems: "center", flexShrink: 0 }}>
           {[["clients", "Clients"], ["cgv", "CGV"]].map(([k, l]) => (
             <button key={k} onClick={() => setOnglet(k)}
-              style={bouton(onglet === k ? { background: ORANGE, color: "#090909", borderColor: ORANGE } : {})}>{l}</button>
+              style={bouton({ ...(isMobile ? { padding: "8px 9px" } : {}), ...(onglet === k ? { background: ORANGE, color: "#090909", borderColor: ORANGE } : {}) })}>{l}</button>
           ))}
-          <button onClick={onClose} style={bouton({ color: "var(--c-999)" })}>Fermer</button>
+          <button onClick={onClose} style={bouton({ color: "var(--c-9a9a9a)", ...(isMobile ? { padding: "8px 9px" } : {}) })}>Fermer</button>
         </div>
       </div>
 
@@ -748,7 +767,7 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
               </div>
             )}
             {stats?.truncated && (
-              <div style={{ ...S.carte, borderColor: ORANGE, fontSize: 11, color: "var(--c-999)", fontFamily: "var(--font-apple)" }}>
+              <div style={{ ...S.carte, borderColor: ORANGE, fontSize: 11, color: "var(--c-9a9a9a)", fontFamily: "var(--font-apple)" }}>
                 Plus de 5 000 comptes : la liste est tronquée et les chiffres ci-dessus ne portent que sur les
                 comptes chargés. La recherche reste fiable sur cette portion.
               </div>
@@ -775,11 +794,50 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
               </select>
             </div>
 
-            {erreur && <div style={{ ...S.carte, borderColor: ROUGE, color: "#e88", fontSize: 12 }}>{erreur}</div>}
+            {erreur && <div style={{ ...S.carte, borderColor: ROUGE, color: ROUGE, fontSize: 12 }}>{erreur}</div>}
 
             <div style={{ display: "grid", gridTemplateColumns: isMobile || !selection ? "1fr" : "minmax(0, 1fr) minmax(0, 420px)", gap: 14, alignItems: "start" }}>
               {/* Liste */}
               <div style={{ ...S.carte, padding: 0, overflow: "hidden" }}>
+                {/* Sur mobile, six colonnes ne tiennent pas dans la largeur : le
+                    tableau se coupait au milieu du quota, et l'essentiel — combien
+                    de photos restent, depuis quand le compte existe — se trouvait
+                    hors écran, derrière un défilement latéral que rien n'annonce.
+                    Une fiche par client empile la même information sans jamais
+                    déborder. */}
+                {isMobile ? (
+                  <div>
+                    {(donnees?.users ?? []).map(u => (
+                      <div key={u.id} onClick={() => { setSelection(u); setMessageFiche(null); }}
+                        style={{
+                          padding: "12px 14px", cursor: "pointer",
+                          borderBottom: "1px solid var(--c-1a1a1a)",
+                          background: selection?.id === u.id ? "rgba(242,101,34,0.07)" : "transparent",
+                          fontFamily: "var(--font-apple)",
+                        }}>
+                        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                          <span style={{ fontSize: 13, color: "var(--c-ddd5c8)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{u.email}</span>
+                          <span style={{ fontSize: 11, color: u.plan === "trial" ? "var(--c-9a9a9a)" : ORANGE, whiteSpace: "nowrap", flexShrink: 0 }}>
+                            {u.plan === "trial" ? "Essai" : `Abonné · ${u.formule === "weekly" ? "hebdo" : u.formule === "annual" ? "annuel" : "mensuel"}`}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--c-777)", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", margin: "4px 0 8px" }}>
+                          {u.profile.fullName || "—"}
+                          {u.sanction.active && <Pastille couleur={ROUGE}>{u.sanction.type === "ban" ? "Banni" : "Suspendu"}</Pastille>}
+                          {!u.emailConfirmed && <Pastille couleur="var(--c-888)">Non vérifié</Pastille>}
+                          {u.isAdmin && <Pastille couleur={ORANGE}>Admin</Pastille>}
+                        </div>
+                        <Jauge used={u.quota.used} base={u.quota.base} limit={u.quota.limit} />
+                        <div style={{ fontSize: 10, color: "var(--c-777)", marginTop: 6 }}>
+                          {formatPhotos(u.monthly[0]?.photos ?? 0)} photo{(u.monthly[0]?.photos ?? 0) > 1 ? "s" : ""} ce mois-ci · inscrit le {dateCourte(u.createdAt)}
+                        </div>
+                      </div>
+                    ))}
+                    {!chargement && (donnees?.users ?? []).length === 0 && (
+                      <div style={{ padding: 22, textAlign: "center", color: "var(--c-777)", fontSize: 12, fontFamily: "var(--font-apple)" }}>Aucun compte ne correspond.</div>
+                    )}
+                  </div>
+                ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "var(--font-apple)", fontSize: 12 }}>
                     <thead>
@@ -806,7 +864,7 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
                             </div>
                           </td>
                           <td style={{ padding: "10px 12px", whiteSpace: "nowrap" }}>
-                            <span style={{ color: u.plan === "trial" ? "var(--c-999)" : ORANGE }}>
+                            <span style={{ color: u.plan === "trial" ? "var(--c-9a9a9a)" : ORANGE }}>
                               {u.plan === "trial" ? "Essai" : "Abonné"}
                             </span>
                             {u.formule && <div style={{ fontSize: 10, color: "var(--c-777)" }}>{u.formule === "weekly" ? "hebdo" : u.formule === "monthly" ? "mensuel" : "annuel"}</div>}
@@ -817,7 +875,7 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
                           <td style={{ padding: "10px 12px", whiteSpace: "nowrap", color: "var(--c-ddd)" }}>
                             {formatPhotos(u.monthly[0]?.photos ?? 0)}
                           </td>
-                          <td style={{ padding: "10px 12px", whiteSpace: "nowrap", color: "var(--c-999)" }}>{dateCourte(u.createdAt)}</td>
+                          <td style={{ padding: "10px 12px", whiteSpace: "nowrap", color: "var(--c-9a9a9a)" }}>{dateCourte(u.createdAt)}</td>
                           <td style={{ padding: "10px 12px", color: ORANGE, whiteSpace: "nowrap" }}>›</td>
                         </tr>
                       ))}
@@ -827,6 +885,7 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
                     </tbody>
                   </table>
                 </div>
+                )}
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 12px", borderTop: "1px solid var(--c-1e1e1e)", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 11, color: "var(--c-777)", fontFamily: "var(--font-apple)" }}>
