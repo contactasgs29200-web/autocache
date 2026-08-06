@@ -386,7 +386,7 @@ function OngletCGV({ appeler, occupe }) {
 
   const charger = useCallback(async () => {
     setErreur("");
-    const d = await appeler("/api/admin-terms", { action: "list" });
+    const d = await appeler("/api/admin", { resource: "terms", action: "list" });
     if (d.error && !d.setupRequired) { setErreur(d.error); return; }
     setEtat(d);
     if (d.baseline) {
@@ -395,7 +395,7 @@ function OngletCGV({ appeler, occupe }) {
       setTexte(d.baseline.body);
     } else if (d.versions?.length) {
       const derniere = d.versions[0];
-      const complet = await appeler("/api/admin-terms", { action: "get", version: derniere.version });
+      const complet = await appeler("/api/admin", { resource: "terms", action: "get", version: derniere.version });
       if (complet?.document) { setTitre(complet.document.title); setTexte(complet.document.body); }
     }
   }, [appeler]);
@@ -416,7 +416,7 @@ function OngletCGV({ appeler, occupe }) {
 
   const publier = async () => {
     setMessage(null);
-    const d = await appeler("/api/admin-terms", {
+    const d = await appeler("/api/admin", { resource: "terms",
       action: "publish", title: titre, summary: resume, kind: nature,
       body: texte, effectiveAt: effet ? `${effet}T00:00:00.000Z` : undefined, noticeDays: preavis,
     });
@@ -432,13 +432,13 @@ function OngletCGV({ appeler, occupe }) {
   };
 
   const voirAcceptations = async (version) => {
-    const d = await appeler("/api/admin-terms", { action: "acceptances", version });
+    const d = await appeler("/api/admin", { resource: "terms", action: "acceptances", version });
     setAcceptations({ version, ...d });
     setVue("acceptations");
   };
 
   const restaurer = async (version) => {
-    const d = await appeler("/api/admin-terms", { action: "get", version });
+    const d = await appeler("/api/admin", { resource: "terms", action: "get", version });
     if (d?.document) {
       setTitre(d.document.title);
       setTexte(d.document.body);
@@ -671,7 +671,7 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
   const charger = useCallback(async () => {
     setChargement(true);
     setErreur("");
-    const d = await appeler("/api/admin-users", { action: "list", search: recherche, filter: filtre, sort: tri, page, perPage: 25 });
+    const d = await appeler("/api/admin", { resource: "users", action: "list", search: recherche, filter: filtre, sort: tri, page, perPage: 25 });
     if (d.error) setErreur(d.error); else setDonnees(d);
     setChargement(false);
   }, [appeler, recherche, filtre, tri, page]);
@@ -689,7 +689,7 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
     if (!selection) return;
     setOccupe(true);
     setMessageFiche(null);
-    const d = await appeler("/api/admin-user-action", { action, userId: selection.id, ...params });
+    const d = await appeler("/api/admin", { resource: "user-action", action, userId: selection.id, ...params });
     if (d.ok) {
       setSelection(d.user);
       setMessageFiche({ type: "ok", text: d.message });

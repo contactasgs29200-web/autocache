@@ -1,3 +1,4 @@
+// api/_billingCheckout.js — servi par api/billing.js (op: "checkout")
 import Stripe from "stripe";
 import { requireUser, corsHeaders } from "./_auth.js";
 

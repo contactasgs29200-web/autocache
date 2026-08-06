@@ -1,3 +1,4 @@
+// api/_accountPhone.js — servi par api/account.js (op: "phone")
 import { createClient } from "@supabase/supabase-js";
 import { requireUser } from "./_auth.js";
 

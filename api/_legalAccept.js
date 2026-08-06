@@ -1,4 +1,4 @@
-// api/accept-terms.js
+// api/_legalAccept.js — servi par api/legal.js (POST)
 // Enregistrement de l'acceptation d'une version des conditions générales.
 //
 // L'acceptation est écrite à DEUX endroits, et ce n'est pas une redondance

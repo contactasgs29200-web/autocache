@@ -1,4 +1,4 @@
-// api/admin-user-action.js
+// api/_adminUserAction.js — servi par api/admin.js (resource: "user-action")
 // Actions du panneau sur un compte : plan, quota, crédits, suspension,
 // bannissement, levée de sanction.
 //

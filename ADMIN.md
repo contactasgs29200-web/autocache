@@ -180,6 +180,23 @@ vide ne serait opposable à personne.
 
 ---
 
+## Une contrainte d'hébergement à connaître
+
+Vercel compte **une fonction serverless par fichier exposé dans `api/`**, et le
+plan Hobby en autorise **douze par déploiement**. Le projet y était déjà quand
+le panneau a été ajouté : le build passait, mais la mise en ligne était refusée.
+
+Les routes sont donc regroupées par domaine — `billing.js` (souscription,
+portail, réconciliation), `admin.js` (comptes, actions, CGV), `legal.js`
+(lecture et acceptation), `account.js` (code administrateur, téléphone). Les
+traitements eux-mêmes n'ont pas été fusionnés : ils restent dans des fichiers
+préfixés `_`, que Vercel n'expose pas, et les routeurs ne font qu'aiguiller.
+
+Le décompte est aujourd'hui de **11 sur 12**. La prochaine route à ajouter doit
+donc soit rejoindre un routeur existant, soit prendre la dernière place — au
+treizième fichier exposé, le déploiement échoue de nouveau, avec le même mail
+laconique de Vercel.
+
 ## Fichiers
 
 | Rôle | Fichier |
@@ -191,10 +208,11 @@ vide ne serait opposable à personne.
 | Texte de référence des CGV | `src/legalBaseline.js` |
 | Quota, crédits, historique | `src/subscriptionQuota.js` |
 | Garde et journal d'audit | `api/_admin.js` |
-| Liste et fiches clients | `api/admin-users.js` |
-| Actions sur un compte | `api/admin-user-action.js` |
-| Publication des CGV | `api/admin-terms.js` |
-| Lecture publique des CGV | `api/legal-terms.js` |
-| Acceptation par un client | `api/accept-terms.js` |
+| Routeur d'administration | `api/admin.js` |
+| Liste et fiches clients | `api/_adminUsers.js` |
+| Actions sur un compte | `api/_adminUserAction.js` |
+| Publication des CGV | `api/_adminTerms.js` |
+| Lecture publique des CGV | `api/_legalRead.js` (via `api/legal.js`) |
+| Acceptation par un client | `api/_legalAccept.js` (via `api/legal.js`) |
 | Interface | `src/components/AdminPanel.jsx` |
 | Tables | `supabase/migrations/20260805000000_admin_panel.sql` |

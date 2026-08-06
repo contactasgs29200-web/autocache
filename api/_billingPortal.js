@@ -1,3 +1,4 @@
+// api/_billingPortal.js — servi par api/billing.js (op: "portal")
 import Stripe from "stripe";
 import { requireUser } from "./_auth.js";
 import { formuleFromInterval } from "../src/subscriptionQuota.js";

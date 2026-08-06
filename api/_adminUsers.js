@@ -1,4 +1,4 @@
-// api/admin-users.js
+// api/_adminUsers.js — servi par api/admin.js (resource: "users")
 // Lecture de la base clients : liste complète, recherche, fiche détaillée,
 // chiffres d'ensemble.
 //

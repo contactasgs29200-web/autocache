@@ -3362,7 +3362,7 @@ export default function AutoCache() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   // ── Conditions générales : version publiée et suivi de l'acceptation ──
-  // `termsDoc` est la version EN VIGUEUR telle que la sert /api/legal-terms ;
+  // `termsDoc` est la version EN VIGUEUR telle que la sert /api/legal ;
   // `termsUpcoming` celle qui est publiée mais encore sous préavis. Les deux
   // sont nécessaires : la première conditionne l'accès, la seconde n'est
   // qu'une information — les confondre reviendrait à imposer une version qui
@@ -3692,7 +3692,7 @@ export default function AutoCache() {
           // route active quand même l'abonnement puisqu'elle lit la source de
           // vérité du paiement.
           try {
-            const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
+            const r = await fetch('/api/billing', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ op: 'sync' }) });
             const d = await r.json();
             if (d.active) {
               const { data } = await supabase.auth.refreshSession();
@@ -4364,7 +4364,7 @@ export default function AutoCache() {
     let annule = false;
     (async () => {
       try {
-        const r = await fetch('/api/legal-terms');
+        const r = await fetch('/api/legal');
         const d = await r.json();
         if (annule) return;
         setTermsDoc(d.document ? normalizeTermsDoc(d.document) : null);
@@ -4380,7 +4380,7 @@ export default function AutoCache() {
     if (!termsDoc || termsBusy) return;
     setTermsBusy(true);
     try {
-      const r = await fetch('/api/accept-terms', {
+      const r = await fetch('/api/legal', {
         method: 'POST',
         headers: await authHeaders(),
         body: JSON.stringify({ version: termsDoc.version }),
@@ -4408,10 +4408,10 @@ export default function AutoCache() {
     if (!user?.id || subInfoLoading) return;
     setSubInfoLoading(true);
     try {
-      const r = await fetch('/api/customer-portal', {
+      const r = await fetch('/api/billing', {
         method: 'POST',
         headers: await authHeaders(),
-        body: JSON.stringify({ action: 'subscription-info' }),
+        body: JSON.stringify({ op: 'portal', action: 'subscription-info' }),
       });
       const d = await r.json();
       if (d.hasSubscription) {
@@ -4475,7 +4475,7 @@ export default function AutoCache() {
     syncedRef.current = user.id;
     (async () => {
       try {
-        const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
+        const r = await fetch('/api/billing', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ op: 'sync' }) });
         const d = await r.json();
         // On ne rafraîchit que si les droits ont réellement changé, pour ne pas
         // renouveler le jeton à chaque ouverture sans raison.
@@ -4498,10 +4498,10 @@ export default function AutoCache() {
     if (!pending || user.phone) return;
     (async () => {
       try {
-        await fetch('/api/set-user-phone', {
+        await fetch('/api/account', {
           method: 'POST',
           headers: await authHeaders(),
-          body: JSON.stringify({ phone: pending }),
+          body: JSON.stringify({ op: 'phone', phone: pending }),
         });
       } catch { /* non bloquant : le numéro reste disponible dans les métadonnées */ }
     })();
@@ -4518,10 +4518,10 @@ export default function AutoCache() {
   const startCheckout = async (formule) => {
     setCheckoutLoading(formule);
     try {
-      const res = await fetch("/api/create-checkout-session", {
+      const res = await fetch("/api/billing", {
         method: "POST",
         headers: await authHeaders(),
-        body: JSON.stringify({ formule }),
+        body: JSON.stringify({ op: "checkout", formule }),
       });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
@@ -4613,12 +4613,12 @@ export default function AutoCache() {
     setPortalError("");
     setPortalLoading(action);
     try {
-      const res = await fetch("/api/customer-portal", {
+      const res = await fetch("/api/billing", {
         method: "POST",
         headers: await authHeaders(),
         // "cancel" ouvre directement le parcours de résiliation ;
         // sans action, on ouvre l'accueil du portail.
-        body: JSON.stringify(action === "cancel" ? { action: "cancel" } : {}),
+        body: JSON.stringify(action === "cancel" ? { op: "portal", action: "cancel" } : { op: "portal" }),
       });
       const data = await res.json();
       if (data.url) {
@@ -4642,7 +4642,7 @@ export default function AutoCache() {
       // L'effet du code est appliqué PAR LE SERVEUR : cette route se contentait
       // auparavant d'annoncer le plan obtenu, et le navigateur se l'attribuait
       // lui-même — donc sans code, il suffisait d'écrire directement.
-      const res = await fetch("/api/promo", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ code: promoCode.trim() }) });
+      const res = await fetch("/api/account", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ op: "promo", code: promoCode.trim() }) });
       const data = await res.json();
       if (!data.valid) { setPromoStatus("error"); setPromoMsg(data.message); return; }
       // Les droits ont changé côté serveur : on rafraîchit le jeton pour que
@@ -7646,7 +7646,7 @@ export default function AutoCache() {
                 setActivationFailed(false);
                 setActivating(true);
                 try {
-                  const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
+                  const r = await fetch('/api/billing', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ op: 'sync' }) });
                   const d = await r.json();
                   if (d.active) {
                     const { data } = await supabase.auth.refreshSession();
@@ -7896,7 +7896,7 @@ export default function AutoCache() {
                     onClick={async () => {
                       setRecheckState("loading");
                       try {
-                        const r = await fetch('/api/sync-subscription', { method: 'POST', headers: await authHeaders() });
+                        const r = await fetch('/api/billing', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ op: 'sync' }) });
                         const d = await r.json();
                         if (d.active) {
                           const { data } = await supabase.auth.refreshSession();
@@ -7938,7 +7938,7 @@ export default function AutoCache() {
                         setPortalError("");
                         setPortalLoading("invoices");
                         try {
-                          const res = await fetch("/api/customer-portal", { method: "POST", headers: await authHeaders(), body: JSON.stringify({}) });
+                          const res = await fetch("/api/billing", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ op: "portal" }) });
                           const data = await res.json();
                           if (data.url) window.location.href = data.url;
                           else setPortalError(data.error || "Impossible d'accéder au portail.");

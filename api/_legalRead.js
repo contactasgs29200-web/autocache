@@ -1,4 +1,4 @@
-// api/legal-terms.js
+// api/_legalRead.js — servi par api/legal.js (GET)
 // Lecture PUBLIQUE des conditions générales publiées.
 //
 // Publique et sans authentification, délibérément : des conditions générales

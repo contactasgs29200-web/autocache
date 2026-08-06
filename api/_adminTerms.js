@@ -1,4 +1,4 @@
-// api/admin-terms.js
+// api/_adminTerms.js — servi par api/admin.js (resource: "terms")
 // Publication des conditions générales, côté administration.
 //
 // Une publication n'écrase jamais rien. Elle ajoute une VERSION : numérotée,

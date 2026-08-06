@@ -1,3 +1,4 @@
+// api/_accountPromo.js — servi par api/account.js (op: "promo")
 import { requireUser, corsHeaders } from "./_auth.js";
 import { entitlementsOf, writeEntitlements, freshUser } from "./_entitlements.js";
 import { limitFor } from "../src/subscriptionQuota.js";

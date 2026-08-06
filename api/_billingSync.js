@@ -1,4 +1,4 @@
-// /api/sync-subscription.js
+// api/_billingSync.js — servi par api/billing.js (op: "sync")
 // Réconciliation de l'abonnement : demande directement à Stripe si le compte
 // connecté a un abonnement en cours, et aligne le compte en conséquence.
 //
