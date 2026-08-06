@@ -29,6 +29,17 @@ function useIsMobile() {
   return isMobile;
 }
 
+// Avertissement caméra du parcours guidé : « ne plus afficher » vit dans le
+// stockage local (pas dans le compte) — c'est une préférence d'appareil, et
+// c'est l'appareil qui a, ou non, une caméra.
+const GUIDED_INTRO_KEY = "autocache_parcours_intro_vu";
+function guidedIntroSeen() {
+  try { return localStorage.getItem(GUIDED_INTRO_KEY) === "1"; } catch { return false; }
+}
+function rememberGuidedIntro() {
+  try { localStorage.setItem(GUIDED_INTRO_KEY, "1"); } catch { /* navigation privée */ }
+}
+
 // Caméra accessible depuis la page ? getUserMedia n'existe qu'en contexte
 // sécurisé (https ou localhost) et manque sur les postes sans webcam : le
 // parcours photo guidé n'a alors rien à proposer.
@@ -2380,18 +2391,22 @@ async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
   }
 }
 
-// Cache posé sur la position visée par l'utilisateur pendant le parcours photo
-// guidé : le gabarit était affiché au milieu de son viseur et il a cadré sa
-// plaque dedans. Ce n'est pas une détection, c'est une consigne suivie — d'où
-// une confiance affichée modeste, mais une position bien plus fiable qu'un
-// cache absent.
-function plateFromGuidedHint(hintQuad) {
-  const pts = hintQuad ? [hintQuad.tl, hintQuad.tr, hintQuad.br, hintQuad.bl] : [];
+// Cache du parcours photo guidé : l'utilisateur a cadré sa plaque DANS le
+// gabarit affiché à l'écran, la position est donc connue avant même la photo.
+// Elle est prise telle quelle — aucune détection n'est lancée sur ces photos.
+//
+// C'est le sens même de l'option : on ne demande pas à quelqu'un d'aligner sa
+// plaque au pixel près pour aller ensuite la chercher avec un détecteur, qui
+// la déplacerait et serait facturé. Zéro appel, zéro coût, et le cache tombe
+// exactement là où il a été visé (ajustable ensuite comme n'importe quel
+// autre).
+function plateFromGuidedQuad(quad) {
+  const pts = quad ? [quad.tl, quad.tr, quad.br, quad.bl] : [];
   if (pts.length !== 4 || pts.some(p => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return null;
   const corners = pts.map(p => ({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) }));
   const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
   return {
-    found: true, conf: 0.5, corners, source: 'guided',
+    found: true, conf: 1, corners, source: 'guided',
     bbox: { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) },
   };
 }
@@ -2402,13 +2417,9 @@ function plateFromGuidedHint(hintQuad) {
 //     n'affine que les 4 coins sur le crop (1 appel Sonnet).
 //  3. Claude seul (locate + refine) si Plate Recognizer est indisponible.
 //
-// `hintQuad` (parcours photo guidé) ne court-circuite AUCUNE détection : les
-// détecteurs restent plus précis que le cadrage à main levée. Il sert de
-// localisation sûre pour Claude (une passe économisée) et de filet quand toute
-// la chaîne rend « aucune plaque » alors que l'utilisateur en a visé une.
-async function detectPlate(imageFile, regions = 'fr', hintQuad = null) {
-  const hint = plateFromGuidedHint(hintQuad);
-
+// Les photos du parcours guidé n'arrivent jamais ici : leur cache est déjà
+// placé (plateFromGuidedQuad), et c'est ce qui rend l'option gratuite.
+async function detectPlate(imageFile, regions = 'fr') {
   // ── Source principale : modèle maison keypoints (navigateur, 0 € / photo) ──
   // Entraîné sur les photos réelles de la concession, il pose les 4 coins en
   // perspective à tous les angles (y compris 3/4). S'il trouve une plaque, on
@@ -2422,19 +2433,12 @@ async function detectPlate(imageFile, regions = 'fr', hintQuad = null) {
   // Repartir sur Claude ici produirait des caches fantômes (le locate
   // hallucine volontiers une zone sur un flanc ou une calandre).
   if (pr?.noPlate) {
-    if (hint) {
-      console.log('[plate] aucune plaque détectée, cache posé sur la visée du parcours guidé');
-      return hint;
-    }
     console.log('[plate] aucune plaque sur la photo — aucun cache posé');
     return null;
   }
   if (pr && !pr.boxOnly) return pr;
   if (!pr) console.warn('[plate] Plate Recognizer indisponible, bascule sur Claude Vision');
-  const fable = await detectPlateFable(imageFile, pr?.box ?? hint?.bbox ?? null);
-  if (fable) return fable;
-  if (hint) console.log('[plate] Claude muet, cache posé sur la visée du parcours guidé');
-  return hint;
+  return detectPlateFable(imageFile, pr?.box ?? null);
 }
 
 // ── Vehicle detection + main vehicle selection ──
@@ -3380,6 +3384,9 @@ export default function AutoCache() {
   const [showTutorial, setShowTutorial] = useState(false);
   // ── Parcours photo guidé ──
   const [showGuidedTour, setShowGuidedTour] = useState(false);
+  // Le bouton n'ouvre pas la caméra du premier coup : il prévient d'abord.
+  const [showGuidedIntro, setShowGuidedIntro] = useState(false);
+  const [guidedIntroSkip, setGuidedIntroSkip] = useState(false);
   const [showCreditPopup, setShowCreditPopup] = useState(false);
   const [subInfo, setSubInfo] = useState(null); // { periodStart, periodEnd, plan, daysLeft }
   const [subInfoLoading, setSubInfoLoading] = useState(false);
@@ -3872,8 +3879,9 @@ export default function AutoCache() {
 
   // Photos du parcours guidé. Elles s'AJOUTENT au lot : on peut enchaîner un
   // parcours et des photos importées, ou plusieurs véhicules. Chaque vue du
-  // parcours emporte la position du cache plaque visée à l'écran
-  // (`plateHint`), transmise telle quelle à la détection.
+  // parcours emporte la position du cache visée à l'écran (`plateQuad`) : elle
+  // sera posée telle quelle, sans détection. Les photos bonus, au cadrage
+  // libre, n'en ont pas et repassent par la détection habituelle.
   const handleGuidedPhotos = items => {
     const entries = (items || []).filter(it => it?.file?.type?.startsWith("image/"));
     if (!entries.length) return;
@@ -3882,7 +3890,7 @@ export default function AutoCache() {
       file: it.file,
       preview: URL.createObjectURL(it.file),
       id: `guide-${stamp}-${i}`,
-      plateHint: it.plateHint ?? null,
+      plateQuad: it.plateQuad ?? null,
     }))]);
   };
 
@@ -3950,10 +3958,14 @@ export default function AutoCache() {
     const plateJobs = new Array(photosToProcess.length).fill(undefined);
     const startPlateJob = (idx) => {
       if (idx >= 0 && idx < photosToProcess.length && plateJobs[idx] === undefined) {
-        plateJobs[idx] = autoPlate
-          ? detectPlate(photosToProcess[idx].file, 'fr', photosToProcess[idx].plateHint ?? null)
-              .catch(e => { console.warn('[plate] préfetch échoué:', e?.message); return null; })
-          : Promise.resolve(null);
+        // Photo du parcours guidé : le cache est déjà placé, on ne détecte
+        // rien — ni appel réseau, ni coût, ni risque de déplacer un cache que
+        // l'utilisateur a aligné lui-même.
+        const guided = autoPlate ? plateFromGuidedQuad(photosToProcess[idx].plateQuad) : null;
+        plateJobs[idx] = guided ? Promise.resolve(guided)
+          : autoPlate
+            ? detectPlate(photosToProcess[idx].file).catch(e => { console.warn('[plate] préfetch échoué:', e?.message); return null; })
+            : Promise.resolve(null);
       }
     };
     startPlateJob(0); startPlateJob(1);
@@ -6201,11 +6213,20 @@ export default function AutoCache() {
                     Le cache plaque est affiché dans le viseur : l'utilisateur
                     cadre pour que la plaque tombe dedans, et la position visée
                     part avec la photo. Sans caméra (poste fixe sans webcam),
-                    le bouton ne sert à rien : il n'apparaît pas. */}
+                    le bouton ne sert à rien : il n'apparaît pas.
+
+                    Bouton NEUTRE, pas orange : c'est une option, pas le chemin
+                    principal. En orange il attirait le clic d'un nouvel
+                    arrivant qui voulait simplement importer ses photos — et
+                    tombait sur une demande d'accès à la caméra. */}
                 {hasCamera && (
                   <div style={{ marginBottom: 12 }}>
-                    <button onClick={() => setShowGuidedTour(true)}
-                      style={{ width: "100%", background: "#f26522", border: "1px solid #f26522", color: "#090909", padding: "11px 0", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
+                    <button onClick={() => {
+                        if (guidedIntroSeen()) { setShowGuidedTour(true); return; }
+                        setGuidedIntroSkip(false);
+                        setShowGuidedIntro(true);
+                      }}
+                      style={{ width: "100%", background: "transparent", border: "1px solid var(--c-2a2a2a)", color: "var(--c-ddd)", padding: "11px 0", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
                       ▣ Parcours photo guidé — photographier le véhicule
                     </button>
                     <div style={{ fontSize: 10, color: "var(--c-aaa)", marginTop: 5, textAlign: "center", fontFamily: "var(--font-apple)" }}>
@@ -7822,6 +7843,55 @@ export default function AutoCache() {
           </div>
         );
       })()}
+
+      {/* ── Parcours photo guidé : avertissement caméra ──
+          Le navigateur demandera l'accès à la caméra dès l'ouverture du
+          viseur. Mieux vaut l'annoncer ici, en français et avec un bouton
+          Annuler, qu'un bandeau système surgissant sans contexte. */}
+      {showGuidedIntro && (
+        <div onClick={() => setShowGuidedIntro(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 9400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "var(--c-141414)", border: "1px solid var(--c-2a2a2a)", borderRadius: 6, padding: isMobile ? "24px 20px" : "32px 34px", maxWidth: 420, width: "94%", fontFamily: "var(--font-apple)" }}>
+            <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 10 }}>
+              Parcours photo guidé
+            </div>
+            <div style={{ fontSize: 13, color: "var(--c-ddd)", lineHeight: 1.65, marginBottom: 14 }}>
+              Ce mode utilise <strong>la caméra de votre appareil</strong> pour
+              photographier le véhicule en direct, avec le cache plaque déjà
+              positionné à l’écran. Votre navigateur va vous demander
+              l’autorisation.
+            </div>
+            <div style={{ fontSize: 11, color: "var(--c-aaa)", lineHeight: 1.65, marginBottom: 18 }}>
+              Rien n’est envoyé pendant la prise de vue : tout se passe sur
+              votre appareil. Pour importer des photos déjà prises, fermez
+              cette fenêtre et utilisez la zone d’import juste au-dessus.
+            </div>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", userSelect: "none", marginBottom: 18 }}>
+              <input type="checkbox" checked={guidedIntroSkip}
+                onChange={e => setGuidedIntroSkip(e.target.checked)}
+                style={{ width: 15, height: 15, accentColor: "#f26522", cursor: "pointer", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: "var(--c-ddd)" }}>Ne plus afficher ce message</span>
+            </label>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setShowGuidedIntro(false)}
+                style={{ flex: "0 0 auto", background: "transparent", border: "1px solid var(--c-2a2a2a)", color: "var(--c-ddd)", padding: "11px 18px", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
+                Annuler
+              </button>
+              <button onClick={() => {
+                  if (guidedIntroSkip) rememberGuidedIntro();
+                  setShowGuidedIntro(false);
+                  setShowGuidedTour(true);
+                }}
+                style={{ flex: 1, background: "#f26522", border: "none", color: "#090909", padding: "11px 0", cursor: "pointer", fontFamily: "var(--font-apple)", fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3 }}>
+                Continuer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Parcours photo guidé : prise de vue avec le cache dans le viseur ── */}
       {showGuidedTour && (

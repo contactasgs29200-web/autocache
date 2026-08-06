@@ -26,20 +26,33 @@ sa voiture *pour que la plaque tombe dans le cache*. Le cache affiché est le
 sien (son logo), pas un rectangle abstrait : ce qu'il voit pendant la visée est
 ce qui sera posé.
 
-À la sortie, les photos rejoignent le lot courant et **passent par le pipeline
-habituel** : détection de plaque, fond, colorimétrie. Tout reste ajustable
-ensuite — déplacer le cache, en ajouter un deuxième, rogner, changer le fond.
+À la sortie, les photos rejoignent le lot courant. Le cache est posé **là où
+il a été visé**, sans aucune détection ; le reste du pipeline (fond,
+colorimétrie) s'applique normalement. Tout reste ajustable ensuite — déplacer
+le cache, en ajouter un deuxième, rogner, changer le fond.
 
 ---
 
-## 2. Coût
+## 2. Coût : zéro
 
-**Zéro appel API pendant la prise de vue.** Le contrôle d'exposition et de
-netteté est un calcul local sur le flux vidéo (96 × 72 px, 4 fois par seconde),
-et il est **indicatif** : il conseille, il ne bloque jamais le déclencheur.
-C'est l'utilisateur qui décide si sa photo à contre-jour lui convient.
+**Aucun appel facturé, ni pendant ni après la prise de vue.** C'est le second
+intérêt de l'option, à égalité avec le confort de cadrage.
 
-Les photos consomment ensuite le quota habituel, comme des photos importées.
+Le contrôle d'exposition et de netteté est un calcul local sur le flux vidéo
+(96 × 72 px, 4 fois par seconde), et il est **indicatif** : il conseille, il ne
+bloque jamais le déclencheur. C'est l'utilisateur qui décide si sa photo à
+contre-jour lui convient.
+
+Surtout, les quatre vues du parcours ne repassent par **aucun détecteur** :
+ni le modèle local, ni Plate Recognizer, ni Claude. Demander à quelqu'un
+d'aligner sa plaque au pixel près pour aller ensuite la chercher avec un
+détecteur — qui la déplacerait, et serait facturé — n'aurait aucun sens.
+`plateFromGuidedQuad` transforme la visée en résultat de détection, et le
+pipeline le consomme comme s'il venait d'un détecteur.
+
+Restent payants, comme partout ailleurs : les **photos bonus** (cadrage libre,
+donc détection normale) et le **mode Showroom** s'il est activé (détourage et
+détection de véhicule). Les photos consomment le quota habituel.
 
 ---
 
@@ -57,10 +70,10 @@ Points d'accroche dans `App.jsx` :
 
 | Élément | Rôle |
 |---|---|
-| `handleGuidedPhotos` | ajoute les photos au lot, avec leur `plateHint` |
-| `plateFromGuidedHint` | transforme une visée en résultat de détection |
-| `detectPlate(file, regions, hintQuad)` | 3ᵉ paramètre : la visée |
-| `startPlateJob` | transmet le `plateHint` de chaque photo au préfetch |
+| `handleGuidedPhotos` | ajoute les photos au lot, avec leur `plateQuad` |
+| `plateFromGuidedQuad` | transforme une visée en résultat de détection |
+| `startPlateJob` | court-circuite la détection quand la photo a un `plateQuad` |
+| `guidedIntroSeen` / `rememberGuidedIntro` | mémorisent « ne plus afficher » l'avertissement caméra |
 
 ### Le gabarit du cache — mesuré, pas calculé
 
@@ -107,11 +120,33 @@ Les tests rejouent la mesure des photos (même rectangle d'aire minimale) sur le
 gabarit produit et la comparent au tableau ci-dessus : ils testent ce que voit
 l'utilisateur, pas les constantes d'entrée.
 
-Le cache reste **centré horizontalement** sur toutes les vues, y compris les
-3/4 où la plaque d'une voiture centrée serait un peu décalée. C'est un choix
-d'usage : centrer la plaque donne un repère unique, et la composition qui en
-découle (le véhicule qui se développe d'un côté) est celle des photos
-d'annonce.
+### La position : là où tombe la plaque, pas au milieu de l'écran
+
+Un gabarit centré sur les quatre vues obligeait l'utilisateur à centrer sa
+**plaque**, donc à décadrer son véhicule. Sur un 3/4 avant gauche, la plaque
+tombe naturellement en bas à gauche du cadre.
+
+`plateCenterForStep(stepId, aspect)` place donc le gabarit là où la plaque
+atterrit quand le véhicule est bien cadré : aligner la plaque revient à cadrer
+le véhicule, d'un seul geste. Les valeurs viennent des mêmes photos —
+part de la largeur du cadre occupée par le véhicule, rapport hauteur/largeur
+apparent, et position du cache dans ce rectangle :
+
+| Vue | Véhicule (% largeur) | H/L apparent | Cache dans le véhicule |
+|---|---|---|---|
+| 3/4 avant gauche | 72,0 % | 0,538 | 12,5 % / 88,8 % |
+| Face avant | 59,4 % | 0,823 | 52,2 % / 96,3 % |
+| 3/4 avant droit | 78,7 % | 0,522 | 89,5 % / 87,1 % |
+| Arrière | 65,9 % | 0,743 | 53,8 % / 89,5 % |
+
+Formuler la position ainsi — plutôt que « le cache est à 75 % de la hauteur » —
+est ce qui la rend juste dans les deux orientations : en portrait le véhicule
+occupe moins de hauteur, donc la plaque remonte dans le cadre. Sur un écran de
+téléphone, ça donne (23 %, 59 %) pour le 3/4 gauche et (81 %, 59 %) pour le
+3/4 droit ; sur un 4:3 paysage, (23 %, 70 %) et (81 %, 70 %).
+
+Un garde-fou empêche le gabarit de sortir du cadre sur un écran très allongé :
+invisible, il serait invisable.
 
 ### « Ce qui est visé est ce qui est capturé »
 
@@ -157,6 +192,12 @@ trois secondes ; une plaque restée lisible, non.
 - **On peut commencer par la vue qu'on veut.** Les quatre onglets sont
   cliquables. L'ordre proposé est une aide, pas une contrainte — un véhicule
   contre un mur impose parfois de commencer par l'arrière.
+- **Le bouton est neutre, pas orange.** C'est une option, pas le chemin
+  principal. En orange, il attirait le clic d'un nouvel arrivant qui voulait
+  simplement importer ses photos — et tombait sur une demande d'accès à la
+  caméra. Un avertissement explicite précède désormais l'ouverture du viseur,
+  avec un « ne plus afficher » stocké en local (préférence d'appareil : c'est
+  l'appareil qui a, ou non, une caméra).
 - **Le contrôle qualité ne bloque pas.** Il affiche « stabilisez l'appareil » ou
   « surexposé » sous la consigne. Un déclencheur grisé sur une photo que
   l'utilisateur juge bonne serait une régression, pas une aide.

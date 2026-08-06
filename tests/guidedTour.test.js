@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GUIDED_STEPS, BONUS_STEP, PLATE_FRAME,
-  stepById, plateQuadForStep, quadBBox, coverSourceRect,
+  GUIDED_STEPS, BONUS_STEP, FRAME_CENTER,
+  stepById, plateQuadForStep, plateCenterForStep, quadBBox, coverSourceRect,
   doneStepIds, nextPendingStepIndex, isTourComplete, bonusCount,
   tourFileName, orderedShots, tourProgress,
   blurScore, meanLuma, frameAdvice, QUALITY,
@@ -100,13 +100,51 @@ test('le gabarit ne dépend pas de l’orientation de l’écran', () => {
   }
 });
 
-test('le cache reste centré sur le milieu du viseur', () => {
+test('le cache se place là où tombe la plaque, pas au centre de l’écran', () => {
+  const A = 390 / 640;
+  const g = plateCenterForStep('front_left_34', A);
+  const d = plateCenterForStep('front_right_34', A);
+  const f = plateCenterForStep('front', A);
+  const r = plateCenterForStep('rear', A);
+
+  // 3/4 avant gauche : en bas à GAUCHE. 3/4 avant droit : en bas à DROITE.
+  assert.ok(g.cx < 0.3, `3/4 gauche cx = ${g.cx}`);
+  assert.ok(d.cx > 0.7, `3/4 droit cx = ${d.cx}`);
+  // Miroir l'un de l'autre, à un cheveu près (le cadrage des deux photos de
+  // référence n'était pas rigoureusement symétrique).
+  assert.ok(Math.abs((g.cx - 0.5) + (d.cx - 0.5)) < 0.05);
+  assert.ok(Math.abs(g.cy - d.cy) < 0.02);
+
+  // Vues droites : à peu près centrées horizontalement.
+  for (const c of [f, r]) assert.ok(Math.abs(c.cx - 0.5) < 0.05, `cx = ${c.cx}`);
+  // Toutes sous le milieu : une plaque est en bas de calandre.
+  for (const c of [g, d, f, r]) {
+    assert.ok(c.cy > FRAME_CENTER.cy && c.cy < 0.75, `cy = ${c.cy}`);
+  }
+});
+
+test('la position suit le rapport de l’écran, pas une hauteur figée', () => {
+  // En paysage, le véhicule occupe plus de hauteur : la plaque descend dans le
+  // cadre. Recopier « 75 % de la hauteur » ferait viser à côté en portrait.
   for (const id of Object.keys(REFERENCE)) {
-    const q = plateQuadForStep(id, 3 / 4);
-    const cx = (q.tl.x + q.tr.x + q.br.x + q.bl.x) / 4;
-    const cy = (q.tl.y + q.tr.y + q.br.y + q.bl.y) / 4;
-    assert.ok(Math.abs(cx - PLATE_FRAME.cx) < 1e-9, `${id} cx = ${cx}`);
-    assert.ok(Math.abs(cy - PLATE_FRAME.cy) < 1e-9, `${id} cy = ${cy}`);
+    const portrait = plateCenterForStep(id, 390 / 640);
+    const paysage = plateCenterForStep(id, 1858 / 1394);
+    assert.equal(portrait.cx, paysage.cx, `${id} : la position horizontale ne dépend pas du format`);
+    assert.ok(paysage.cy > portrait.cy + 0.05, `${id} : ${paysage.cy} vs ${portrait.cy}`);
+  }
+});
+
+test('le gabarit reste visible même sur un écran très allongé', () => {
+  // Sans garde-fou, le calcul pousserait le cache hors du cadre : invisible,
+  // donc invisable.
+  for (const [W, H] of [[1200, 300], [300, 1200], [900, 400]]) {
+    for (const s of GUIDED_STEPS) {
+      const q = plateQuadForStep(s.id, W / H);
+      for (const p of [q.tl, q.tr, q.br, q.bl]) {
+        assert.ok(p.x > 0 && p.x < 1 && p.y > 0 && p.y < 1,
+          `${s.id} en ${W}x${H} : coin hors cadre (${p.x}, ${p.y})`);
+      }
+    }
   }
 });
 

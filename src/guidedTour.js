@@ -5,25 +5,31 @@
 //  prises imposées : 3/4 avant gauche, face avant, 3/4 avant droit, arrière.
 //  Il peut ensuite ajouter autant de photos bonus qu'il veut.
 //
-//  La particularité : le CACHE PLAQUE est déjà dessiné au milieu de l'écran
-//  pendant la visée. L'utilisateur n'aligne pas une plaque sur un cache posé
-//  après coup — il cadre son véhicule pour que sa plaque tombe dans le cache.
-//  La position du cache à l'écran est donc connue AVANT la photo : elle est
-//  transmise au pipeline comme indice de localisation (`plateHint`), ce qui
-//  évite une passe de localisation et donne un repli fiable si la détection
-//  ne trouve rien.
+//  La particularité : le CACHE PLAQUE est déjà dessiné dans le viseur pendant
+//  la visée. L'utilisateur n'aligne pas une plaque sur un cache posé après
+//  coup — il cadre son véhicule pour que sa plaque tombe dans le cache.
+//
+//  Deux conséquences, qui tiennent tout le reste de ce fichier :
+//
+//  1. Le gabarit n'est PAS au centre de l'écran. Il est là où la plaque tombe
+//     quand le véhicule est bien cadré — en bas à gauche sur un 3/4 avant
+//     gauche. Aligner la plaque revient alors à cadrer le véhicule, d'un seul
+//     geste. Taille, inclinaison et position viennent de photos réelles.
+//
+//  2. La position du cache est connue AVANT la photo, donc aucune détection
+//     n'est lancée derrière : le cache est posé là, point. Pas d'appel réseau,
+//     pas de coût par photo, et rien ne vient déplacer un cache que
+//     l'utilisateur a placé lui-même (il reste ajustable ensuite).
 //
 //  Aucune dépendance navigateur ici : tout est testable en Node. Le composant
 //  React (GuidedTour) n'ajoute que la caméra et l'UI.
 // =============================================================================
 
 /**
- * Position du cache plaque dans le viseur, en coordonnées normalisées.
- * `cy` est légèrement sous le milieu : une plaque se trouve en bas de calandre,
- * et viser pile le centre obligerait à pointer l'appareil vers le sol.
- * La TAILLE, elle, dépend de la vue : voir `plate` sur chaque étape.
+ * Le véhicule est visé centré dans le cadre : c'est autour de ce point que se
+ * calcule la position du cache, vue par vue.
  */
-export const PLATE_FRAME = { cx: 0.5, cy: 0.56 };
+export const FRAME_CENTER = { cx: 0.5, cy: 0.5 };
 
 // =============================================================================
 //  Géométrie du gabarit — mesurée, pas calculée.
@@ -60,6 +66,39 @@ export const PLATE_FRAME = { cx: 0.5, cy: 0.56 };
 // Épaisseur du bord proche rapportée au bord lointain, sur une vue 3/4.
 const NEAR_FAR = 1.08;
 
+// =============================================================================
+//  Position du gabarit — elle non plus n'est pas au centre de l'écran.
+//
+//  Un cache au milieu du viseur sur les quatre vues obligeait l'utilisateur à
+//  centrer sa PLAQUE, donc à décadrer son véhicule : sur un 3/4 avant gauche,
+//  la plaque tombe naturellement en bas à gauche du cadre, pas au centre.
+//  Le gabarit est donc placé là où la plaque atterrit quand le véhicule est
+//  bien cadré — l'utilisateur qui aligne sa plaque cadre du même geste.
+//
+//  `car` est relevé sur les mêmes photos de référence : part de la largeur du
+//  cadre occupée par le véhicule, rapport hauteur/largeur du véhicule tel
+//  qu'il apparaît, et position du cache DANS ce rectangle. Cette formulation
+//  passe d'une orientation d'écran à l'autre, ce qu'un simple « le cache est à
+//  75 % de la hauteur » ne ferait pas : en portrait, le véhicule occupe moins
+//  de hauteur, donc la plaque remonte dans le cadre.
+// =============================================================================
+
+/**
+ * Centre du cache dans le viseur, en coordonnées normalisées, pour une vue et
+ * un rapport d'écran donnés.
+ */
+export function plateCenterForStep(stepId, aspect = 3 / 4, center = FRAME_CENTER) {
+  const step = stepById(stepId);
+  const a = Number.isFinite(aspect) && aspect > 0 ? aspect : 3 / 4;
+  const car = step?.car ?? GUIDED_STEPS[1].car;
+  return {
+    cx: center.cx + (car.relX - 0.5) * car.fill,
+    // Le décalage vertical se calcule en largeurs de viseur (le véhicule y est
+    // mesuré), puis se convertit en hauteur d'écran.
+    cy: center.cy + (car.relY - 0.5) * car.fill * car.ratio * a,
+  };
+}
+
 /**
  * Les quatre prises du parcours, dans l'ordre de marche autour du véhicule :
  * on commence à l'avant gauche, on passe devant, on continue vers l'avant
@@ -69,6 +108,9 @@ const NEAR_FAR = 1.08;
  * référence : `w` en fraction de la largeur du viseur, `ratio` = longueur /
  * hauteur, `rotation` en degrés (positif = le cache descend vers la droite),
  * `near` = côté dont le bord est le plus proche de l'appareil.
+ *
+ * `car` = comment le véhicule occupe le cadre sur ces mêmes photos, et où le
+ * cache se place dedans — c'est ce qui sort le gabarit du centre de l'écran.
  */
 export const GUIDED_STEPS = [
   {
@@ -78,6 +120,7 @@ export const GUIDED_STEPS = [
     instruction: 'Placez-vous à l’avant gauche du véhicule',
     detail: 'On doit voir la calandre et le flanc conducteur.',
     plate: { w: 0.123, ratio: 3.56, rotation: 14.1, near: 'right' },
+    car: { fill: 0.720, ratio: 0.5375, relX: 0.125, relY: 0.888 },
   },
   {
     id: 'front',
@@ -86,6 +129,7 @@ export const GUIDED_STEPS = [
     instruction: 'Placez-vous pile en face de l’avant',
     detail: 'Calandre bien parallèle à l’écran.',
     plate: { w: 0.230, ratio: 5.49, rotation: 0, near: null },
+    car: { fill: 0.594, ratio: 0.8234, relX: 0.522, relY: 0.963 },
   },
   {
     id: 'front_right_34',
@@ -94,6 +138,7 @@ export const GUIDED_STEPS = [
     instruction: 'Passez à l’avant droit du véhicule',
     detail: 'On doit voir la calandre et le flanc passager.',
     plate: { w: 0.124, ratio: 3.39, rotation: -18.2, near: 'left' },
+    car: { fill: 0.787, ratio: 0.5220, relX: 0.895, relY: 0.871 },
   },
   {
     id: 'rear',
@@ -102,6 +147,7 @@ export const GUIDED_STEPS = [
     instruction: 'Contournez le véhicule et placez-vous derrière',
     detail: 'Hayon bien parallèle à l’écran.',
     plate: { w: 0.227, ratio: 5.06, rotation: 0, near: null },
+    car: { fill: 0.659, ratio: 0.7426, relX: 0.538, relY: 0.895 },
   },
 ];
 
@@ -134,10 +180,11 @@ const DEFAULT_PLATE = GUIDED_STEPS[1].plate;
  * quadrilatère est donc construit et tourné dans une unité commune — la
  * largeur du viseur — puis reconverti en y à la toute fin.
  */
-export function plateQuadForStep(stepId, aspect = 3 / 4, frame = PLATE_FRAME) {
+export function plateQuadForStep(stepId, aspect = 3 / 4, center = FRAME_CENTER) {
   const step = stepById(stepId);
   const a = Number.isFinite(aspect) && aspect > 0 ? aspect : 3 / 4;
   const g = step?.plate ?? DEFAULT_PLATE;
+  const { cx, cy } = plateCenterForStep(stepId, a, center);
 
   const w = g.w;                                  // en largeurs de viseur
   // `ratio` a été relevé sur le rectangle englobant du cache : la hauteur qu'il
@@ -153,9 +200,16 @@ export function plateQuadForStep(stepId, aspect = 3 / 4, frame = PLATE_FRAME) {
   const cos = Math.cos(rad), sin = Math.sin(rad);
   // Rotation autour du centre, y vers le bas : un angle positif fait descendre
   // le bord droit, comme sur une vue 3/4 avant gauche.
+  // Marge de sécurité : sur un écran très allongé, le calcul pourrait pousser
+  // le gabarit hors du cadre — il resterait invisible, donc invisable.
+  const halfW = (Math.abs(w * cos) + Math.abs(hNear * sin)) / 2;
+  const halfH = (Math.abs(w * sin) + Math.abs(hNear * cos)) / 2 * a;
+  const ox = Math.min(Math.max(cx, halfW + 0.01), 1 - halfW - 0.01);
+  const oy = Math.min(Math.max(cy, halfH + 0.02), 1 - halfH - 0.02);
+
   const place = (u, v) => ({
-    x: clamp01(frame.cx + (u * cos - v * sin)),
-    y: clamp01(frame.cy + (u * sin + v * cos) * a),
+    x: clamp01(ox + (u * cos - v * sin)),
+    y: clamp01(oy + (u * sin + v * cos) * a),
   });
 
   return {

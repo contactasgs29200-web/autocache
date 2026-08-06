@@ -11,9 +11,13 @@ import {
 //
 //  Quatre photos imposées (3/4 avant gauche, face, 3/4 avant droit, arrière),
 //  puis autant de photos bonus que voulu. Sur les quatre imposées, le CACHE
-//  PLAQUE est déjà dessiné au milieu du viseur : l'utilisateur cadre son
-//  véhicule pour que la plaque tombe dedans, et la photo part avec la position
-//  du cache (`plateHint`) — le pipeline sait déjà où chercher.
+//  PLAQUE est déjà dessiné dans le viseur — à l'endroit exact où la plaque
+//  tombe quand le véhicule est bien cadré, donc en bas à gauche sur un 3/4
+//  avant gauche, pas au centre. L'utilisateur cadre pour que sa plaque entre
+//  dans le gabarit, et la photo part avec cette position (`plateQuad`).
+//
+//  Le cache sera posé LÀ, sans détection : aucun appel réseau, aucun coût, et
+//  rien ne vient déplacer un cache que l'utilisateur a aligné lui-même.
 //
 //  Ce qui est capturé est exactement ce qui est visé : la photo est recadrée
 //  sur la zone visible du viseur (object-fit: cover), sans quoi le cache ne
@@ -186,7 +190,8 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
         stepId: step.id,
         // Le cache est dessiné dans le viseur, donc dans la zone capturée :
         // ses coordonnées normalisées valent telles quelles dans la photo.
-        plateHint: bonusMode ? null : plateQuadForStep(step.id, canvas.width / canvas.height),
+        // C'est cette position qui sera posée, sans détection.
+        plateQuad: bonusMode ? null : plateQuadForStep(step.id, canvas.width / canvas.height),
       };
 
       // Reprendre une étape remplace sa photo au lieu d'en empiler une seconde.
@@ -229,7 +234,7 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
     setFinishing(true);
     const items = orderedShots(shotsRef.current).map(({ shot, name, stepId }) => ({
       file: new File([shot.blob], name, { type: "image/jpeg" }),
-      plateHint: shot.plateHint ?? null,
+      plateQuad: shot.plateQuad ?? null,
       stepId,
     }));
     onDone?.(items);
@@ -269,10 +274,11 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
           </div>
 
           <div style={{ fontSize: 11, color: "var(--c-aaa)", marginBottom: 18, lineHeight: 1.7 }}>
-            Le cache plaque est déjà positionné sur les vues du parcours : il sera
-            posé exactement là où vous avez aligné la plaque. Vous pourrez ensuite
-            l’ajuster, en ajouter un autre, ou rogner chaque photo comme
+            Sur les vues du parcours, le cache sera posé exactement là où vous
+            l’avez aligné — aucune détection n’est relancée. Vous pourrez
+            ensuite l’ajuster, en ajouter un autre, ou rogner chaque photo comme
             d’habitude.
+            {progress.bonus > 0 && " Les photos bonus, au cadrage libre, passent par la détection automatique."}
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -284,7 +290,7 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
             </button>
             <button onClick={finish} disabled={finishing || !shots.length}
               style={{ flex: 1, minWidth: 150, background: shots.length ? "#27ae60" : "var(--c-1a1a1a)", border: "none", color: shots.length ? "#fff" : "var(--c-444)", padding: "12px 0", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: finishing || !shots.length ? "default" : "pointer", fontFamily: "var(--font-apple)" }}>
-              {finishing ? "Transfert…" : `Utiliser ces ${ordered.length} photos`}
+              {finishing ? "Transfert…" : ordered.length > 1 ? `Utiliser ces ${ordered.length} photos` : "Utiliser cette photo"}
             </button>
           </div>
 
@@ -344,7 +350,7 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
                 surface de l'app : ses couleurs sont figées claires, une
                 variable de thème y virerait au gris sombre en thème JOUR. */}
             <div style={{ fontSize: 11, color: quality ? "#e8a33d" : "rgba(255,255,255,0.72)", marginTop: 4, lineHeight: 1.5 }}>
-              {quality ? quality.message : bonusMode ? step.detail : "Cadrez pour que la plaque entre dans le cache"}
+              {quality ? quality.message : bonusMode ? step.detail : "Cadrez le véhicule pour que la plaque entre dans le cache"}
             </div>
           </div>
         )}
