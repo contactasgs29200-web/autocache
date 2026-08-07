@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { periodsElapsed, advanceAnchor, formuleFromInterval } from "../src/subscriptionQuota.js";
 import { writeEntitlements, entitlementsOf, freshUser } from "./_entitlements.js";
+import { subscriptionIdOfInvoice } from "./_stripeShapes.js";
 
 // ⚠ `export const config = { api: { bodyParser: false } }` est une convention
 // Next.js. Ce projet est en Vite : sur les fonctions Vercel, cette déclaration
@@ -198,13 +199,16 @@ export default async function handler(req, res) {
       // Conforme à l'article 5 des CGV. L'accès est restauré automatiquement
       // par `invoice.paid` dès qu'une relance aboutit.
       const invoice = event.data.object;
-      if (invoice.subscription) {
-        const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+      const subId = subscriptionIdOfInvoice(invoice);
+      if (subId) {
+        const subscription = await stripe.subscriptions.retrieve(subId);
         const userId = await resolveUserId(subscription);
         if (userId) {
           await setUserPlan(userId, "trial");
           console.warn(`[webhook] paiement échoué (tentative ${invoice.attempt_count}) — user ${userId} : accès suspendu jusqu'à régularisation`);
         }
+      } else {
+        console.warn(`[webhook] facture ${invoice.id} sans abonnement rattaché — aucune suspension`);
       }
     }
 
@@ -215,8 +219,9 @@ export default async function handler(req, res) {
       //    reremettre le quota à zéro si le cycle n'a pas changé, pour ne pas
       //    offrir un second quota sur une même période facturée.
       const invoice = event.data.object;
-      if (invoice.subscription) {
-        const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+      const subId = subscriptionIdOfInvoice(invoice);
+      if (subId) {
+        const subscription = await stripe.subscriptions.retrieve(subId);
         const userId  = await resolveUserId(subscription);
         const plan    = subscription.metadata?.plan || "premium";
         const formule = formuleFromInterval(
@@ -233,6 +238,7 @@ export default async function handler(req, res) {
           const current = await freshUser(userId);
           const anchor = entitlementsOf(current).periodStart;
           const periods = anchor ? periodsElapsed(formule, anchor) : 0;
+          const nouvelleFenetre = !anchor || periods >= 1;
           if (!anchor) {
             meta.photos_used = 0;
             meta.headlight_photos_used = 0;
@@ -243,8 +249,10 @@ export default async function handler(req, res) {
             meta.photos_period_start = advanceAnchor(formule, anchor, periods);
           }
           await writeEntitlements(userId, meta);
-          console.log(`[webhook] paiement encaissé (${invoice.billing_reason}) — user ${userId} : accès actif${isNewCycle ? ", quota remis à zéro" : ""}`);
+          console.log(`[webhook] paiement encaissé (${invoice.billing_reason}) — user ${userId} : accès actif${nouvelleFenetre ? ", quota remis à zéro" : ""}`);
         }
+      } else {
+        console.warn(`[webhook] facture ${invoice.id} sans abonnement rattaché — quota inchangé`);
       }
     }
 

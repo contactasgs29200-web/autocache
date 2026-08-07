@@ -2,6 +2,7 @@
 import Stripe from "stripe";
 import { requireUser } from "./_auth.js";
 import { formuleFromInterval } from "../src/subscriptionQuota.js";
+import { periodOf } from "./_stripeShapes.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
@@ -26,20 +27,6 @@ export default async function handler(req, res) {
   // n'a plus aucun moyen de comprendre pourquoi son accès est coupé, ni de
   // mettre sa carte à jour.
   const LIVE_STATUSES = ["active", "trialing", "past_due", "unpaid"];
-
-  // Bornes de la période en cours.
-  // Les versions récentes de l'API Stripe ont déplacé `current_period_start` et
-  // `current_period_end` de l'abonnement vers ses lignes : lus à l'ancien
-  // emplacement ils valent `undefined`, et l'interface affichait « Invalid
-  // Date » et « NaN jour ». On lit les deux emplacements pour rester juste
-  // quelle que soit la version d'API du compte.
-  function periodOf(sub) {
-    const item = sub?.items?.data?.[0];
-    return {
-      start: sub?.current_period_start ?? item?.current_period_start ?? null,
-      end:   sub?.current_period_end   ?? item?.current_period_end   ?? null,
-    };
-  }
 
   async function findSubscription() {
     const { data } = await stripe.subscriptions.list({
