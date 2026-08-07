@@ -3,39 +3,18 @@ import { createClient } from "@supabase/supabase-js";
 import { periodsElapsed, advanceAnchor, formuleFromInterval } from "../src/subscriptionQuota.js";
 import { writeEntitlements, entitlementsOf, freshUser } from "./_entitlements.js";
 import { subscriptionIdOfInvoice } from "./_stripeShapes.js";
+import { candidatesFrom, cleanSecret, secretShape } from "./_webhookBody.js";
 
-// ⚠ `export const config = { api: { bodyParser: false } }` est une convention
-// Next.js. Ce projet est en Vite : sur les fonctions Vercel, cette déclaration
-// est ignorée, la plateforme analyse le corps et consomme le flux. Le lecteur
-// ci-dessous couvre donc les trois formes sous lesquelles le corps peut se
-// présenter selon le moment où la plateforme est intervenue.
-//
-// L'enjeu : Stripe signe les OCTETS BRUTS. Un corps vide, ou ré-encodé
-// différemment, invalide la signature et l'événement est rejeté.
-async function getRawBody(req) {
-  // 1. Déjà lu par la plateforme, sous sa forme brute.
-  if (Buffer.isBuffer(req.body)) return { raw: req.body, origine: "buffer" };
-  if (typeof req.body === "string") return { raw: Buffer.from(req.body, "utf8"), origine: "texte" };
-
-  // 2. Flux intact : le cas idéal, les octets sont ceux émis par Stripe.
+// Octets du corps encore lisibles dans le flux. Vide dès que la plateforme a
+// analysé la requête avant nous — c'est le cas courant sur Vercel.
+async function readStream(req) {
   const chunks = [];
   try {
     for await (const chunk of req) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
-  } catch { /* flux déjà consommé : on bascule sur le repli */ }
-  if (chunks.length) return { raw: Buffer.concat(chunks), origine: "flux" };
-
-  // 3. Repli : la plateforme a analysé le JSON et les octets d'origine sont
-  //    perdus. On les reconstitue — Stripe émet du JSON compact et l'ordre des
-  //    clés est préservé à l'analyse, donc la signature correspond le plus
-  //    souvent. Pas toujours : un échappement unicode ou une notation
-  //    numérique inhabituelle suffit à faire diverger. D'où la trace.
-  if (req.body && typeof req.body === "object") {
-    return { raw: Buffer.from(JSON.stringify(req.body), "utf8"), origine: "reconstruit" };
-  }
-
-  return { raw: Buffer.alloc(0), origine: "vide" };
+  } catch { /* flux déjà consommé */ }
+  return chunks.length ? Buffer.concat(chunks) : null;
 }
 
 function supabaseAdmin() {
@@ -120,29 +99,42 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-  const { raw: rawBody, origine } = await getRawBody(req);
   const sig = req.headers["stripe-signature"];
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  const secret = cleanSecret(process.env.STRIPE_WEBHOOK_SECRET);
+  const candidats = candidatesFrom(req.body, await readStream(req));
 
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(rawBody, sig, secret);
-  } catch (e) {
-    // Un rejet de signature est indistinguable de l'extérieur : Stripe ne voit
-    // qu'un 400. On journalise donc de quoi trancher entre les trois causes
-    // possibles — secret absent, en-tête manquant, corps altéré — au lieu de
-    // laisser chercher.
-    console.error("[webhook] signature refusée :", e.message);
-    console.error("[webhook] diagnostic :", JSON.stringify({
-      secretConfigure: !!secret,
-      enteteSignature: !!sig,
-      origineDuCorps: origine,
-      octetsRecus: rawBody.length,
-    }));
-    return res.status(400).send(`Webhook Error: ${e.message}`);
+  // On essaie chaque écriture possible du corps et on retient celle dont la
+  // signature correspond. Une seule peut correspondre : la vérification est un
+  // HMAC, elle ne se laisse pas approcher.
+  let event = null;
+  let origineRetenue = null;
+  let dernierEchec = null;
+  for (const { raw, origine } of candidats) {
+    try {
+      event = stripe.webhooks.constructEvent(raw, sig, secret);
+      origineRetenue = origine;
+      break;
+    } catch (e) {
+      dernierEchec = e;
+    }
   }
-  if (origine !== "flux") {
-    console.warn(`[webhook] corps obtenu via « ${origine} » — la plateforme a analysé la requête avant nous`);
+
+  if (!event) {
+    // Un rejet est indistinguable de l'extérieur : Stripe ne voit qu'un 400. On
+    // journalise donc de quoi conclure. Aucune écriture du corps n'ayant
+    // convenu, la cause n'est plus le corps : c'est le secret, ou l'en-tête.
+    console.error("[webhook] signature refusée :", dernierEchec?.message ?? "aucun corps exploitable");
+    console.error("[webhook] diagnostic :", JSON.stringify({
+      secret: secretShape(secret),
+      enteteSignature: !!sig,
+      formesEssayees: candidats.map(c => `${c.origine}:${c.raw.length}o`),
+    }));
+    const message = dernierEchec?.message ?? "corps de requête vide";
+    return res.status(400).send(`Webhook Error: ${message}`);
+  }
+
+  if (origineRetenue !== "flux") {
+    console.warn(`[webhook] corps validé via « ${origineRetenue} » — la plateforme a analysé la requête avant nous`);
   }
 
   try {
