@@ -53,6 +53,27 @@ test('la bande est noire par défaut, et noir → orange en dégradé', () => {
   assert.equal(normalizeBand({ fill: 'gradient' }).color2, '#f26522');
 });
 
+// Réglages de sortie d'usine : une bande fine et légèrement translucide.
+test('hauteur et opacité par défaut : 10 % et 85 %', () => {
+  assert.equal(DEFAULT_BAND.height, 0.10);
+  assert.equal(DEFAULT_BAND.opacity, 0.85);
+  const neuf = normalizeBand(null);
+  assert.equal(neuf.height, 0.10);
+  assert.equal(neuf.opacity, 0.85);
+  // Les valeurs restent dans les bornes des curseurs.
+  assert.ok(neuf.height >= BAND_HEIGHT_MIN && neuf.height <= BAND_HEIGHT_MAX);
+  assert.ok(neuf.opacity >= 0.2 && neuf.opacity <= 1);
+  // Sur une photo de 2000 px, cela fait une bande de 200 px.
+  assert.equal(computeBandLayout({ cfg: neuf, width: 2000 }).H, 200);
+});
+
+// Hauteur et opacité choisies priment, comme les couleurs.
+test('une hauteur et une opacité enregistrées ne sont pas écrasées', () => {
+  const cfg = normalizeBand({ height: 0.22, opacity: 0.4 });
+  assert.equal(cfg.height, 0.22);
+  assert.equal(cfg.opacity, 0.4);
+});
+
 // Les couleurs choisies priment sur les valeurs par défaut : elles reviennent
 // telles quelles d'une session à l'autre.
 test('des couleurs enregistrées ne sont pas écrasées par les valeurs par défaut', () => {

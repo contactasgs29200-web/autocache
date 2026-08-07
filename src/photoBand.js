@@ -29,7 +29,9 @@ export const BAND_LOGO_SCALE_MAX = 1.2;
 export const DEFAULT_BAND = {
   enabled:      false,
   scope:        "all",          // "all" | "first" | "selected"
-  height:       0.12,
+  // 10 % de la largeur : assez pour porter un nom et un numéro, assez discret
+  // pour ne pas manger le haut du véhicule sur une photo d'annonce.
+  height:       0.10,
   fill:         "solid",        // "solid" | "gradient" | "none"
   // Noir en couleur de départ : c'est le fond qui va avec le plus de
   // carrosseries, et il sert les deux modes d'un coup — bande noire en uni,
@@ -37,7 +39,9 @@ export const DEFAULT_BAND = {
   // les changer, et ses couleurs sont conservées d'une session à l'autre.
   color1:       "#000000",
   color2:       "#f26522",
-  opacity:      1,              // 0.2–1 : laisse voir la photo sous la bande
+  // 85 % : la photo transparaît juste assez sous la bande pour qu'elle se
+  // pose sur l'image au lieu d'avoir l'air collée par-dessus.
+  opacity:      0.85,           // 0.2–1
   title:        "",
   titleColor:   "#ffffff",
   subtitle:     "",
