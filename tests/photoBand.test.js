@@ -40,6 +40,27 @@ test('normalizeBand replie les énumérations inconnues', () => {
   assert.equal(normalizeBand({ scope: 'last' }).scope, 'all');
 });
 
+// Couleurs de sortie d'usine : bande noire en uni, noir vers orange en
+// dégradé. La seconde couleur ne sert qu'au dégradé, mais elle est fixée dès
+// le départ pour que le passage en dégradé donne tout de suite le bon rendu,
+// sans réglage supplémentaire.
+test('la bande est noire par défaut, et noir → orange en dégradé', () => {
+  assert.equal(DEFAULT_BAND.color1, '#000000');
+  assert.equal(DEFAULT_BAND.color2, '#f26522');
+  const neuf = normalizeBand(null);
+  assert.equal(neuf.fill, 'solid');
+  assert.equal(neuf.color1, '#000000');
+  assert.equal(normalizeBand({ fill: 'gradient' }).color2, '#f26522');
+});
+
+// Les couleurs choisies priment sur les valeurs par défaut : elles reviennent
+// telles quelles d'une session à l'autre.
+test('des couleurs enregistrées ne sont pas écrasées par les valeurs par défaut', () => {
+  const cfg = normalizeBand({ fill: 'gradient', color1: '#123456', color2: '#abcdef' });
+  assert.equal(cfg.color1, '#123456');
+  assert.equal(cfg.color2, '#abcdef');
+});
+
 // Le sens du dégradé a été retiré des réglages : une configuration enregistrée
 // avant ce changement ne doit pas le réintroduire par la porte de derrière.
 test('le sens du dégradé n\'est plus un réglage', () => {

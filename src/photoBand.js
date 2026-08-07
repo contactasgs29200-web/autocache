@@ -31,7 +31,11 @@ export const DEFAULT_BAND = {
   scope:        "all",          // "all" | "first" | "selected"
   height:       0.12,
   fill:         "solid",        // "solid" | "gradient" | "none"
-  color1:       "#0d2b6b",
+  // Noir en couleur de départ : c'est le fond qui va avec le plus de
+  // carrosseries, et il sert les deux modes d'un coup — bande noire en uni,
+  // noir vers orange dès qu'on passe en dégradé. L'utilisateur reste libre de
+  // les changer, et ses couleurs sont conservées d'une session à l'autre.
+  color1:       "#000000",
   color2:       "#f26522",
   opacity:      1,              // 0.2–1 : laisse voir la photo sous la bande
   title:        "",
