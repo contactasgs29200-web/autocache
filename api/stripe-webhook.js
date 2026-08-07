@@ -96,21 +96,6 @@ async function activateSubscription(userId, plan, formule, stripeCustomerId) {
 }
 
 export default async function handler(req, res) {
-  // Contrôle de déploiement, à ouvrir dans un navigateur.
-  //
-  // Une signature refusée renvoie le message de la bibliothèque de Stripe, mot
-  // pour mot le même avant et après correction : impossible de savoir, depuis le
-  // tableau de bord, si la version déployée est celle qu'on vient de corriger.
-  // Cette réponse lève le doute — elle dit quelle révision sert la route et si
-  // un secret y est configuré, sans jamais en révéler la valeur.
-  if (req.method === "GET") {
-    return res.status(200).json({
-      route: "stripe-webhook",
-      revision: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "inconnue",
-      secret: secretShape(cleanSecret(process.env.STRIPE_WEBHOOK_SECRET)),
-      verificationMulti: true,
-    });
-  }
   if (req.method !== "POST") return res.status(405).end();
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -156,6 +141,12 @@ export default async function handler(req, res) {
     // début de réponse, et ce message fait à lui seul plus de quatre cents
     // caractères. Place en second, le diagnostic était tronqué — donc invisible
     // exactement quand on en avait besoin.
+    //
+    // Il ne s'obtient qu'en présentant une signature invalide, et ce qu'il
+    // divulgue — une empreinte de commit, la longueur d'un secret, des tailles
+    // de charge utile — n'aide en rien à en forger une. Une route de contrôle
+    // en lecture libre avait aussi existé le temps du diagnostic ; elle a été
+    // retirée, n'exigeant elle aucune signature.
     const message = dernierEchec?.message ?? "corps de requête vide";
     return res.status(400).send(`[diagnostic] ${diagnostic}\n\nWebhook Error: ${message}`);
   }
