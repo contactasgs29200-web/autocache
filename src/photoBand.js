@@ -10,7 +10,6 @@
 // l'identique dans l'aperçu du panneau et dans l'export.
 
 export const BAND_FILLS          = ["solid", "gradient", "none"];
-export const BAND_GRADIENT_DIRS  = ["horizontal", "vertical"];
 export const BAND_LOGO_POSITIONS = ["none", "left", "right"];
 export const BAND_SCOPES         = ["all", "first", "selected"];
 
@@ -34,7 +33,6 @@ export const DEFAULT_BAND = {
   fill:         "solid",        // "solid" | "gradient" | "none"
   color1:       "#0d2b6b",
   color2:       "#f26522",
-  gradientDir:  "horizontal",   // "horizontal" | "vertical"
   opacity:      1,              // 0.2–1 : laisse voir la photo sous la bande
   title:        "",
   titleColor:   "#ffffff",
@@ -66,7 +64,6 @@ export function normalizeBand(raw) {
     fill:          oneOf(r.fill, BAND_FILLS, DEFAULT_BAND.fill),
     color1:        asColor(r.color1, DEFAULT_BAND.color1),
     color2:        asColor(r.color2, DEFAULT_BAND.color2),
-    gradientDir:   oneOf(r.gradientDir, BAND_GRADIENT_DIRS, DEFAULT_BAND.gradientDir),
     opacity:       clamp(asNum(r.opacity, DEFAULT_BAND.opacity), 0.2, 1),
     title:         asText(r.title),
     titleColor:    asColor(r.titleColor, DEFAULT_BAND.titleColor),
@@ -188,9 +185,10 @@ export function drawBand(ctx, W, cfg, logoImg, font) {
     // devient illisible, alors qu'une bande translucide reste lisible.
     ctx.globalAlpha = c.opacity;
     if (c.fill === "gradient") {
-      const g = c.gradientDir === "vertical"
-        ? ctx.createLinearGradient(0, 0, 0, L.H)
-        : ctx.createLinearGradient(0, 0, W, 0);
+      // Toujours de gauche à droite. Le sens n'est pas proposé : c'est un
+      // réglage de plus à comprendre pour un gain à peu près nul, et un
+      // dégradé vertical sur une bande large ne se lit de toute façon pas.
+      const g = ctx.createLinearGradient(0, 0, W, 0);
       g.addColorStop(0, c.color1);
       g.addColorStop(1, c.color2);
       ctx.fillStyle = g;

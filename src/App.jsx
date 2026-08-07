@@ -6349,12 +6349,11 @@ export default function AutoCache() {
                     )}
                     {band.fill !== "none" && (<>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
-                        <input type="color" value={band.color1} onChange={e => setBandField({ color1: e.target.value })} style={SWATCH} title="Couleur du fond" />
-                        {band.fill === "gradient" && <input type="color" value={band.color2} onChange={e => setBandField({ color2: e.target.value })} style={SWATCH} title="Seconde couleur" />}
-                        {band.fill === "gradient" && [["horizontal", "→"], ["vertical", "↓"]].map(([k, icon]) => (
-                          <button key={k} onClick={() => setBandField({ gradientDir: k })} title={k === "horizontal" ? "Dégradé horizontal" : "Dégradé vertical"}
-                            style={{ ...seg(band.gradientDir === k), flex: "0 0 auto", width: 34, height: 34, fontSize: 14 }}>{icon}</button>
-                        ))}
+                        <input type="color" value={band.color1} onChange={e => setBandField({ color1: e.target.value })} style={SWATCH} title={band.fill === "gradient" ? "Couleur de gauche" : "Couleur du fond"} />
+                        {/* Le dégradé va toujours de gauche à droite : les deux
+                            pastilles se lisent alors comme la bande elle-même. */}
+                        {band.fill === "gradient" && <span style={{ color: "var(--c-777)", fontSize: 13, flexShrink: 0 }}>→</span>}
+                        {band.fill === "gradient" && <input type="color" value={band.color2} onChange={e => setBandField({ color2: e.target.value })} style={SWATCH} title="Couleur de droite" />}
                         <div style={{ flex: 1 }} />
                       </div>
                       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>

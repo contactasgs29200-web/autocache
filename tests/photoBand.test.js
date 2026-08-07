@@ -38,7 +38,14 @@ test('normalizeBand replie les énumérations inconnues', () => {
   assert.equal(normalizeBand({ fill: 'damier' }).fill, DEFAULT_BAND.fill);
   assert.equal(normalizeBand({ logoPos: 'top' }).logoPos, 'none');
   assert.equal(normalizeBand({ scope: 'last' }).scope, 'all');
-  assert.equal(normalizeBand({ gradientDir: 'diagonal' }).gradientDir, 'horizontal');
+});
+
+// Le sens du dégradé a été retiré des réglages : une configuration enregistrée
+// avant ce changement ne doit pas le réintroduire par la porte de derrière.
+test('le sens du dégradé n\'est plus un réglage', () => {
+  const cfg = normalizeBand({ fill: 'gradient', gradientDir: 'vertical' });
+  assert.ok(!('gradientDir' in cfg));
+  assert.equal(cfg.fill, 'gradient');
 });
 
 test('normalizeBand garde les valeurs valides', () => {
