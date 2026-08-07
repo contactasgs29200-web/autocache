@@ -96,6 +96,21 @@ async function activateSubscription(userId, plan, formule, stripeCustomerId) {
 }
 
 export default async function handler(req, res) {
+  // Contrôle de déploiement, à ouvrir dans un navigateur.
+  //
+  // Une signature refusée renvoie le message de la bibliothèque de Stripe, mot
+  // pour mot le même avant et après correction : impossible de savoir, depuis le
+  // tableau de bord, si la version déployée est celle qu'on vient de corriger.
+  // Cette réponse lève le doute — elle dit quelle révision sert la route et si
+  // un secret y est configuré, sans jamais en révéler la valeur.
+  if (req.method === "GET") {
+    return res.status(200).json({
+      route: "stripe-webhook",
+      revision: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "inconnue",
+      secret: secretShape(cleanSecret(process.env.STRIPE_WEBHOOK_SECRET)),
+      verificationMulti: true,
+    });
+  }
   if (req.method !== "POST") return res.status(405).end();
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -123,14 +138,21 @@ export default async function handler(req, res) {
     // Un rejet est indistinguable de l'extérieur : Stripe ne voit qu'un 400. On
     // journalise donc de quoi conclure. Aucune écriture du corps n'ayant
     // convenu, la cause n'est plus le corps : c'est le secret, ou l'en-tête.
+    const diagnostic = [
+      `revision=${process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "inconnue"}`,
+      `secret=${secretShape(secret)}`,
+      `entete=${sig ? "present" : "ABSENT"}`,
+      `formes=${candidats.map(c => `${c.origine}(${c.raw.length}o)`).join("|") || "aucune"}`,
+    ].join(" ");
     console.error("[webhook] signature refusée :", dernierEchec?.message ?? "aucun corps exploitable");
-    console.error("[webhook] diagnostic :", JSON.stringify({
-      secret: secretShape(secret),
-      enteteSignature: !!sig,
-      formesEssayees: candidats.map(c => `${c.origine}:${c.raw.length}o`),
-    }));
+    console.error("[webhook] diagnostic :", diagnostic);
+
+    // Le diagnostic voyage dans le corps de la réponse, que Stripe affiche tel
+    // quel dans le tableau de bord. Il évite d'avoir à corréler à la main un
+    // rejet côté Stripe avec une ligne de journal côté Vercel — et il ne
+    // contient que des formes, jamais de valeur secrète.
     const message = dernierEchec?.message ?? "corps de requête vide";
-    return res.status(400).send(`Webhook Error: ${message}`);
+    return res.status(400).send(`Webhook Error: ${message}\n\n[diagnostic] ${diagnostic}`);
   }
 
   if (origineRetenue !== "flux") {
