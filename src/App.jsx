@@ -320,6 +320,25 @@ function BandPreview({ band, logoUrl, photoUrl }) {
   return <canvas ref={ref} style={{ display: "block", width: "100%", height: "auto" }} />;
 }
 
+// Rend la bande seule sur un PNG transparent, pour la superposer en HTML —
+// l'aperçu du rognage, où elle doit rester droite pendant que la photo pivote.
+// Tout le dessin de la bande est proportionnel à sa largeur : ce PNG peut donc
+// être étiré à n'importe quelle taille sans que le rendu en diffère.
+async function makeBandOverlayDataURL(band) {
+  if (!band) return null;
+  let logoImg = null;
+  if (band.logoUrl && band.logoPos !== "none") {
+    try { logoImg = await loadImg(band.logoUrl); } catch { /* logo illisible */ }
+  }
+  if (!bandHasContent(band, !!logoImg)) return null;
+  const W = 1400;
+  const H = Math.max(1, computeBandLayout({ cfg: band, width: W }).H);
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  drawBandOnCtx(c.getContext("2d"), W, band, logoImg);
+  return c.toDataURL("image/png");
+}
+
 // Applique la bande sur une image. `band` embarque sa propre copie du logo
 // (`logoUrl`) : la photo doit pouvoir être recomposée plus tard sans dépendre
 // de l'état courant du panneau de réglages.
@@ -3369,7 +3388,7 @@ const SUBSCRIPTION_FEATURES = [
   "Cache plaque personnalisé",
   "Logo importé ou généré",
   "Ajustements couleurs & amélioration auto",
-  "Bandeau personnalisé sur vos photos",
+  "Bandeau signature sur vos photos",
 ];
 // Ligne de clôture de la liste : annonce les évolutions à venir sans promettre
 // une fonctionnalité précise ni date.
@@ -3479,6 +3498,9 @@ export default function AutoCache() {
   const lightboxRef = useRef(null);
   useEffect(() => { lightboxRef.current = lightbox; }, [lightbox]);
   const [cropMode, setCropMode] = useState(false);
+  // Bande seule sur fond transparent, posée en HTML par-dessus le cadre de
+  // rognage : elle reste droite pendant que la photo pivote sous elle.
+  const [bandOverlayUrl, setBandOverlayUrl] = useState(null);
   const [cropBox, setCropBox] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
   const [cropDrag, setCropDrag] = useState(null); // { type, startMx, startMy, startBox }
   const [cropAngle, setCropAngle] = useState(180); // 0-360, 180 = photo droite (0° de rotation)
@@ -4268,6 +4290,9 @@ export default function AutoCache() {
         entry.band = activeBand;
         try {
           const banded = await overlayBandOnImage(clean, activeBand);
+          // On garde l'image sans la bande : c'est elle que le mode Rogner
+          // fera pivoter, la bande étant reposée droite par-dessus ensuite.
+          entry.bandBaseUrl = clean;
           if (entry.showroomDataURL) entry.showroomDataURL = banded; else entry.processed = banded;
         } catch (e) { console.error('Bandeau :', e); }
       }
@@ -4318,7 +4343,11 @@ export default function AutoCache() {
     if (apiErr && autoPlate && all.some(r => !r.plateFound && !r.autoPlateOff)) {
       setPlateErrorBanner(apiErr);
     }
-    if (newCount >= PLAN_LIMIT) setShowUpgradeModal(true);
+    // `newCount` n'a jamais existé : cette ligne levait une ReferenceError à la
+    // fin de CHAQUE traitement, avalée en promesse non gérée. L'intention est
+    // limpide — proposer le réabonnement au moment où le lot épuise le quota —
+    // et le compte se reconstitue de ce qui est déjà en portée.
+    if (photosUsed + photosToProcess.length >= PLAN_LIMIT) setShowUpgradeModal(true);
   };
 
   const start = () => startAfterInfo();
@@ -4825,7 +4854,7 @@ export default function AutoCache() {
           );
           // Ré-applique la bande (le compositing repart du décor sans elle)
           const finalShowroom = await overlayBandOnImage(sr.dataURL, prev.band);
-          const updated = { ...prev, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl };
+          const updated = { ...prev, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nd, showroomZoom: zm, showroomBlend: bl, ...(prev.band ? { bandBaseUrl: sr.dataURL } : {}) };
           setLightbox(updated);
           setResults(rs => rs.map(r => r.name === prev.name ? updated : r));
         }
@@ -4898,7 +4927,7 @@ export default function AutoCache() {
     setCropBox({ x, y, w, h });
   };
 
-  const downloadCropped = () => {
+  const downloadCropped = async () => {
     const canvas = cropCanvasRef.current;
     if (!canvas) return;
     const { x, y, w, h } = cropBox;
@@ -4907,8 +4936,11 @@ export default function AutoCache() {
     const c = document.createElement('canvas');
     c.width = sw; c.height = sh;
     c.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
-    const dataURL = c.toDataURL('image/jpeg', 0.97);
+    let dataURL = c.toDataURL('image/jpeg', 0.97);
     freeCanvas(c);
+    // Le canvas de rognage ne porte plus la bande : on la repose sur le cadre
+    // retenu, sans quoi le téléchargement direct sortirait la photo nue.
+    if (lightbox.band) dataURL = await overlayBandOnImage(dataURL, lightbox.band);
     saveImages([{ dataURL, filename: `autocache_rogné_${lightbox.name}` }]);
   };
 
@@ -4943,10 +4975,15 @@ export default function AutoCache() {
 
     if (isShowroom) {
       // Mode showroom : rogne l'image composite + la base (sans plaque) pour Ajuster
-      const [croppedShowroom, croppedBase] = await Promise.all([
-        rotateAndCropDataURL(lightbox.showroomDataURL, deg, box),
+      const [croppedClean, croppedBase] = await Promise.all([
+        rotateAndCropDataURL(lightbox.bandBaseUrl || lightbox.showroomDataURL, deg, box),
         rotateAndCropDataURL(lightbox.showroomBaseURL, deg, box),
       ]);
+      // La bande n'a pas tourné avec la photo : elle se repose droite, en haut
+      // du cadre retenu.
+      const croppedShowroom = lightbox.band
+        ? await overlayBandOnImage(croppedClean, lightbox.band)
+        : croppedClean;
       // Recalcul du transform et des coins dans l'espace rogné (seulement sans rotation)
       let newTransform = null;
       let newPlates = plateList(lightbox);
@@ -4968,7 +5005,7 @@ export default function AutoCache() {
       }
       const updated = { ...lightbox, showroomDataURL: croppedShowroom,
         showroomBaseURL: croppedBase, showroomTransform: newTransform,
-        ...plateFields(newPlates),
+        ...plateFields(newPlates), ...(lightbox.band ? { bandBaseUrl: croppedClean } : {}),
         cutoutDataURL: null, showroomBgUrl: null, cropped: true };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
@@ -4977,10 +5014,14 @@ export default function AutoCache() {
       return;
     }
 
-    const [croppedProcessed, croppedBase] = await Promise.all([
-      rotateAndCropDataURL(lightbox.processed,   deg, box),
+    const [croppedClean, croppedBase] = await Promise.all([
+      rotateAndCropDataURL(lightbox.bandBaseUrl || lightbox.processed, deg, box),
       rotateAndCropDataURL(lightbox.baseDataURL, deg, box),
     ]);
+    // Idem hors showroom : la photo pivote, la bande non.
+    const croppedProcessed = lightbox.band
+      ? await overlayBandOnImage(croppedClean, lightbox.band)
+      : croppedClean;
     // Les coins de plaque ne sont valides qu'en l'absence de rotation
     let newPlates = [];
     if (deg === 0) {
@@ -4994,7 +5035,8 @@ export default function AutoCache() {
       }));
     }
     const updated = { ...lightbox, processed: croppedProcessed,
-      baseDataURL: croppedBase ?? lightbox.baseDataURL, ...plateFields(newPlates), cropped: true };
+      baseDataURL: croppedBase ?? lightbox.baseDataURL, ...plateFields(newPlates),
+      ...(lightbox.band ? { bandBaseUrl: croppedClean } : {}), cropped: true };
     setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
     setLightbox(updated);
     resetAdjustPlates(updated);
@@ -5024,7 +5066,9 @@ export default function AutoCache() {
   // Charge la photo (ou le showroom) dès que le mode Rogner s'ouvre
   useEffect(() => {
     if (!cropMode || !lightbox) return;
-    const src = lightbox.showroomDataURL || lightbox.processed;
+    // L'image chargée est celle SANS la bande : c'est elle qui pivote sous le
+    // calque de bande, resté droit (voir bandOverlayUrl).
+    const src = lightbox.bandBaseUrl || lightbox.showroomDataURL || lightbox.processed;
     if (!src) return;
     let cancelled = false;
     loadImg(src).then(img => {
@@ -5033,7 +5077,19 @@ export default function AutoCache() {
       renderCropPreview(cropAngle);
     });
     return () => { cancelled = true; };
-  }, [cropMode, lightbox?.showroomDataURL, lightbox?.processed]);
+  }, [cropMode, lightbox?.bandBaseUrl, lightbox?.showroomDataURL, lightbox?.processed]);
+
+  // Calque de bande du mode Rogner. Généré à l'ouverture seulement : la bande
+  // ne change plus une fois la photo traitée, inutile de le refaire à chaque
+  // tour du curseur d'inclinaison.
+  useEffect(() => {
+    if (!cropMode || !lightbox?.band) { setBandOverlayUrl(null); return; }
+    let cancelled = false;
+    makeBandOverlayDataURL(lightbox.band)
+      .then(url => { if (!cancelled) setBandOverlayUrl(url); })
+      .catch(() => { if (!cancelled) setBandOverlayUrl(null); });
+    return () => { cancelled = true; };
+  }, [cropMode, lightbox?.band]);
 
   // ── Mode Ajuster ─────────────────────────────────────────────────────────
   const startAdjustDragAt = (clientX, clientY, corner) => {
@@ -5221,13 +5277,13 @@ export default function AutoCache() {
       const t = adjustShowroomTransformRef.current;
       const photoPlates = list.map(q => cornersFromShowroom(q, t));
       const url = await overlayBandOnImage(flatURL, lightbox.band); // la bande se repose par-dessus
-      const updated = { ...lightbox, ...plateFields(photoPlates), showroomDataURL: url };
+      const updated = { ...lightbox, ...plateFields(photoPlates), showroomDataURL: url, ...(lightbox.band ? { bandBaseUrl: flatURL } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
     } else {
       // Mode normal : sauvegarde la photo avec les caches plaque
       const url = await overlayBandOnImage(flatURL, lightbox.band); // la bande se repose par-dessus
-      const updated = { ...lightbox, processed: url, ...plateFields(list), ...(manualPlateMode ? { plateFound: true } : {}) };
+      const updated = { ...lightbox, processed: url, ...plateFields(list), ...(lightbox.band ? { bandBaseUrl: flatURL } : {}), ...(manualPlateMode ? { plateFound: true } : {}) };
       setResults(prev => prev.map(r => r.name === lightbox.name ? updated : r));
       setLightbox(updated);
       // Régénère le showroom avec les nouveaux coins si showroom actif
@@ -5241,7 +5297,7 @@ export default function AutoCache() {
             logoImgEl, snap.corners, snap.bgColor, nudge.x, nudge.y, zoom, true, null, showroomBlend,
             null, snap.extraCorners);
           const finalShowroom = await overlayBandOnImage(sr.dataURL, lightbox.band);
-          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend };
+          const withSR = { ...updated, showroomDataURL: finalShowroom, showroomBaseURL: sr.baseURL, showroomTransform: sr.transform, showroomOffset: nudge, showroomZoom: zoom, showroomBlend, ...(lightbox.band ? { bandBaseUrl: sr.dataURL } : {}) };
           setResults(prev => prev.map(r => r.name === snap.name ? withSR : r));
           setLightbox(prev => prev?.name === snap.name ? withSR : prev);
         } catch (e) { console.error('showroom regen (adjust):', e); }
@@ -6301,7 +6357,7 @@ export default function AutoCache() {
               <section>
                 <div style={{ fontSize: 13, letterSpacing: 3, color: "#f26522", textTransform: "uppercase", marginBottom: 4, fontFamily: "var(--font-apple)" }}>03 — Habillage</div>
                 <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginBottom: 12, lineHeight: 1.5 }}>
-                  Signez vos photos d'une bande à votre marque. Vos réglages sont conservés d'une session à l'autre.
+                  Votre nom, vos couleurs et votre logo en haut de chaque photo. Réglé une fois, conservé pour toutes vos annonces.
                 </div>
 
                 <div onClick={() => setBandField({ enabled: !band.enabled })}
@@ -6310,8 +6366,8 @@ export default function AutoCache() {
                     {band.enabled && <span style={{ color: "#090909", fontSize: 12, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: band.enabled ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>Bande en haut de la photo</div>
-                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginTop: 2 }}>Couleur ou dégradé · titre, sous-titre et logo</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: band.enabled ? "#f26522" : "var(--c-aaa)", fontFamily: "var(--font-apple)" }}>Bandeau signature</div>
+                    <div style={{ fontSize: 10, color: "var(--c-aaa)", fontFamily: "var(--font-apple)", marginTop: 2 }}>Une bande à vos couleurs en haut de la photo · titre, sous-titre et logo</div>
                   </div>
                 </div>
                 {band.enabled && (() => {
@@ -7529,6 +7585,14 @@ export default function AutoCache() {
                   onTouchStart={e => { e.preventDefault(); e.stopPropagation(); if (e.touches.length === 1 && e.touches[0]) startCropDragAt(e.touches[0].clientX, e.touches[0].clientY, "move"); }}
                   style={{ position: "absolute", left: `${cropBox.x*100}%`, top: `${cropBox.y*100}%`, width: `${cropBox.w*100}%`, height: `${cropBox.h*100}%`, border: "2px solid #f26522", cursor: "move", boxSizing: "border-box", touchAction: "none" }}
                 >
+                  {/* La bande, droite, collée en haut du cadre retenu : elle ne
+                      suit pas l'inclinaison de la photo, elle habille le
+                      résultat final. Largeur en % du cadre — le rendu de la
+                      bande étant proportionnel, l'étirement est exact. */}
+                  {bandOverlayUrl && (
+                    <img src={bandOverlayUrl} draggable={false}
+                      style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "auto", pointerEvents: "none", zIndex: 1 }} />
+                  )}
                   {/* Grille tiers */}
                   {[33.33, 66.66].map(p => (
                     <span key={`h${p}`} style={{ position: "absolute", top: `${p}%`, left: 0, right: 0, height: 1, background: "rgba(242,101,34,0.3)", pointerEvents: "none" }} />
