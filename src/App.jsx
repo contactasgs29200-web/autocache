@@ -3825,9 +3825,34 @@ export default function AutoCache() {
         setActivationFailed(true);
       })();
     }
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       setUser(data.session?.user || null);
       setAuthLoading(false);
+
+      // Les droits d'un compte — plan, formule, quota, crédits, sanction —
+      // voyagent DANS le jeton de session, et ce jeton est figé à son émission.
+      // `getSession()` ne fait que relire celui qui dort dans le navigateur :
+      // recharger la page ne rafraîchit donc rien, et un compte passé en
+      // abonnement depuis le panneau d'administration continue de s'afficher
+      // « essai » jusqu'à l'expiration du jeton, une heure plus tard. La base
+      // dit une chose, l'écran en dit une autre, et l'utilisateur recharge en
+      // vain.
+      //
+      // `getUser()` relit le compte côté serveur. On lui préfère
+      // `refreshSession()`, qui ferait tourner le jeton de rafraîchissement à
+      // chaque ouverture de page — inutile ici, et source de conflits entre
+      // plusieurs onglets. Seuls les droits affichés sont remis à jour ; les
+      // routes serveur, elles, relisent déjà le compte à chaque appel et n'ont
+      // jamais été trompées.
+      if (!data.session?.user) return;
+      try {
+        const { data: frais } = await supabase.auth.getUser();
+        if (frais?.user) {
+          setUser(prev => prev && prev.id === frais.user.id
+            ? { ...prev, app_metadata: frais.user.app_metadata, user_metadata: frais.user.user_metadata }
+            : prev);
+        }
+      } catch { /* hors ligne : les droits du jeton restent affichés */ }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "PASSWORD_RECOVERY") {
@@ -8391,6 +8416,16 @@ export default function AutoCache() {
           authHeaders={authHeaders}
           isMobile={isMobile}
           adminEmail={user.email}
+          currentUserId={user.id}
+          // Agir sur son PROPRE compte est le seul cas où l'écart entre la base
+          // et le jeton se voit immédiatement : le panneau annonce
+          // « abonnement ouvert », l'en-tête juste derrière affiche toujours
+          // « ESSAI ». On renouvelle donc le jeton sur-le-champ, sans attendre
+          // le prochain chargement de page.
+          onSelfChanged={async () => {
+            const { data } = await supabase.auth.refreshSession();
+            if (data?.user) setUser(data.user);
+          }}
         />
       )}
 

@@ -51,7 +51,7 @@ erreur, et `/cgv.html` continue d'afficher le texte statique du site.
 
 RLS est activé sur les trois tables **sans aucune politique** : seul le rôle de
 service — utilisé exclusivement par les fonctions serveur — y accède. Les CGV
-restent publiques, mais via `/api/legal-terms`, qui ne sert que les colonnes
+restent publiques, mais via `GET /api/legal`, qui ne sert que les colonnes
 publiables.
 
 ---
@@ -95,10 +95,10 @@ connecté continuerait de fonctionner jusqu'à l'expiration de son jeton.
 Côté service, `requireUser()` refuse toutes les routes d'un compte sanctionné
 avec le motif. Deux exceptions volontaires :
 
-- `/api/customer-portal` — un compte suspendu continue d'être prélevé par
+- `/api/billing` (portail client) — un compte suspendu continue d'être prélevé par
   Stripe tant qu'il n'a pas résilié. Couper le service tout en encaissant, sans
   laisser d'issue, ne se défend pas ;
-- `/api/accept-terms` — accepter des conditions n'est pas utiliser le service.
+- `POST /api/legal` (acceptation) — accepter des conditions n'est pas utiliser le service.
 
 L'utilisateur voit un écran dédié portant le motif, l'échéance quand la
 suspension est temporaire, la voie de contestation et l'accès à la résiliation.
@@ -165,6 +165,12 @@ vide ne serait opposable à personne.
 
 ## Points de vigilance
 
+- **Un changement de plan n'est pas instantané à l'écran du client.** Les
+  droits d'un compte voyagent dans son jeton de session, figé à son émission.
+  Côté serveur, le changement s'applique immédiatement — les routes relisent le
+  compte à chaque appel. Côté affichage, le client le voit au **prochain
+  chargement de sa page** : l'application relit alors le compte auprès de
+  Supabase. Sur votre propre compte, la session est renouvelée sur-le-champ.
 - **L'historique de consommation démarre à la mise en service.** Un compte
   ancien affiche `0` sur les mois antérieurs tout en ayant consommé son quota :
   `photos_monthly` n'est alimenté qu'à partir des traitements enregistrés

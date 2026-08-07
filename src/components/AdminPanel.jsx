@@ -127,7 +127,7 @@ function HistoriqueMensuel({ series }) {
 }
 
 // ── Fiche détaillée d'un compte ───────────────────────────────────────────
-function FicheClient({ fiche, onAction, occupe, message }) {
+function FicheClient({ fiche, onAction, occupe, message, estMoi }) {
   const [heures, setHeures] = useState(72);
   const [motif, setMotif] = useState("");
   const [credits, setCredits] = useState(100);
@@ -228,6 +228,11 @@ function FicheClient({ fiche, onAction, occupe, message }) {
             qui restent pilotés par Stripe.
           </div>
         )}
+        <div style={{ fontSize: 10, color: "var(--c-777)", marginTop: 8, fontFamily: "var(--font-apple)", lineHeight: 1.5 }}>
+          {estMoi
+            ? "Ce compte est le vôtre : votre session est mise à jour immédiatement après chaque modification."
+            : "Le changement est effectif tout de suite côté serveur. Le client le verra affiché au prochain chargement de sa page — son navigateur conserve jusque-là les droits reçus à sa connexion."}
+        </div>
       </>)}
 
       {bloc("Quota", <>
@@ -642,7 +647,7 @@ function OngletCGV({ appeler, occupe }) {
 }
 
 // ── Panneau ───────────────────────────────────────────────────────────────
-export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail }) {
+export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail, currentUserId, onSelfChanged }) {
   const [onglet, setOnglet] = useState("clients");
   const [donnees, setDonnees] = useState(null);
   const [chargement, setChargement] = useState(true);
@@ -701,10 +706,25 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
     const d = await appeler("/api/admin", { resource: "user-action", action, userId: selection.id, ...params });
     if (d.ok) {
       setSelection(d.user);
-      setMessageFiche({ type: "ok", text: d.message });
       // La ligne du tableau est remplacée sur place : recharger la liste
       // entière ferait sauter la position de lecture pour un seul compte.
       setDonnees(prev => prev ? { ...prev, users: prev.users.map(u => u.id === d.user.id ? d.user : u) } : prev);
+
+      // Compte de l'administrateur lui-même : ses droits viennent de changer,
+      // mais son jeton de session porte encore les anciens. Sans ce
+      // renouvellement, le panneau annonce « abonnement ouvert » pendant que
+      // l'application, derrière, continue d'afficher l'essai gratuit — et
+      // recharger la page n'y change rien, le jeton stocké étant relu tel quel.
+      let note = "";
+      if (d.user.id === currentUserId && onSelfChanged) {
+        try {
+          await onSelfChanged();
+          note = " Votre session a été mise à jour.";
+        } catch {
+          note = " Rechargez la page pour que votre propre session en tienne compte.";
+        }
+      }
+      setMessageFiche({ type: "ok", text: d.message + note });
     } else {
       setMessageFiche({ type: "err", text: d.error ?? "Action refusée." });
     }
@@ -905,7 +925,7 @@ export default function AdminPanel({ onClose, authHeaders, isMobile, adminEmail 
                     <div style={{ ...S.label, color: ORANGE }}>Fiche client</div>
                     <button style={bouton()} onClick={() => setSelection(null)}>Fermer la fiche</button>
                   </div>
-                  <FicheClient fiche={selection} onAction={agir} occupe={occupe} message={messageFiche} />
+                  <FicheClient fiche={selection} onAction={agir} occupe={occupe} message={messageFiche} estMoi={selection.id === currentUserId} />
                 </div>
               )}
             </div>
