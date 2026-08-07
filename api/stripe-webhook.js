@@ -147,12 +147,17 @@ export default async function handler(req, res) {
     console.error("[webhook] signature refusée :", dernierEchec?.message ?? "aucun corps exploitable");
     console.error("[webhook] diagnostic :", diagnostic);
 
-    // Le diagnostic voyage dans le corps de la réponse, que Stripe affiche tel
-    // quel dans le tableau de bord. Il évite d'avoir à corréler à la main un
-    // rejet côté Stripe avec une ligne de journal côté Vercel — et il ne
-    // contient que des formes, jamais de valeur secrète.
+    // Le diagnostic voyage dans le corps de la réponse, que Stripe affiche dans
+    // le tableau de bord — cela évite d'avoir à corréler à la main un rejet côté
+    // Stripe avec une ligne de journal côté Vercel. Il ne contient que des
+    // formes, jamais de valeur secrète.
+    //
+    // Il passe AVANT le message de la bibliothèque : Stripe ne conserve qu'un
+    // début de réponse, et ce message fait à lui seul plus de quatre cents
+    // caractères. Place en second, le diagnostic était tronqué — donc invisible
+    // exactement quand on en avait besoin.
     const message = dernierEchec?.message ?? "corps de requête vide";
-    return res.status(400).send(`Webhook Error: ${message}\n\n[diagnostic] ${diagnostic}`);
+    return res.status(400).send(`[diagnostic] ${diagnostic}\n\nWebhook Error: ${message}`);
   }
 
   if (origineRetenue !== "flux") {
