@@ -222,3 +222,37 @@ test('le texte de référence est un document complet et publiable', () => {
   assert.match(BASELINE_MARKDOWN, /Modification des présentes conditions/);
   assert.match(BASELINE_MARKDOWN, /suspension ou résiliation à l'initiative du Prestataire est motivée/);
 });
+
+// ── Adresse de contact ─────────────────────────────────────────────────────
+//
+// L'application affichait `contact@autocache.fr`, sur un domaine qui n'est pas
+// déposé : les messages n'arrivaient nulle part, alors que les documents légaux
+// annonçaient une tout autre adresse. Une demande RGPD est réputée formée dès
+// son envoi, et le délai d'un mois court à partir de là — une boîte inexistante
+// ne suspend pas ce délai, elle le fait courir sans que personne ne le sache.
+//
+// Une seule adresse doit donc figurer dans le produit, et ce doit être celle
+// des documents légaux.
+test('aucune adresse de contact injoignable ne subsiste dans le produit', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const fichiers = [
+    'src/App.jsx',
+    'src/legalBaseline.js',
+    'public/cgv.html',
+    'public/politique-confidentialite.html',
+  ];
+  for (const f of fichiers) {
+    const contenu = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
+    const adresses = (contenu.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi) ?? [])
+      // Les adresses d'exemple guident la saisie dans les champs de formulaire ;
+      // personne n'est censé leur écrire. `exemple.com` est d'ailleurs réservé
+      // à cet usage par la norme, donc jamais joignable par construction.
+      .filter(a => !/@(exemple|example)\.(com|org|net)$/i.test(a));
+    for (const a of adresses) {
+      assert.equal(
+        a.toLowerCase(), 'contact.asgs29200@gmail.com',
+        `${f} annonce ${a}, qui n'est pas l'adresse de contact des documents légaux`,
+      );
+    }
+  }
+});

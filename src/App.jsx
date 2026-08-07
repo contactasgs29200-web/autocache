@@ -8049,7 +8049,16 @@ export default function AutoCache() {
               {/* Footer note */}
               <div style={{ padding: "12px 24px", borderTop: "1px solid var(--c-1c1c1c)" }}>
                 <div style={{ fontSize: 12, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", lineHeight: 1.6 }}>
-                  Pour modifier vos informations, contactez-nous à <span style={{ color: "#f26522" }}>contact@autocache.fr</span>
+                  {/* Adresse de contact : la MÊME que celle des CGV, des mentions
+                      légales et de la politique de confidentialité. Une seconde
+                      adresse figurait ici, sur un domaine qui n'est pas déposé —
+                      les messages qu'un client y aurait envoyés n'arrivaient
+                      nulle part, et le RGPD fait courir les délais de réponse
+                      dès l'envoi de la demande, pas dès sa réception. */}
+                  Pour modifier vos informations, écrivez-nous à{" "}
+                  <a href="mailto:contact.asgs29200@gmail.com" style={{ color: "#f26522", textDecoration: "none" }}>
+                    contact.asgs29200@gmail.com
+                  </a>
                 </div>
               </div>
             </div>
