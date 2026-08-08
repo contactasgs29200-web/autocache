@@ -148,6 +148,41 @@ téléphone, ça donne (23 %, 59 %) pour le 3/4 gauche et (81 %, 59 %) pour le
 Un garde-fou empêche le gabarit de sortir du cadre sur un écran très allongé :
 invisible, il serait invisable.
 
+### Mode paysage
+
+Les photos d'annonce se prennent téléphone à l'horizontale. Deux cas :
+
+- **Rotation d'écran non verrouillée** : la page pivote toute seule, le viseur
+  se remesure, le gabarit suit. Rien à faire — les commandes d'orientation sont
+  alors masquées.
+- **Rotation verrouillée** (le cas courant sur iPhone) : la page reste en
+  portrait. L'image de la caméra, elle, apparaît bien à l'endroit — c'est
+  l'**interface** qui est de travers, puisque l'image suit le capteur et non
+  l'interface.
+
+Dans le second cas, l'interface entière (la « scène ») est pivotée de 90°, et
+**la vidéo est contre-pivotée d'autant** pour rester droite à l'écran. La photo
+produite est tournée du même angle : elle sort en paysage, à l'endroit.
+
+Le sens de rotation ne peut pas être deviné : avec le verrouillage actif, ni
+`screen.orientation` ni `window.orientation` ne bougent, et demander l'accès
+aux capteurs de mouvement pour ça serait une permission de trop. D'où un bouton
+`↻` pour retourner le sens. Le choix — paysage ou portrait, et le sens — est
+mémorisé localement. Le paysage est le réglage par défaut.
+
+### Le cadre 4:3
+
+Un écran de téléphone fait 2:1 ou plus. Capturer « tout ce qui reste à
+l'écran » donnait un panorama 3,2:1, à des lieues d'une photo d'annonce. Le
+viseur est donc un **cadre 4:3 centré**, le reste devenant bande noire — comme
+dans un appareil photo.
+
+Deux bénéfices en plus du format : les commandes se logent dans la bande libre
+(colonne sur le côté quand la scène est large, bandeau en bas sinon), et
+surtout le gabarit du cache retrouve **exactement** les conditions dans
+lesquelles il a été mesuré. En paysage, il tombe à (23 %, 70 %) pour le 3/4
+avant gauche — la valeur relevée sur la photo de référence.
+
 ### « Ce qui est visé est ce qui est capturé »
 
 Le viseur affiche la vidéo en `object-fit: cover`, donc **recadrée**. Capturer
@@ -201,6 +236,8 @@ trois secondes ; une plaque restée lisible, non.
 - **Le contrôle qualité ne bloque pas.** Il affiche « stabilisez l'appareil » ou
   « surexposé » sous la consigne. Un déclencheur grisé sur une photo que
   l'utilisateur juge bonne serait une régression, pas une aide.
+- **Le format de sortie suit l'orientation du viseur** : 4:3 paysage quand la
+  scène est large, 3:4 quand elle est haute. Jamais le format de l'écran.
 - **Le flux caméra est rebranché à chaque retour au viseur.** L'écran de revue
   démonte la balise `<video>` ; sans rebranchement, revenir prendre une photo
   bonus donnait un écran noir.

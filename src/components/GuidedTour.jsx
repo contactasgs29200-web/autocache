@@ -27,9 +27,46 @@ import {
 // =============================================================================
 
 const ACCENT = "#f26522";
+const LANDSCAPE_KEY = "autocache_parcours_paysage";   // { on, flip }
+// Format de capture. Un écran de téléphone fait 2:1 ou plus : capturer « tout
+// ce qui reste à l'écran » donnait un panorama 3,2:1, à des lieues des photos
+// d'annonce. Le viseur est donc un cadre 4:3 centré, comme un appareil photo —
+// c'est aussi le format sur lequel le gabarit du cache a été mesuré.
+const CAPTURE_RATIO = 4 / 3;
 const ANALYSIS_W = 96;
 const ANALYSIS_H = 72;
 const ANALYSIS_INTERVAL_MS = 250;
+
+// =============================================================================
+//  Mode paysage
+//
+//  Les photos d'annonce se prennent téléphone à l'horizontale. Si le
+//  verrouillage de rotation de l'appareil est désactivé, la page pivote toute
+//  seule et il n'y a rien à faire — le viseur se remesure et le gabarit suit.
+//  Verrouillage ACTIF (le cas courant sur iPhone), la page reste en portrait :
+//  l'image de la caméra, elle, apparaît bien à l'endroit — c'est l'INTERFACE
+//  qui est de travers.
+//
+//  On fait donc pivoter l'interface de 90°, et uniquement elle : la vidéo est
+//  contre-pivotée d'autant pour rester droite à l'écran. La photo produite est
+//  tournée du même angle, donc paysage et à l'endroit.
+//
+//  Le sens de rotation ne peut pas être deviné sans capteur (avec le
+//  verrouillage actif, ni `screen.orientation` ni `window.orientation` ne
+//  bougent), et demander l'accès aux capteurs de mouvement pour ça serait une
+//  permission de trop. D'où un bouton pour retourner le sens, mémorisé.
+// =============================================================================
+
+function readLandscapePref() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LANDSCAPE_KEY) || "null");
+    if (raw && typeof raw === "object") return { on: raw.on !== false, flip: !!raw.flip };
+  } catch { /* navigation privée */ }
+  return { on: true, flip: false };   // paysage par défaut : c'est le format des annonces
+}
+function writeLandscapePref(pref) {
+  try { localStorage.setItem(LANDSCAPE_KEY, JSON.stringify(pref)); } catch { /* ignore */ }
+}
 
 const BTN = {
   background: "transparent",
@@ -63,6 +100,22 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
   const [reviewing, setReviewing] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [frameSize, setFrameSize] = useState({ w: 3, h: 4 });
+  const [screen, setScreen] = useState(() => ({
+    w: typeof window === "undefined" ? 390 : window.innerWidth,
+    h: typeof window === "undefined" ? 640 : window.innerHeight,
+  }));
+  const [landscapePref, setLandscapePref] = useState(readLandscapePref);
+  const areaRef = useRef(null);           // zone disponible autour du cadre 4:3
+
+  // Page déjà en paysage (rotation non verrouillée, ou tablette) : rien à
+  // redresser, et surtout rien à proposer.
+  const pageLandscape = screen.w >= screen.h;
+  const rotated = landscapePref.on && !pageLandscape;
+  const stageDeg = rotated ? (landscapePref.flip ? -90 : 90) : 0;
+  // Scène large = commandes sur le côté, cadre 4:3. Scène haute = commandes en
+  // bas, cadre 3:4.
+  const wide = rotated ? screen.h > screen.w : screen.w > screen.h;
+  const captureRatio = wide ? CAPTURE_RATIO : 1 / CAPTURE_RATIO;
 
   const step = bonusMode ? BONUS_STEP : GUIDED_STEPS[stepIndex];
   const progress = tourProgress(shots);
@@ -115,22 +168,34 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
     video.play().catch(() => {});
   }, [reviewing, ready]);
 
-  // Taille du viseur — recalculée à la rotation de l'écran.
+  // Taille de l'écran et du viseur — recalculées à la rotation de l'appareil
+  // et au basculement paysage (la scène échange alors largeur et hauteur).
   useEffect(() => {
     const measure = () => {
-      const el = frameRef.current;
-      if (el?.clientWidth && el?.clientHeight) {
-        setFrameSize({ w: el.clientWidth, h: el.clientHeight });
+      setScreen({ w: window.innerWidth, h: window.innerHeight });
+      // Le cadre est le plus grand rectangle au format visé qui tienne dans la
+      // zone disponible ; le reste devient bande noire, comme un appareil photo.
+      const area = areaRef.current;
+      const aw = area?.clientWidth ?? 0, ah = area?.clientHeight ?? 0;
+      if (aw > 0 && ah > 0) {
+        const [w, h] = aw / ah > captureRatio
+          ? [ah * captureRatio, ah]
+          : [aw, aw / captureRatio];
+        setFrameSize({ w: Math.round(w), h: Math.round(h) });
       }
     };
     measure();
+    // Un cran plus tard : après un basculement, la mise en page n'est pas
+    // encore appliquée au moment où l'effet tourne.
+    const id = setTimeout(measure, 60);
     window.addEventListener("resize", measure);
     window.addEventListener("orientationchange", measure);
     return () => {
+      clearTimeout(id);
       window.removeEventListener("resize", measure);
       window.removeEventListener("orientationchange", measure);
     };
-  }, [reviewing]);
+  }, [reviewing, rotated, captureRatio, screen.w, screen.h]);
 
   // ── Contrôle qualité (indicatif, jamais bloquant) ─────────────────────────
   // Un conseil « stabilisez » vaut mieux qu'un déclencheur grisé : sur une
@@ -168,19 +233,31 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
     setBusy(true);
     try {
       const box = frameRef.current;
-      const src = coverSourceRect(
-        video.videoWidth, video.videoHeight,
-        box?.clientWidth ?? 0, box?.clientHeight ?? 0,
-      );
+      const bw = box?.clientWidth ?? 0, bh = box?.clientHeight ?? 0;
+      // En mode paysage, la vidéo est contre-pivotée : sa propre boîte a les
+      // dimensions du viseur échangées, et c'est elle qui découpe l'image.
+      const src = rotated
+        ? coverSourceRect(video.videoWidth, video.videoHeight, bh, bw)
+        : coverSourceRect(video.videoWidth, video.videoHeight, bw, bh);
       if (!src) return;
 
       const canvas = captureCanvasRef.current || document.createElement("canvas");
       captureCanvasRef.current = canvas;
-      canvas.width = Math.max(1, Math.round(src.sw));
-      canvas.height = Math.max(1, Math.round(src.sh));
-      canvas.getContext("2d").drawImage(
-        video, src.sx, src.sy, src.sw, src.sh, 0, 0, canvas.width, canvas.height,
-      );
+      canvas.width = Math.max(1, Math.round(rotated ? src.sh : src.sw));
+      canvas.height = Math.max(1, Math.round(rotated ? src.sw : src.sh));
+      const ctx = canvas.getContext("2d");
+      if (rotated) {
+        // La photo doit sortir dans l'orientation de la SCÈNE (ce que voit
+        // l'utilisateur), pas dans celle de la vidéo : on la tourne de
+        // l'inverse de la contre-rotation appliquée à l'aperçu.
+        ctx.save();
+        if (stageDeg > 0) { ctx.translate(0, canvas.height); ctx.rotate(-Math.PI / 2); }
+        else { ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); }
+        ctx.drawImage(video, src.sx, src.sy, src.sw, src.sh, 0, 0, src.sw, src.sh);
+        ctx.restore();
+      } else {
+        ctx.drawImage(video, src.sx, src.sy, src.sw, src.sh, 0, 0, canvas.width, canvas.height);
+      }
       const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.92));
       if (!blob) return;
 
@@ -214,7 +291,7 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
     } finally {
       setBusy(false);
     }
-  }, [busy, bonusMode, step.id]);
+  }, [busy, bonusMode, step.id, rotated, stageDeg]);
 
   const retakeStep = useCallback((stepId) => {
     const idx = GUIDED_STEPS.findIndex(s => s.id === stepId);
@@ -304,11 +381,42 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
   }
 
   // ── Viseur ────────────────────────────────────────────────────────────────
+  // La scène porte toute l'interface. Pivotée, elle échange largeur et hauteur
+  // et se recentre sur l'écran : l'utilisateur tient son téléphone à
+  // l'horizontale et lit une interface droite.
+  const stageStyle = {
+    ...(rotated
+      ? {
+          position: "absolute", top: "50%", left: "50%",
+          width: screen.h, height: screen.w,
+          transform: `translate(-50%, -50%) rotate(${stageDeg}deg)`,
+        }
+      : { position: "absolute", inset: 0 }),
+    display: "flex",
+    // Scène large : commandes en colonne sur le côté. Les mettre en bas
+    // mangerait la moitié des 390 px de haut d'un téléphone couché, et le
+    // cadre 4:3 n'aurait plus la place d'exister.
+    flexDirection: wide ? "row" : "column",
+  };
+
+  // Contre-rotation de la vidéo : elle sort déjà à l'endroit pour un appareil
+  // tenu de travers (l'image suit le capteur, pas l'interface). La pivoter
+  // avec la scène la mettrait de biais.
+  const videoStyle = rotated
+    ? {
+        position: "absolute", top: "50%", left: "50%",
+        width: frameSize.h, height: frameSize.w, objectFit: "cover",
+        transform: `translate(-50%, -50%) rotate(${-stageDeg}deg)`,
+        display: cameraError ? "none" : "block",
+      }
+    : { width: "100%", height: "100%", objectFit: "cover", display: cameraError ? "none" : "block" };
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "var(--c-121212)", zIndex: 9500, display: "flex", flexDirection: "column", fontFamily: "var(--font-apple)" }}>
-      <div ref={frameRef} style={{ position: "relative", flex: 1, overflow: "hidden", background: "#000" }}>
-        <video ref={videoRef} playsInline muted autoPlay
-          style={{ width: "100%", height: "100%", objectFit: "cover", display: cameraError ? "none" : "block" }} />
+    <div style={{ position: "fixed", inset: 0, background: "var(--c-121212)", zIndex: 9500, overflow: "hidden", fontFamily: "var(--font-apple)" }}>
+     <div style={stageStyle}>
+      <div ref={areaRef} style={{ flex: 1, minWidth: 0, minHeight: 0, background: "#000", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+      <div ref={frameRef} style={{ position: "relative", width: frameSize.w, height: frameSize.h, overflow: "hidden", background: "#000", flexShrink: 0 }}>
+        <video ref={videoRef} playsInline muted autoPlay style={videoStyle} />
 
         {cameraError && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 30, textAlign: "center", color: "var(--c-ddd)", fontSize: 13, lineHeight: 1.6 }}>
@@ -355,27 +463,54 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
           </div>
         )}
       </div>
+      </div>
 
-      {/* ── Barre de contrôle ── */}
-      <div style={{ background: "var(--c-141414)", borderTop: "1px solid var(--c-2a2a2a)", padding: "12px 16px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <div style={{ fontSize: 12, letterSpacing: 2, color: ACCENT, textTransform: "uppercase" }}>
+      {/* ── Barre de contrôle ──
+          Scène large : colonne sur le côté, dans la bande laissée libre par le
+          cadre 4:3. Scène haute : bande en bas, comme avant. */}
+      <div style={{
+        background: "var(--c-141414)",
+        [wide ? "borderLeft" : "borderTop"]: "1px solid var(--c-2a2a2a)",
+        padding: wide ? "10px 10px" : "12px 16px 16px",
+        ...(wide ? { width: 148, flexShrink: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: 8, overflowY: "auto" } : {}),
+      }}>
+        <div style={{ display: "flex", alignItems: wide ? "stretch" : "center", flexDirection: wide ? "column" : "row", justifyContent: "space-between", gap: 8, marginBottom: wide ? 0 : 10 }}>
+          <div style={{ fontSize: wide ? 10 : 12, letterSpacing: wide ? 1 : 2, color: ACCENT, textTransform: "uppercase", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: wide ? "normal" : "nowrap" }}>
             {bonusMode ? "Photo bonus" : `Vue ${stepIndex + 1} / ${GUIDED_STEPS.length} — ${step.label}`}
           </div>
-          <div style={{ fontSize: 11, color: "var(--c-aaa)" }}>
-            {progress.done}/{progress.total}{progress.bonus > 0 ? ` +${progress.bonus}` : ""}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            {/* Orientation : masquée si la page pivote déjà d'elle-même. */}
+            {!pageLandscape && (
+              <>
+                <button onClick={() => { const p = { ...landscapePref, on: !landscapePref.on }; setLandscapePref(p); writeLandscapePref(p); }}
+                  title={rotated ? "Revenir en portrait" : "Passer en paysage"}
+                  style={{ ...BTN, padding: "5px 9px", fontSize: 9, letterSpacing: 1, borderColor: rotated ? ACCENT : "var(--c-2a2a2a)", color: rotated ? ACCENT : "var(--c-ddd)" }}>
+                  {rotated ? "▭ Paysage" : "▯ Portrait"}
+                </button>
+                {rotated && (
+                  <button onClick={() => { const p = { ...landscapePref, flip: !landscapePref.flip }; setLandscapePref(p); writeLandscapePref(p); }}
+                    title="Tourner l’interface dans l’autre sens"
+                    style={{ ...BTN, padding: "5px 9px", fontSize: 11, letterSpacing: 0 }}>
+                    ↻
+                  </button>
+                )}
+              </>
+            )}
+            <div style={{ fontSize: 11, color: "var(--c-aaa)" }}>
+              {progress.done}/{progress.total}{progress.bonus > 0 ? ` +${progress.bonus}` : ""}
+            </div>
           </div>
         </div>
 
         {/* Choix direct d'une vue : on peut commencer par celle qu'on veut. */}
         {!bonusMode && (
-          <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+          <div style={{ display: wide ? "grid" : "flex", gridTemplateColumns: wide ? "1fr 1fr" : undefined, gap: 4, marginBottom: wide ? 0 : 12 }}>
             {GUIDED_STEPS.map((s, i) => {
               const done = shots.some(sh => sh.stepId === s.id);
               const active = i === stepIndex;
               return (
                 <button key={s.id} onClick={() => setStepIndex(i)}
-                  style={{ flex: 1, background: active ? ACCENT : "transparent", border: `1px solid ${active ? ACCENT : done ? "rgba(242,101,34,0.5)" : "var(--c-2a2a2a)"}`, color: active ? "#090909" : done ? ACCENT : "var(--c-ddd)", padding: "8px 0", fontSize: 9, letterSpacing: 0.5, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)" }}>
+                  style={{ flex: wide ? undefined : 1, background: active ? ACCENT : "transparent", border: `1px solid ${active ? ACCENT : done ? "rgba(242,101,34,0.5)" : "var(--c-2a2a2a)"}`, color: active ? "#090909" : done ? ACCENT : "var(--c-ddd)", padding: wide ? "6px 2px" : "8px 0", fontSize: 9, letterSpacing: 0.5, textTransform: "uppercase", borderRadius: 3, cursor: "pointer", fontFamily: "var(--font-apple)" }}>
                   {done ? "✓ " : ""}{s.label}
                 </button>
               );
@@ -386,26 +521,27 @@ export default function GuidedTour({ logoPreview, onDone, onClose }) {
         {/* Le déclencheur occupe la largeur : c'est le geste qu'on répète, et
             trois boutons de plus sur la même ligne le réduiraient à rien sur
             un écran de téléphone. « Annuler » vit en haut du viseur. */}
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: wide ? "column" : "row", gap: 8 }}>
           {complete && (
-            <button onClick={() => setBonusMode(v => !v)} style={{ ...BTN, flex: "0 0 auto", padding: "12px 12px", fontSize: 10 }}>
+            <button onClick={() => setBonusMode(v => !v)} style={{ ...BTN, flex: "0 0 auto", padding: wide ? "8px 6px" : "12px 12px", fontSize: 10 }}>
               {bonusMode ? "Le tour" : "+ Bonus"}
             </button>
           )}
 
           <button onClick={takeShot} disabled={!!cameraError || busy || !ready}
-            style={{ flex: 1, background: cameraError || !ready ? "var(--c-1a1a1a)" : ACCENT, border: "none", color: cameraError || !ready ? "var(--c-444)" : "#090909", padding: "12px 0", fontSize: 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: cameraError || busy || !ready ? "default" : "pointer", fontFamily: "var(--font-apple)" }}>
+            style={{ flex: 1, background: cameraError || !ready ? "var(--c-1a1a1a)" : ACCENT, border: "none", color: cameraError || !ready ? "var(--c-444)" : "#090909", padding: wide ? "13px 0" : "12px 0", fontSize: wide ? 11 : 13, fontWeight: 700, letterSpacing: 2, textTransform: "uppercase", borderRadius: 3, cursor: cameraError || busy || !ready ? "default" : "pointer", fontFamily: "var(--font-apple)" }}>
             {busy ? "…" : !bonusMode && shots.some(s => s.stepId === step.id) ? "Reprendre" : "Photographier"}
           </button>
 
           {shots.length > 0 && (
             <button onClick={() => setReviewing(true)}
-              style={{ ...BTN, flex: "0 0 auto", background: "#27ae60", border: "none", color: "#fff", fontWeight: 700, fontSize: 11 }}>
+              style={{ ...BTN, flex: "0 0 auto", background: "#27ae60", border: "none", color: "#fff", fontWeight: 700, fontSize: wide ? 10 : 11, padding: wide ? "9px 6px" : "12px 14px" }}>
               Terminer
             </button>
           )}
         </div>
       </div>
+     </div>
     </div>
   );
 }
