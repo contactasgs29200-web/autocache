@@ -76,8 +76,24 @@ async function syncAccessFromSubscription(subscription, reason) {
 
   if (ACTIVE_STATUSES.includes(subscription.status)) {
     const plan = subscription.metadata?.plan || "premium";
-    await setUserPlan(userId, plan);
-    console.log(`[webhook] ${reason} — user ${userId} : accès maintenu (statut ${subscription.status}, plan "${plan}")`);
+
+    // La cadence est relue à CHAQUE mise à jour, et pas seulement à la
+    // souscription. Un abonné qui change de formule depuis l'espace client
+    // modifie son abonnement sans qu'une facture soit forcément émise : sans
+    // cette relecture, le compte conservait la cadence d'origine. Concrètement,
+    // passer à l'hebdomadaire gardait un quota de 1 000 photos pour 4,90 €, et
+    // passer au mensuel restait plafonné à 250 photos pour 12,90 €.
+    //
+    // Comme partout ailleurs, c'est l'intervalle réellement facturé qui fait
+    // foi, jamais l'étiquette posée au moment du paiement.
+    const formule = formuleFromInterval(
+      subscription.items?.data?.[0]?.price?.recurring?.interval
+    ) || subscription.metadata?.formule || null;
+
+    const meta = { plan, plan_source: "stripe" };
+    if (formule) meta.formule = formule;
+    await writeEntitlements(userId, meta);
+    console.log(`[webhook] ${reason} — user ${userId} : accès maintenu (statut ${subscription.status}, plan "${plan}", formule "${formule ?? "inchangée"}")`);
     return;
   }
 
