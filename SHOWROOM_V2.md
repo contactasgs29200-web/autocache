@@ -100,7 +100,7 @@ Architecture :
   2. Plaque : le cache plaque actuel est dessiné d'après les coins
      détectés sur la photo d'origine ; en génératif la voiture peut
      bouger de quelques pixels → **re-détecter la plaque sur l'image
-     générée** (le pipeline `/api/plate-corners` existe déjà) ou
+     générée** (le modèle keypoints local tourne dans le navigateur) ou
      masquer la plaque AVANT génération.
 - Latence 10–30 s/photo → UI de progression (LoadingGame existe déjà),
   traitement en file avec parallélisme limité.
