@@ -43,8 +43,8 @@ Le contrôle d'exposition et de netteté est un calcul local sur le flux vidéo
 bloque jamais le déclencheur. C'est l'utilisateur qui décide si sa photo à
 contre-jour lui convient.
 
-Surtout, les quatre vues du parcours ne repassent par **aucun détecteur** :
-ni le modèle local, ni Plate Recognizer, ni Claude. Demander à quelqu'un
+Surtout, les quatre vues du parcours ne repassent par **aucun détecteur** —
+pas même le modèle local, seul détecteur de l'application. Demander à quelqu'un
 d'aligner sa plaque au pixel près pour aller ensuite la chercher avec un
 détecteur — qui la déplacerait, et serait facturé — n'aurait aucun sens.
 `plateFromGuidedQuad` transforme la visée en résultat de détection, et le
@@ -194,16 +194,18 @@ quelles dans le fichier produit, sans conversion.
 
 ### La visée n'écrase pas la détection
 
-`plateHint` ne court-circuite **aucun** détecteur : le modèle keypoints local,
-Plate Recognizer et Claude restent plus précis qu'un cadrage à main levée. La
-visée sert à deux endroits :
+> ⚠️ Section de conception : `plateHint` n'existe pas dans le code — les
+> détecteurs de repli ayant été retirés, le modèle keypoints local est seul, et
+> la visée du parcours n'est utilisée que par `plateFromGuidedQuad` (les quatre
+> vues du parcours, décrites plus haut).
 
-- **Filet de sécurité** — quand toute la chaîne rend « aucune plaque » alors que
-  l'utilisateur en a visé une, le cache est posé sur la visée plutôt que pas du
-  tout. C'est le cas qui compte : sur ces photos-là, il y a forcément une
-  plaque, l'utilisateur l'a mise dans le cadre lui-même.
-- **Localisation pour Claude** — la visée remplace la passe `locate` (une
-  requête économisée) quand Plate Recognizer est indisponible.
+L'idée reste valable pour les photos bonus : la visée ne court-circuiterait
+**aucun** détecteur — le modèle keypoints reste plus précis qu'un cadrage à
+main levée. Elle servirait de **filet de sécurité**, quand le modèle rend
+« aucune plaque » alors que l'utilisateur en a visé une : le cache serait posé
+sur la visée plutôt que pas du tout. C'est le cas qui compte — sur ces
+photos-là, il y a forcément une plaque, l'utilisateur l'a mise dans le cadre
+lui-même.
 
 Le gabarit est volontairement un peu généreux (plancher à 16 %) : le sens du
 risque est asymétrique. Un cache qui déborde sur le pare-chocs s'ajuste en

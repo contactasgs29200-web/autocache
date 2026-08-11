@@ -1,11 +1,18 @@
-> **⚠️ Document historique — backend Railway décommissionné.**
-> La détection de plaque passe désormais par Claude Vision
-> (`/api/plate-corners`, avec Plate Recognizer en secours) et la détection
-> de véhicules par `/api/detect-vehicles` (Claude Haiku sur Vercel).
+> **⚠️ Document partiellement historique — backend Railway décommissionné.**
+> La détection de plaque se fait désormais **entièrement dans le navigateur**,
+> par le modèle keypoints maison (`src/plateKeypoints.js`,
+> `public/models/plate-keypoints.onnx`) entraîné sur les photos collectées en
+> concession. C'est le seul détecteur : les replis Plate Recognizer
+> (`/api/detect-plates`) et Claude Vision (`/api/plate-corners`) ont été
+> retirés, et quand le modèle ne trouve rien, le cache se pose à la main.
+> La détection de véhicules (mode Showroom uniquement) passe par
+> `/api/detect-vehicles` (Claude Haiku sur Vercel).
+>
 > Plus aucun appel du frontend vers le backend `backend/` : l'abonnement
-> Railway peut être résilié. Ce document décrit l'ancien pipeline YOLO,
-> conservé à titre de référence si un modèle keypoints maison redevenait
-> pertinent.
+> Railway peut être résilié. Les sections ci-dessous restent la référence
+> pour **collecter, annoter et ré-entraîner** le modèle ; seul le
+> déploiement a changé (export ONNX servi depuis `public/models/` au lieu
+> d'un `best.pt` sur Railway — voir §6).
 
 # Pipeline plaque : de la photo brute au modèle déployé
 

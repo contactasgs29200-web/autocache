@@ -5,8 +5,7 @@ import HelpWidget from "./components/HelpWidget.jsx";
 import LoadingGame from "./components/LoadingGame.jsx";
 import AuthTransition, { AUTH_MOTION_CSS, AUTH_EXIT_MS, prefersReducedMotion } from "./components/AuthTransition.jsx";
 import ProcessingIndicator, { ProcessingLabel, PROCESSING_MOTION_CSS, PROCESSING_EXIT_MS } from "./components/ProcessingMotion.jsx";
-import { orderQuad, quadArea, snapQuadOutward, fitQuadEdges, quadCoversBox, quadFromBox, plateQuadFromCrop, expandQuad } from "./plateGeometry.js";
-import { detectPlateKeypoints, preloadPlateKeypoints } from "./plateKeypoints.js";
+import { detectPlateKeypoints, preloadPlateKeypoints, keypointsUnavailableReason } from "./plateKeypoints.js";
 import { plateList, plateFields, defaultPlateQuad } from "./plateCaches.js";
 import { dataURLToBlob, withImageExt } from "./imageFile.js";
 import GuidedTour from "./components/GuidedTour.jsx";
@@ -2031,424 +2030,13 @@ function downscaledImageBase64(file, maxSide = 1600, quality = 0.85) {
   });
 }
 
-// Dernière erreur SERVEUR de la détection de plaque (HTTP/réseau — pas les
-// « aucune plaque trouvée »). Exposée à l'UI : une clé API invalide ou des
-// crédits épuisés côté Vercel doivent produire un bandeau visible, pas des
-// photos silencieusement sans cache.
+// Dernière panne du détecteur de plaque (modèle non chargé — pas les
+// « aucune plaque trouvée »). Exposée à l'UI : un modèle absent du
+// déploiement fait sortir tout un lot sans cache, et cela doit produire un
+// bandeau visible plutôt que des photos silencieusement nues.
 let plateLastApiError = null;
 function resetPlateApiError() { plateLastApiError = null; }
 function getPlateApiError() { return plateLastApiError; }
-
-// Appel bas niveau à /api/plate-corners (Claude Vision).
-// tier "best" = l'UNIQUE escalade (Sonnet 5 en effort haut) — demandée
-// seulement quand le résultat économique échoue aux contrôles locaux.
-async function fablePlateAPI(b64DataUrl, mode, tier) {
-  const b64 = b64DataUrl.includes(',') ? b64DataUrl.split(',')[1] : b64DataUrl;
-  const r = await fetch('/api/plate-corners', {
-    method: 'POST',
-    headers: await authHeaders(),
-    body: JSON.stringify({ b64, mode, ...(tier ? { tier } : {}) }),
-  });
-  if (!r.ok) {
-    const body = await r.text().catch(() => '');
-    console.warn(`[plate-corners:${mode}${tier ? ':' + tier : ''}] HTTP`, r.status, body.slice(0, 500));
-    plateLastApiError = `plate-corners (${mode}) HTTP ${r.status} — ${body.slice(0, 180) || 'sans détail'}`;
-    return null;
-  }
-  const json = await r.json();
-  // Trace de diagnostic : la réponse brute du modèle, telle que reçue.
-  console.log(`[plate-corners:${mode}${tier ? ':' + tier : ''}] réponse:`, JSON.stringify(json));
-  return json;
-}
-
-// Détection plaque — Claude Vision en DEUX PASSES, au coût minimal.
-// Sur l'image entière, la plaque est trop petite (~3% de l'image) pour que le
-// modèle place les coins au pixel près. On demande donc une bbox grossière
-// sur l'image entière (passe "locate", Haiku), puis on recadre/zoome sur
-// cette zone et on demande les 4 coins exacts sur le crop (passe "refine",
-// Sonnet 5), où la plaque occupe l'essentiel de l'image. Les coins sont
-// ensuite AIMANTÉS localement sur le vrai contour de la plaque (gradient de
-// luminance, pur JS — voir snapQuadOutward) puis reprojetés dans le repère
-// de la photo complète. Les anciennes passes de vérification LLM et
-// escalades multiples sont remplacées par des contrôles géométriques
-// gratuits + UNE escalade maximum par étape.
-// Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
-// normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
-// presetBox (optionnel) : bbox normalisée fournie par un détecteur spécialisé
-// (Snapshot). Elle remplace la passe locate (Haiku) — localisation garantie,
-// Claude ne fait plus que le refine des 4 coins sur le crop.
-async function detectPlateFable(imageFile, presetBox = null) {
-  try {
-    const url = URL.createObjectURL(imageFile);
-    const img = await loadImg(url);
-    URL.revokeObjectURL(url);
-    const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
-
-    // Image entière downscalée à 1568 px (résolution max de la vision Haiku :
-    // envoyer plus grand ne fait que gonfler l'upload).
-    const fullScale = Math.min(1, 1568 / Math.max(W, H));
-    const fc = document.createElement('canvas');
-    fc.width = Math.max(1, Math.round(W * fullScale));
-    fc.height = Math.max(1, Math.round(H * fullScale));
-    fc.getContext('2d').drawImage(img, 0, 0, fc.width, fc.height);
-    const fullB64 = fc.toDataURL('image/jpeg', 0.85);
-    freeCanvas(fc);
-
-    // Crop zoomé autour d'une bbox locate, avec une large marge (la bbox est
-    // approximative, la plaque doit rester entière dans le crop même décalée).
-    // marginMult élargit le cadrage quand le premier essai était trop serré.
-    // Renvoie aussi la luminance du crop pour l'aimantation locale des bords.
-    const buildCrop = (box, marginMult = 1) => {
-      if (!box || ![box.x1, box.y1, box.x2, box.y2].every(v => typeof v === 'number' && v >= -0.1 && v <= 1.1)
-          || box.x2 <= box.x1 || box.y2 <= box.y1) return null;
-      const bw = box.x2 - box.x1, bh = box.y2 - box.y1;
-      const mx = Math.max(bw * 0.7, 0.015) * marginMult, my = Math.max(bh * 1.0, 0.015) * marginMult;
-      const cx1 = Math.max(0, box.x1 - mx), cy1 = Math.max(0, box.y1 - my);
-      const cx2 = Math.min(1, box.x2 + mx), cy2 = Math.min(1, box.y2 + my);
-      const cropW = Math.round((cx2 - cx1) * W), cropH = Math.round((cy2 - cy1) * H);
-      if (cropW < 8 || cropH < 8) return null;
-      // Upscale pour que le modèle voie la plaque en grand (~1100px).
-      const cropScale = Math.min(4, Math.max(1, 1100 / Math.max(cropW, cropH)));
-      const cc = document.createElement('canvas');
-      cc.width = Math.round(cropW * cropScale);
-      cc.height = Math.round(cropH * cropScale);
-      const cctx = cc.getContext('2d');
-      cctx.imageSmoothingEnabled = true;
-      cctx.imageSmoothingQuality = 'high';
-      cctx.drawImage(img, cx1 * W, cy1 * H, cropW, cropH, 0, 0, cc.width, cc.height);
-      const b64 = cc.toDataURL('image/jpeg', 0.92);
-      const px = cctx.getImageData(0, 0, cc.width, cc.height).data;
-      const lum = new Float32Array(cc.width * cc.height);
-      for (let i = 0; i < lum.length; i++) {
-        lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
-      }
-      // rgb conservé pour la segmentation locale de la plaque (bandes bleues).
-      const crop = { b64, cx1, cy1, cx2, cy2, w: cc.width, h: cc.height, lum, rgb: px };
-      freeCanvas(cc);
-      return crop;
-    };
-
-    // Sanity check : le quad doit être une plaque plausible (plus large que
-    // haut en pixels, aire ni nulle ni délirante).
-    const plausible = (corners) => {
-      const px = corners.map(p => p.x * W), py = corners.map(p => p.y * H);
-      const qw = (Math.hypot(px[1]-px[0], py[1]-py[0]) + Math.hypot(px[2]-px[3], py[2]-py[3])) / 2;
-      const qh = (Math.hypot(px[3]-px[0], py[3]-py[0]) + Math.hypot(px[2]-px[1], py[2]-py[1])) / 2;
-      return qw >= 4 && qh >= 2 && qw / qh >= 1.2 && qw / qh <= 12;
-    };
-
-    // Refine sur un crop → aimantation locale des bords → coins reprojetés
-    // dans le repère de la photo complète, ou null si absent/implausible.
-    // `touchesEdge` signale qu'un coin colle au bord du crop : la plaque
-    // déborde probablement du cadrage et les coins sont tronqués.
-    const refineOnCrop = async (crop, tier) => {
-      const ref = await fablePlateAPI(crop.b64, 'refine', tier);
-      if (!ref || !ref.found) return null;
-      const EDGE = 0.02;
-      let touchesEdge = [ref.tl, ref.tr, ref.br, ref.bl].some(
-        p => p.x <= EDGE || p.x >= 1 - EDGE || p.y <= EDGE || p.y >= 1 - EDGE
-      );
-      const toPx = p => ({ x: Math.min(1, Math.max(0, p.x)) * crop.w, y: Math.min(1, Math.max(0, p.y)) * crop.h });
-      let quad = { tl: toPx(ref.tl), tr: toPx(ref.tr), br: toPx(ref.br), bl: toPx(ref.bl) };
-      let snapMax = Math.max(3, Math.round(crop.w * 0.006));
-
-      // ── Ancrage sur les caractères lus : RÉPARER, jamais rejeter ──
-      // La boîte "chars" (bande de texte) est bien plus fiable que les coins
-      // seuls : le modèle doit fixer les glyphes pour les lire. Si le quad ne
-      // contient pas cette boîte (cas typique : quad décalé d'une hauteur de
-      // plaque, posé sur le pare-choc), on le RECONSTRUIT par dilatation de
-      // la bande de texte aux proportions d'une plaque UE — gratuit, aucune
-      // requête en plus, et on garde toujours un cache plutôt que rien.
-      const cb = ref.chars;
-      const origQuad = quad;
-      let charsPx = null;
-      if (cb && [cb.x1, cb.y1, cb.x2, cb.y2].every(v => typeof v === 'number')) {
-        const chars = {
-          x1: Math.min(1, Math.max(0, cb.x1)) * crop.w, y1: Math.min(1, Math.max(0, cb.y1)) * crop.h,
-          x2: Math.min(1, Math.max(0, cb.x2)) * crop.w, y2: Math.min(1, Math.max(0, cb.y2)) * crop.h,
-        };
-        const cw = chars.x2 - chars.x1, ch = chars.y2 - chars.y1;
-        // L'ancre n'est utilisée que si elle ressemble à une bande de texte
-        // (allongée, taille non dérisoire) — une ancre douteuse ne doit pas
-        // dégrader un quad correct.
-        const charsOK = cw > crop.w * 0.08 && ch > 2 && cw / ch >= 2 && cw / ch <= 14;
-        if (charsOK) charsPx = chars;
-        if (charsOK && !quadCoversBox(quad, chars, ch * 0.25)) {
-          console.log(`[plate] quad décalé par rapport au texte lu${ref.text ? ` ("${ref.text}")` : ''} — reconstruction depuis la bande de caractères`);
-          quad = quadFromBox(chars);
-          snapMax = Math.max(snapMax, Math.round(crop.w * 0.02));
-          const ex = crop.w * EDGE, ey = crop.h * EDGE;
-          touchesEdge = [quad.tl, quad.tr, quad.br, quad.bl].some(
-            p => p.x <= ex || p.x >= crop.w - ex || p.y <= ey || p.y >= crop.h - ey
-          );
-        }
-      }
-
-      // ── Extraction locale par SEGMENTATION (prioritaire, gratuite) ──
-      // La plaque est la région claire (+ bandes bleues) du crop : on en
-      // déduit les 4 coins exacts, perspective comprise — validé sur photos
-      // réelles à quelques pixels près. Retrouve la plaque même si le quad
-      // du modèle ou la boîte de localisation sont décalés.
-      const seg = plateQuadFromCrop(crop.lum, crop.rgb, crop.w, crop.h, quad, charsPx);
-      if (seg) {
-        console.log('[plate] coins extraits par segmentation locale');
-        // Finition : chaque bord peut encore s'étendre/s'incliner VERS
-        // L'EXTÉRIEUR sur le vrai contour (jamais rétrécir), puis marge de
-        // sécurité — couverture bord à bord garantie, calibrée sur photos
-        // réelles.
-        const out = fitQuadEdges(crop.lum, crop.w, crop.h, seg, null,
-          Math.max(8, Math.round(crop.w * 0.025)), 0);
-        quad = expandQuad(out, 1.02, 1.08);
-      } else {
-        // Repli : ajustement des bords sur le gradient. Avec l'ancre texte,
-        // chaque bord peut se décaler et s'incliner ; sans ancre, poussée
-        // vers l'extérieur uniquement (comportement prudent).
-        quad = charsPx
-          ? fitQuadEdges(crop.lum, crop.w, crop.h, quad, charsPx,
-              Math.max(8, Math.round(crop.w * 0.03)), Math.max(6, Math.round(crop.w * 0.02)))
-          : snapQuadOutward(crop.lum, crop.w, crop.h, quad, snapMax);
-        quad = expandQuad(quad, 1.02, 1.06);
-      }
-      // Le quad final colle-t-il au bord du crop (plaque probablement
-      // tronquée) ? Recalculé sur le résultat, tous chemins confondus.
-      {
-        const ex = crop.w * EDGE, ey = crop.h * EDGE;
-        touchesEdge = [quad.tl, quad.tr, quad.br, quad.bl].some(
-          p => p.x <= ex || p.x >= crop.w - ex || p.y <= ey || p.y >= crop.h - ey
-        );
-      }
-      const map = p => ({
-        x: crop.cx1 + Math.min(1, Math.max(0, p.x / crop.w)) * (crop.cx2 - crop.cx1),
-        y: crop.cy1 + Math.min(1, Math.max(0, p.y / crop.h)) * (crop.cy2 - crop.cy1),
-      });
-      const corners = [map(quad.tl), map(quad.tr), map(quad.br), map(quad.bl)];
-      if (plausible(corners)) return { corners, touchesEdge };
-      // Quad reconstruit implausible ? Repli sur les coins bruts du modèle
-      // plutôt que de finir sans cache.
-      if (quad !== origQuad) {
-        const co = [map(origQuad.tl), map(origQuad.tr), map(origQuad.br), map(origQuad.bl)];
-        if (plausible(co)) {
-          console.log('[plate] reconstruction implausible, coins bruts du modèle conservés');
-          return { corners: co, touchesEdge };
-        }
-      }
-      console.log('[plate] coins implausibles (proportions), refine rejeté');
-      return null;
-    };
-
-    // Les deux quads désignent-ils la même plaque ? Garde-fou du retry
-    // élargi : sur un cadrage plus large, le modèle peut accrocher un autre
-    // objet ou dériver d'une hauteur de plaque — dans ce cas on garde le quad
-    // initial, même tronqué, plutôt que de poser le cache au mauvais endroit.
-    const sameQuad = (a, b) => {
-      const ctr = q => q.reduce((s, p) => ({ x: s.x + p.x / 4, y: s.y + p.y / 4 }), { x: 0, y: 0 });
-      const width = q => Math.max(
-        Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y),
-        Math.hypot(q[2].x - q[3].x, q[2].y - q[3].y));
-      const height = q => Math.max(
-        Math.hypot(q[3].x - q[0].x, q[3].y - q[0].y),
-        Math.hypot(q[2].x - q[1].x, q[2].y - q[1].y));
-      const ca = ctr(a), cb = ctr(b);
-      return Math.abs(ca.x - cb.x) <= Math.max(width(a), width(b)) * 0.5
-          && Math.abs(ca.y - cb.y) <= Math.max(height(a), height(b)) * 0.8;
-    };
-
-    // Retry sur cadrage élargi quand le quad colle au bord du crop (plaque
-    // probablement tronquée). N'adopte le nouveau quad que s'il est complet
-    // ET cohérent avec l'initial.
-    const retryWider = async (res, box, label) => {
-      if (!res?.touchesEdge) return res;
-      console.log(`[plate] quad ${label} au bord du crop, élargissement de la marge`);
-      const widerCrop = buildCrop(box, 2.5);
-      const res2 = widerCrop ? await refineOnCrop(widerCrop, 'best') : null;
-      if (res2 && !res2.touchesEdge && sameQuad(res.corners, res2.corners)) return res2;
-      if (res2) console.log('[plate] retry élargi incohérent ou tronqué, quad initial conservé');
-      return res;
-    };
-
-    // ── Chemin nominal (2 appels) : locate Haiku → crop → refine Sonnet 5 ──
-    // Un « aucune plaque » de Haiku n'est PAS fatal : la relocalisation
-    // (tier best, ~0,5 ct) contre-vérifie avant d'abandonner — un faux
-    // négatif du locate économique coûterait un cache manquant.
-    let corners = null;
-    const locEco = presetBox
-      ? { found: true, box: presetBox }
-      : await fablePlateAPI(fullB64, 'locate');
-    const cropEco = (locEco && locEco.found) ? buildCrop(locEco.box) : null;
-    if (cropEco) {
-      let res = await refineOnCrop(cropEco);
-      res = await retryWider(res, locEco.box, 'éco');
-      corners = res?.corners ?? null;
-      // Crop localisé mais refine implausible : UNE escalade (même crop,
-      // Sonnet 5 effort haut).
-      if (!corners) {
-        console.log('[plate] refine éco rejeté, escalade effort haut (même crop)');
-        res = await refineOnCrop(cropEco, 'best');
-        corners = res?.corners ?? null;
-      }
-    }
-
-    // ── Relocalisation (rare) : la localisation éco était probablement
-    // fausse (crop sans plaque) → une passe locate/refine en tier best.
-    // Inutile quand la boîte vient d'un détecteur spécialisé (presetBox) :
-    // la localisation est sûre, on passe directement au cache de repli
-    // posé sur cette boîte serrée.
-    if (!corners && !presetBox) {
-      console.log('[plate] échec chemin éco, relocalisation (tier best)');
-      const locBest = await fablePlateAPI(fullB64, 'locate', 'best');
-      const cropBest = (locBest && locBest.found) ? buildCrop(locBest.box) : null;
-      if (cropBest) {
-        let res = await refineOnCrop(cropBest, 'best');
-        res = await retryWider(res, locBest.box, 'best');
-        corners = res?.corners ?? null;
-      }
-    }
-
-    // ── Dernier recours : les refine n'ont rien confirmé mais le locate éco
-    // avait trouvé une zone. On pose le cache sur cette bbox (demandée
-    // volontairement généreuse au modèle, donc couvrante) : un cache un peu
-    // large et droit vaut mieux que pas de cache — ajustable à la main.
-    if (!corners && cropEco) {
-      const fb = locEco.box;
-      const c = [
-        { x: fb.x1, y: fb.y1 }, { x: fb.x2, y: fb.y1 },
-        { x: fb.x2, y: fb.y2 }, { x: fb.x1, y: fb.y2 },
-      ].map(p => ({ x: Math.min(1, Math.max(0, p.x)), y: Math.min(1, Math.max(0, p.y)) }));
-      if (plausible(c)) {
-        console.warn('[plate] refine muet partout — cache de repli posé sur la zone locate');
-        corners = c;
-      }
-    }
-    if (!corners) { console.log('[plate] aucune plaque détectée (Claude)'); return null; }
-
-    const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
-    const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
-    console.log(`Plaque détectée (Claude 2-passes): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
-    return { found: true, conf: 1, bbox, corners, source: 'fable' };
-  } catch (e) {
-    console.error('[plate-corners] erreur:', e.message);
-    plateLastApiError = plateLastApiError ?? ('réseau/exception : ' + e.message);
-    return null;
-  }
-}
-
-// Aimante des coins (normalisés image entière) sur le contour réel de la
-// plaque : crop local autour du quad, luminance, snapQuadOutward — purement
-// local et gratuit. Garantit un cache couvrant bord à bord même si le
-// détecteur a donné un polygone légèrement à l'intérieur de la plaque.
-function snapCornersOnImage(img, W, H, corners) {
-  try {
-    const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
-    const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
-    const cx1 = Math.max(0, Math.min(...xs) - bw * 0.4), cx2 = Math.min(1, Math.max(...xs) + bw * 0.4);
-    const cy1 = Math.max(0, Math.min(...ys) - bh * 0.6), cy2 = Math.min(1, Math.max(...ys) + bh * 0.6);
-    const cw = Math.round((cx2 - cx1) * W), ch = Math.round((cy2 - cy1) * H);
-    if (cw < 16 || ch < 8) return corners;
-    const scale = Math.min(3, Math.max(1, 700 / cw));
-    const c = document.createElement('canvas');
-    c.width = Math.round(cw * scale); c.height = Math.round(ch * scale);
-    const ctx = c.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(img, cx1 * W, cy1 * H, cw, ch, 0, 0, c.width, c.height);
-    const px = ctx.getImageData(0, 0, c.width, c.height).data;
-    const lum = new Float32Array(c.width * c.height);
-    for (let i = 0; i < lum.length; i++) {
-      lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
-    }
-    const toPx = p => ({ x: (p.x - cx1) / (cx2 - cx1) * c.width, y: (p.y - cy1) / (cy2 - cy1) * c.height });
-    let quad = { tl: toPx(corners[0]), tr: toPx(corners[1]), br: toPx(corners[2]), bl: toPx(corners[3]) };
-    quad = snapQuadOutward(lum, c.width, c.height, quad, Math.max(3, Math.round(c.width * 0.012)));
-    const back = p => ({ x: cx1 + p.x / c.width * (cx2 - cx1), y: cy1 + p.y / c.height * (cy2 - cy1) });
-    const out = [back(quad.tl), back(quad.tr), back(quad.br), back(quad.bl)];
-    freeCanvas(c);
-    return out;
-  } catch (e) {
-    console.warn('[plate] snap local échoué:', e.message);
-    return corners;
-  }
-}
-
-// File d'attente globale pour Plate Recognizer : le plan gratuit Snapshot est
-// limité à 1 requête/seconde — les photos d'un lot sont traitées en parallèle,
-// donc on sérialise les appels avec un espacement minimal, sinon tout sauf la
-// première photo prend un 429 et bascule sur le chemin Claude dégradé.
-let prQueue = Promise.resolve();
-let prLastCall = 0;
-const PR_MIN_INTERVAL_MS = 1100;
-function throttledPR(fn) {
-  const run = prQueue.then(async () => {
-    const wait = prLastCall + PR_MIN_INTERVAL_MS - Date.now();
-    if (wait > 0) await new Promise(res => setTimeout(res, wait));
-    prLastCall = Date.now();
-    return fn();
-  });
-  prQueue = run.catch(() => {});
-  return run;
-}
-
-// Détection plaque via Plate Recognizer Blur — détecteur SPÉCIALISÉ, renvoie
-// le polygone exact (4 coins) de chaque plaque. C'est le chemin PRINCIPAL :
-// précision au pixel, ~1 s, et aucun appel Claude quand il réussit.
-// Renvoie { found, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4] } en coordonnées
-// normalisées 0–1 (ordre TL,TR,BR,BL), ou null si aucune plaque.
-async function detectPlatePlateRecognizer(imageFile, regions = 'fr') {
-  try {
-    const { base64, w, h } = await downscaledImageBase64(imageFile, 1600, 0.85);
-    const headers = await authHeaders();
-    const doFetch = () => fetch('/api/detect-plates', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ imageBase64: base64, regions }),
-    });
-    let r = await throttledPR(doFetch);
-    if (r.status === 429) {
-      // Limite 1 req/s malgré l'espacement (latence variable) : on retente
-      // une fois, la file garantit à nouveau l'écart.
-      console.log('[detect-plates] 429 (limite 1 req/s), nouvelle tentative');
-      r = await throttledPR(doFetch);
-    }
-    if (!r.ok) {
-      const body = await r.text().catch(() => '');
-      console.warn('[detect-plates] HTTP', r.status, body.slice(0, 300));
-      plateLastApiError = `detect-plates HTTP ${r.status} — ${body.slice(0, 180) || 'sans détail'}`;
-      return null;
-    }
-    const { polygons, boxes } = await r.json();
-    const quads = (polygons || []).filter(p => Array.isArray(p) && p.length === 4);
-    if (!quads.length) {
-      // Repli Snapshot : pas de polygone, mais une boîte SERRÉE et fiable
-      // autour de la plaque. On la renvoie au pipeline Claude qui n'aura
-      // plus qu'à affiner les 4 coins sur un crop garanti correct.
-      const bs = (boxes || []);
-      if (bs.length) {
-        const best = bs.slice().sort((A, B) =>
-          (B.xmax - B.xmin) * (B.ymax - B.ymin) - (A.xmax - A.xmin) * (A.ymax - A.ymin))[0];
-        const box = { x1: best.xmin / w, y1: best.ymin / h, x2: best.xmax / w, y2: best.ymax / h };
-        console.log(`[plate] boîte Snapshot (${box.x1.toFixed(3)},${box.y1.toFixed(3)})-(${box.x2.toFixed(3)},${box.y2.toFixed(3)}) — coins affinés par Claude`);
-        return { boxOnly: true, box };
-      }
-      // Réponse SAINE de l'API mais zéro plaque : verdict fiable d'un
-      // détecteur spécialisé — à distinguer d'une erreur (null).
-      console.log('Aucune plaque détectée (Plate Recognizer)');
-      return { noPlate: true };
-    }
-    // Plaque principale = polygone de plus grande aire (shoelace).
-    const best = quads.slice().sort((A, B) => quadArea(B) - quadArea(A))[0];
-    let corners = orderQuad(best).map(p => ({ x: p[0] / w, y: p[1] / h }));
-    // Aimantation locale : pousse chaque bord jusqu'au vrai contour.
-    const url = URL.createObjectURL(imageFile);
-    const img = await loadImg(url);
-    URL.revokeObjectURL(url);
-    corners = snapCornersOnImage(img, img.naturalWidth || img.width, img.naturalHeight || img.height, corners);
-    const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
-    const bbox = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
-    console.log(`Plaque détectée (Plate Recognizer): bbox (${bbox.x1.toFixed(3)},${bbox.y1.toFixed(3)})-(${bbox.x2.toFixed(3)},${bbox.y2.toFixed(3)})`);
-    return { found: true, conf: 1, bbox, corners, source: 'platerecognizer' };
-  } catch (e) {
-    console.error('[detect-plates] erreur:', e.message);
-    return null;
-  }
-}
 
 // Cache du parcours photo guidé : l'utilisateur a cadré sa plaque DANS le
 // gabarit affiché à l'écran, la position est donc connue avant même la photo.
@@ -2470,34 +2058,29 @@ function plateFromGuidedQuad(quad) {
   };
 }
 
-// Ordre de bataille :
-//  1. Plate Recognizer Blur : polygone exact → cache posé, aucun appel Claude.
-//  2. Plate Recognizer Snapshot : boîte serrée → localisation garantie, Claude
-//     n'affine que les 4 coins sur le crop (1 appel Sonnet).
-//  3. Claude seul (locate + refine) si Plate Recognizer est indisponible.
+// Détecteur UNIQUE : le modèle keypoints maison, entraîné sur les photos
+// réelles de la concession et exécuté dans le navigateur (0 € par photo,
+// aucun appel serveur, aucune photo qui sort du poste).
+//
+// Il n'y a volontairement AUCUNE chaîne de secours automatique derrière lui :
+// les détecteurs de repli (Plate Recognizer, Claude Vision) ont été retirés.
+// Quand le modèle ne trouve pas de plaque, la photo sort sans cache et
+// l'utilisateur le pose à la main en un geste depuis les résultats — plus
+// sûr qu'un cache placé approximativement par un second détecteur, et le
+// traitement ne dépend plus d'aucun service tiers.
 //
 // Les photos du parcours guidé n'arrivent jamais ici : leur cache est déjà
 // placé (plateFromGuidedQuad), et c'est ce qui rend l'option gratuite.
-async function detectPlate(imageFile, regions = 'fr') {
-  // ── Source principale : modèle maison keypoints (navigateur, 0 € / photo) ──
-  // Entraîné sur les photos réelles de la concession, il pose les 4 coins en
-  // perspective à tous les angles (y compris 3/4). S'il trouve une plaque, on
-  // le croit ; sinon (modèle absent, erreur, ou rien détecté) on retombe sur
-  // Plate Recognizer puis Claude, comme avant.
+async function detectPlate(imageFile) {
   const kp = await detectPlateKeypoints(imageFile);
   if (kp?.found) return kp;
-
-  const pr = await detectPlatePlateRecognizer(imageFile, regions);
-  // Verdict « aucune plaque » du détecteur spécialisé : on le CROIT.
-  // Repartir sur Claude ici produirait des caches fantômes (le locate
-  // hallucine volontiers une zone sur un flanc ou une calandre).
-  if (pr?.noPlate) {
-    console.log('[plate] aucune plaque sur la photo — aucun cache posé');
-    return null;
-  }
-  if (pr && !pr.boxOnly) return pr;
-  if (!pr) console.warn('[plate] Plate Recognizer indisponible, bascule sur Claude Vision');
-  return detectPlateFable(imageFile, pr?.box ?? null);
+  // Modèle indisponible (absent du déploiement, wasm bloqué) : c'est une
+  // panne, pas un « pas de plaque ». Elle remonte à l'UI pour que le lot sans
+  // caches soit expliqué au lieu d'être subi.
+  const panne = keypointsUnavailableReason();
+  if (panne) plateLastApiError = plateLastApiError ?? panne;
+  else console.log('[plate] aucune plaque détectée — cache à poser à la main');
+  return null;
 }
 
 // ── Vehicle detection + main vehicle selection ──
@@ -3414,8 +2997,8 @@ export default function AutoCache() {
   const [photos, setPhotos] = useState([]);
   const [results, setResults] = useState([]);
   const [processing, setProcessing] = useState(false);
-  // Bandeau d'erreur serveur de la détection de plaque (clé API, crédits…) :
-  // visible à l'écran plutôt qu'enfoui dans la console.
+  // Bandeau de panne du détecteur de plaque (modèle non chargé) : visible à
+  // l'écran plutôt qu'enfoui dans la console.
   const [plateErrorBanner, setPlateErrorBanner] = useState(null);
   const [progress, setProgress] = useState({ n: 0, total: 0 });
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
@@ -4362,8 +3945,9 @@ export default function AutoCache() {
     }
     setProcessing(false);
     setTab("results");
-    // Des caches manquants + une erreur serveur pendant le lot → bandeau
-    // explicite (clé Anthropic invalide, crédits API épuisés, panne…).
+    // Des caches manquants + un modèle qui n'a pas pu se charger → bandeau
+    // explicite. Sans panne, des caches manquants sont normaux : le modèle
+    // n'a rien reconnu, on les pose à la main sans alarmer l'utilisateur.
     const apiErr = getPlateApiError();
     if (apiErr && autoPlate && all.some(r => !r.plateFound && !r.autoPlateOff)) {
       setPlateErrorBanner(apiErr);
@@ -7852,7 +7436,7 @@ export default function AutoCache() {
 
       {showInstallHelp && <InstallHelpModal ios={isIOS} onClose={() => setShowInstallHelp(false)} />}
 
-      {/* ── Bandeau erreur serveur détection plaque ── */}
+      {/* ── Bandeau panne du détecteur de plaque ── */}
       {/* Activation en cours après paiement */}
       {activating && (
         <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 9600, maxWidth: "min(680px, 94vw)", background: "rgba(8,16,10,0.97)", border: "1px solid #27ae60", borderRadius: 6, padding: "12px 16px", display: "flex", gap: 12, alignItems: "center", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
@@ -7903,12 +7487,12 @@ export default function AutoCache() {
         <div style={{ position: "fixed", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 9500, maxWidth: "min(680px, 94vw)", background: "rgba(20,8,4,0.97)", border: "1px solid #c0392b", borderRadius: 6, padding: "12px 16px", display: "flex", gap: 12, alignItems: "flex-start", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
           <div style={{ fontSize: 18 }}>⚠</div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#e74c3c", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Cache plaque non posé — erreur serveur</div>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1.5, color: "#e74c3c", textTransform: "uppercase", fontFamily: "var(--font-apple)" }}>Cache plaque non posé — détecteur indisponible</div>
             <div style={{ fontSize: 11, color: "var(--c-ddd)", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5, wordBreak: "break-word" }}>
               {plateErrorBanner}
             </div>
             <div style={{ fontSize: 10, color: "#8a8a8a", fontFamily: "var(--font-apple)", marginTop: 4, lineHeight: 1.5 }}>
-              Vérifiez la clé ANTHROPIC_API_KEY et le crédit API (console Anthropic / Vercel), puis relancez le traitement.
+              Le modèle de détection n'a pas pu se charger : les caches sont à poser à la main sur ce lot. Rechargez la page, puis relancez le traitement.
             </div>
           </div>
           <button onClick={() => setPlateErrorBanner(null)} style={{ background: "none", border: "none", color: "var(--c-ddd)", fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>

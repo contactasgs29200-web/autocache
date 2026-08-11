@@ -8,15 +8,17 @@
 //   index 0 = tl (haut-gauche), 1 = tr (haut-droite),
 //   index 2 = br (bas-droite),  3 = bl (bas-gauche).
 //
-// Contrat de sortie identique aux autres détecteurs de plaque
-// (detectPlatePlateRecognizer / detectPlateFable) pour s'insérer sans friction
-// dans detectPlate() :
+// C'est le SEUL détecteur de plaque de l'application : aucune chaîne de
+// secours automatique derrière lui. Quand il ne trouve rien, la photo sort
+// sans cache et l'utilisateur le pose à la main.
+//
+// Contrat de sortie attendu par detectPlate() :
 //   { found:true, conf, bbox:{x1,y1,x2,y2}, corners:[{x,y}×4], source:'keypoints' }
-//   ou null (modèle indisponible, erreur, ou aucune plaque fiable → la chaîne
-//   de secours Plate Recognizer/Claude prend le relais).
+//   ou null (modèle indisponible, erreur, ou aucune plaque fiable → pose
+//   manuelle).
 //
 // Drapeaux d'URL, pour comparer deux rendus sur les mêmes photos :
-//   ?keypoints=off  désactive ce détecteur (chaîne de secours seule)
+//   ?keypoints=off  désactive ce détecteur (aucune détection, pose manuelle)
 //   ?letterbox=on   ancien prétraitement letterbox au lieu de l'étirement
 //   ?zoom=on        active la 2e passe sur recadrage (désactivée par défaut)
 
@@ -52,6 +54,12 @@ const ORT_VERSION = '1.21.0';
 let ortModPromise = null;
 let sessionPromise = null;
 let modelUnavailable = false; // mémorisé : évite de re-tenter un modèle absent à chaque photo
+// Raison de l'indisponibilité (modèle absent du déploiement, wasm bloqué,
+// mémoire…). Le modèle étant seul en piste, cette panne fait sortir TOUT un lot
+// sans cache : l'UI doit pouvoir le dire au lieu de laisser croire qu'aucune
+// des photos ne portait de plaque.
+let unavailableReason = null;
+export function keypointsUnavailableReason() { return unavailableReason; }
 
 // Chargement paresseux d'onnxruntime-web (hors bundle principal).
 function getOrt() {
@@ -85,7 +93,11 @@ function getSession() {
 export async function preloadPlateKeypoints() {
   if (modelUnavailable) return;
   try { await getSession(); }
-  catch (e) { modelUnavailable = true; console.log('[Keypoints] modèle non déployé — chaîne de secours utilisée'); }
+  catch (e) {
+    modelUnavailable = true;
+    unavailableReason = `modèle de détection non chargé — ${e?.message || 'cause inconnue'}`;
+    console.log('[Keypoints] modèle non déployé — les caches se poseront à la main');
+  }
 }
 
 function loadImageFromInput(input) {
@@ -265,7 +277,8 @@ export async function detectPlateKeypoints(imageInput) {
     session = await getSession();
   } catch (e) {
     modelUnavailable = true;
-    console.log('[Keypoints] modèle indisponible — bascule sur Plate Recognizer/Claude');
+    unavailableReason = `modèle de détection non chargé — ${e?.message || 'cause inconnue'}`;
+    console.log('[Keypoints] modèle indisponible — les caches se poseront à la main');
     return null;
   }
 
@@ -279,8 +292,10 @@ export async function detectPlateKeypoints(imageInput) {
   // ── Passe 1 : photo entière, pour localiser la plaque ──
   const p1 = await runPass(ort, session, img, { sx: 0, sy: 0, sw: W, sh: H });
   if (!p1) {
-    // Pas de plaque fiable pour ce modèle → on laisse la chaîne de secours
-    // (Plate Recognizer/Claude) décider plutôt que d'affirmer « pas de plaque ».
+    // Rien au-dessus du seuil de confiance : la photo sort sans cache et
+    // l'utilisateur le pose à la main. C'est le comportement voulu — mieux vaut
+    // pas de cache qu'un cache posé au hasard par un détecteur de repli.
+    console.log('[Keypoints] aucune plaque fiable — pose manuelle');
     return null;
   }
 
